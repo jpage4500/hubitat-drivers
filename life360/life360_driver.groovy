@@ -38,6 +38,10 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.0 - 05/05/23 - Added:
+ *                       - Only notify on location or battery change
+ *                       - last updated time
+ *                       - accuracy (meters) - useful to know how accurate a given location is
  *  1.6.1 - 03/22/22 - Adustment to stop and error when someone pauses themselves in the Life360 phone app. Thanks @jpage4500!
  *  1.6.0 - 01/07/21 - Interim release 
  *  1.5.5 - 12/20/20 - Reliability Improvements + Cleaned up Logging
@@ -60,7 +64,7 @@
 import java.text.SimpleDateFormat
 
 metadata {
-  definition (name: "Life360 User Driver", namespace: "jp4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/bptworld/Hubitat/master/Ported/Life360/L-driver.groovy") {
+  definition (name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
         capability "Actuator"
 
         // **** Life360 ****
@@ -94,6 +98,7 @@ metadata {
         attribute "lastUpdated", "string"
         attribute "latitude", "number"
         attribute "longitude", "number"
+        attribute "accuracy", "number"
         attribute "numOfCharacters", "number"
         attribute "savedPlaces", "map"
         attribute "since", "number"
@@ -436,6 +441,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     // *** Coordinates ***
     sendEvent( name: "longitude", value: longitude )
     sendEvent( name: "latitude", value: latitude )
+    sendEvent( name: "accuracy", value: accuracy )
 
     // *** Speed ***
     def speed = member.location.speed.toFloat()
