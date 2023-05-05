@@ -23,7 +23,7 @@ metadata {
         name: "Hubitat Dashboard Tile",
         namespace: "hubitat-dashboard-tile",
         author: "Joe Page",
-        importUrl:""
+        importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hubitat-dashboard-tile.groovy"
     ) {
         capability "Sensor"
 
@@ -35,13 +35,13 @@ metadata {
 
 preferences {
     input("deviceType", "enum", title: "Device Type", required: true,
-        options: ["imageUrl": "Image URL", "videoUrl" : "Video URL", "webUrl" : "Web/HTML URL", "calendar" : "Calendar (ical URL)", "pollen" : "Pollen Count", "radar" : "Radar"])
+        options: ["imageUrl": "Image URL", "videoUrl" : "Video URL", "webUrl" : "Web URL", "calendar" : "Calendar (ical URL)", "pollen" : "Pollen Count", "radar" : "Radar"])
 
     input("url", "string", title: "URL", required: true)
 
     input('refreshInterval', 'enum', title: 'Refresh Rate', required: true,
         defaultValue: '15 Minutes',
-        options: ["0": "Never", "30": "30 Seconds", "120": "2 Minutes", "300": "5 Minutes", "600": "10 Minutes", "900": "15 Minutes", "1800": "30 Minutes", "3600": "1 Hour", "10800": "3 Hours", "18000": "5 Hours"])
+        options: ["0": "Never", "15": "15 Seconds", "30": "30 Seconds", "120": "2 Minutes", "300": "5 Minutes", "600": "10 Minutes", "900": "15 Minutes", "1800": "30 Minutes", "3600": "1 Hour", "10800": "3 Hours", "18000": "5 Hours"])
 }
 
 def installed() {
