@@ -1,0 +1,27 @@
+{
+  "packageName": "Life360+",
+  "author": "Joe Page",
+  "version": "3.0.0",
+  "minimumHEVersion": "2.1.9",
+  "dateReleased": "2023-05-08",
+  "apps": [
+    {
+      "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
+      "name": "Life360+",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_app.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": false
+    },
+    {
+      "id": "c7621deb-435e-4e33-aaee-7d33e89c1b29",
+      "name": "Life360+ Driver",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": false
+    }
+  ]
+}
