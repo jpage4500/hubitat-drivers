@@ -11,7 +11,7 @@
       "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_app.groovy",
       "required": true,
-      "oauth": false,
+      "oauth": true,
       "primary": false
     }
   ],

@@ -1,4 +1,10 @@
 /**
+ * ------------------------------------------------------------------------------------------------------------------------------
+ * ** LIFE360+ Hubitat Driver **
+ * 
+ * - see community discussion here: TBD
+ * 
+ * ------------------------------------------------------------------------------------------------------------------------------
  *  ---- Original Header ----
  *
  *  Life360 with States - Hubitat Port
@@ -45,7 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
- *  3.0.0 - 05/05/23 - Changed driver/package/import info
+ *  3.0.0 - 05/05/23 - JP: Refactor driver
  *  2.6.4 - 09/06/22 - Added option to export all life360 Places to file
  *  2.6.3 - 08/15/22 - Bundle Manager changes
  *  2.6.2 - 05/06/22 - Bundle Manager
@@ -86,7 +92,7 @@ definition(
     name: "Life360+",
     namespace: "jpage4500",
     author: "Joe Page",
-    description: "Life360 with more details",
+    description: "Life360 app that exposes more details than the built-in driver",
     category: "",
     iconUrl: "",
     iconX2Url: "",
@@ -598,10 +604,6 @@ def login() {        // Modified from code by @dman2306
     }
 }
 
-def setLibraryVersion() {
-    state.libraryVersion = "1.2.2"
-}
-
 def checkHubVersion() {
     hubVersion = getHubVersion()
     hubFirmware = location.hub.firmwareVersionString
@@ -690,61 +692,10 @@ private removeChildDevices(delete) {
     delete.each {deleteChildDevice(it.deviceNetworkId)}
 }
 
-def speechSection() {
-    
-}
-
-def letsTalk(msg) {
-    if(logEnable) log.debug "In letsTalk (${state.version}) - Sending the message to Follow Me - msg: ${msg}"
-    if(useSpeech && fmSpeaker) {
-        fmSpeaker.latestMessageFrom(state.name)
-        fmSpeaker.speak(msg,null)
-    }
-}
-
-def pushHandler(msg){
-    if(logEnable) log.debug "In pushNow (${state.version}) - Sending a push - msg: ${msg}"
-    if(pushICN) {
-        theMessage = "${app.label} - ${msg}"
-    } else {
-        theMessage = "${msg}"
-    }
-    if(logEnable) log.debug "In pushNow - Sending message: ${theMessage}"
-    sendPushMessage.deviceNotification(theMessage)
-}
-
-def useWebOSHandler(msg){
-    if(logEnable) log.debug "In useWebOSHandler (${state.version}) - Sending to webOS - msg: ${msg}"
-    useWebOS.deviceNotification(msg)
-}
-
-// ********** Normal Stuff **********
-def logsOff() {
-    log.info "${app.label} - Debug logging auto disabled"
-    app.updateSetting("logEnable",[value:"false",type:"bool"])
-}
-
-def checkEnableHandler() {
-    setVersion()
-    state.eSwitch = false
-    if(disableSwitch) { 
-        if(logEnable) log.debug "In checkEnableHandler - disableSwitch: ${disableSwitch}"
-        disableSwitch.each { it ->
-            theStatus = it.currentValue("switch")
-            if(theStatus == "on") { state.eSwitch = true }
-        }
-        if(logEnable) log.debug "In checkEnableHandler - eSwitch: ${state.eSwitch}"
-    }
-}
-
 def getImage(type) {                    // Modified from @Stephack Code
-    def loc = "<img src=https://raw.githubusercontent.com/bptworld/Hubitat/master/resources/images/"
+    def loc = "<img src=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/images/"
     if(type == "Blank") return "${loc}blank.png height=40 width=5}>"
-    if(type == "checkMarkGreen") return "${loc}checkMarkGreen2.png height=30 width=30>"
-    if(type == "optionsGreen") return "${loc}options-green.png height=30 width=30>"
     if(type == "optionsRed") return "${loc}options-red.png height=30 width=30>"
-    if(type == "instructions") return "${loc}instructions.png height=30 width=30>"
-    if(type == "logo") return "${loc}logo.png height=40>"
 }
 
 def getFormat(type, myText=null, page=null) {            // Modified code from @Stephack
@@ -772,28 +723,20 @@ def display(data) {
         headerName = "${state.name} - ${theName}"
     }
     section() {
-        // paragraph "<h2 style='color:#1A77C9;font-weight: bold'>${headerName}</h2><div style='color:#1A77C9'>Announcement: I'll be taking an extended break from coding. I'm not going anywhere and all code will still be available. I just won't be updating anything for a while. Thanks!</div>"
-        
-        //<a href='https://community.hubitat.com/t/release-bundle-manager-the-only-place-to-find-bptworld-bundles-find-install-and-update-bundles-quickly-and-easily/94567/295' target='_blank'>Bundle Manager</a>!
-        
-        // paragraph getFormat("line")
     }
 }
 
 def display2() {
     setVersion()
-    setLibraryVersion()
     section() {
         if(state.appType == "parent") { href "removePage", title:"${getImage("optionsRed")} <b>Remove App and all child apps</b>", description:"" }
         paragraph getFormat("line")
         if(state.version) {
-            bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name} - ${state.version}"
+            bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name}, version: ${state.version}"
         } else {
             bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name}"
         }
-        bMes += "<br><small>Library Ver: ${state.libraryVersion}</small>"
         bMes += "</div>"
         paragraph "${bMes}"
-        // paragraph "<div style='color:#1A77C9;text-align:center'>BPTWorld<br>Donations are never necessary but always appreciated!<br><a href='https://paypal.me/bptworld' target='_blank'><img src='https://raw.githubusercontent.com/bptworld/Hubitat/master/resources/images/pp.png'></a></div>"
     }
 }
