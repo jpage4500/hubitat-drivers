@@ -7,6 +7,7 @@
       "id": "7562796d-dd9f-42d1-a2ce-cd8caaf1533e",
       "name": "Life360+",
       "category": "Integrations",
+      "tags": ["Presence & Location"],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/packageManifest.json",
       "description": "Life360 app that exposes more details than the built-in driver"
     }
