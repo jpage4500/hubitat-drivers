@@ -536,18 +536,18 @@ def saveLif360PlacesHandler(data) {
 Boolean writeFile(fName, fData) {
     //if(logEnable) log.debug "Writing to file - ${fName} - ${fData}"
     login()
-	try {
-		def params = [
-			uri: "http://127.0.0.1:8080",
-			path: "/hub/fileManager/upload",
-			query: [
-				"folder": "/"
-			],
-			headers: [
-				"Cookie": state.cookie,
-				"Content-Type": "multipart/form-data; boundary=----WebKitFormBoundaryDtoO2QfPwfhTjOuS"
-			],
-			body: """------WebKitFormBoundaryDtoO2QfPwfhTjOuS
+    try {
+        def params = [
+            uri: "http://127.0.0.1:8080",
+            path: "/hub/fileManager/upload",
+            query: [
+                "folder": "/"
+            ],
+            headers: [
+                "Cookie": state.cookie,
+                "Content-Type": "multipart/form-data; boundary=----WebKitFormBoundaryDtoO2QfPwfhTjOuS"
+            ],
+            body: """------WebKitFormBoundaryDtoO2QfPwfhTjOuS
 Content-Disposition: form-data; name="uploadFile"; filename="${fName}"
 Content-Type: text/plain
 
@@ -558,14 +558,14 @@ Content-Disposition: form-data; name="folder"
 
 
 ------WebKitFormBoundaryDtoO2QfPwfhTjOuS--""",
-			timeout: 300,
-			ignoreSSLIssues: true
-		]
-		httpPost(params) { resp ->	
-		}
-	} catch (e) {
+            timeout: 300,
+            ignoreSSLIssues: true
+        ]
+        httpPost(params) { resp ->    
+        }
+    } catch (e) {
         log.error "Error writing file $fName: ${e}"
-	}
+    }
 }
 
 def login() {        // Modified from code by @dman2306

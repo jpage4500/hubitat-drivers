@@ -164,10 +164,6 @@ def installed() {
 
     if(logEnable) log.debug "Setting attributes to initial values"
 
-    // Set preferences to initial values as a means to prevent run-time errors
-    updateSetting ( name: "inTransitThreshold", value: "0" )
-    updateSetting ( name: "isDrivingThreshold", value: "0" )
-
     address1prev = "No Data"
     sendEvent ( name: address1prev, value: address1prev )
 }
