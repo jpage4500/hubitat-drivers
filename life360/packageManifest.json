@@ -13,15 +13,15 @@
       "required": true,
       "oauth": false,
       "primary": false
-    },
+    }
+  ],
+  "drivers": [
     {
-      "id": "c7621deb-435e-4e33-aaee-7d33e89c1b29",
+      "id": "ab1f21e8-9855-4bbd-a8b2-bbede00a6e31",
       "name": "Life360+ Driver",
       "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy",
-      "required": true,
-      "oauth": false,
-      "primary": false
+      "required": true
     }
   ]
 }

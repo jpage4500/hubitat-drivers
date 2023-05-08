@@ -1,0 +1,15 @@
+## Hubitat Package Manager FAQ ##
+
+https://hubitatpackagemanager.hubitatcommunity.com/devs1.html
+
+# create repository
+hpm repository-create repository.json --author="Joe Page" --githuburl=https://github.com/jpage4500/hubitat-drivers --paypalurl="https://www.paypal.com/donate/?hosted_button_id=VGPRVU8CSKSR2"
+
+# create package for new driver
+hpm manifest-create packageManifest.json --name="Life360+" --author="Joe Page" --version=3.0.0 --heversion=2.1.9 --datereleased=2023-05-08
+hpm manifest-add-app packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_app.groovy --required=true --oauth=false
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy --required=true
+
+# add package to repository
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/packageManifest.json --name="Life360+" --category="Integrations" --description="Life360 app that exposes more details than the built-in driver"
+
