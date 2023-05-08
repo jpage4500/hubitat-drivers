@@ -2,7 +2,7 @@
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** LIFE360+ Hubitat Driver **
  * 
- * - see community discussion here: TBD
+ * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  * 
  * ------------------------------------------------------------------------------------------------------------------------------
  *  ****************  Location Tracker User Driver  ****************
@@ -49,6 +49,7 @@
  *                       - add accuracy - useful to know how accurate a given location is
  *                       - don't set fields for both miles and km - just the one the user selects
  *                       - last updated time
+ *                       - add phone and email fields
  *  1.6.1 - 03/22/22 - Adustment to stop and error when someone pauses themselves in the Life360 phone app. Thanks @jpage4500!
  *  1.6.0 - 01/07/21 - Interim release 
  *  1.5.5 - 12/20/20 - Reliability Improvements + Cleaned up Logging
@@ -319,9 +320,9 @@ def generatePresenceEvent(member, thePlaces, home) {
         distanceUnits = (distanceAway / 1000).toDouble().round(2)
         sStatus = sprintf("%.2f", speedUnits) + "  km from Home"
     }
-    // if transit threshold (in Km) specified in preferences then use it // else, use info provided by Life360
+    // if transit threshold specified in preferences then use it; else, use info provided by Life360
     if (movethreshold > 0) inTransit = (speedUnits > movethreshold) ? "true" : "false"
-    // if driving threshold (in Km) specified in preferences then use it // else, use info provided by Life360
+    // if driving threshold specified in preferences then use it; else, use info provided by Life360
     if (drivethreshold > 0) isDriving = (speedUnits > drivethreshold) ? "true" : "false"
     if (logEnable && (isDriving == "true" || inTransit == "true")) {
         // *** On the move ***
