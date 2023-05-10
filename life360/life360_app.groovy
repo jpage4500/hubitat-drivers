@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.1 - 05/10/23 - JP: minor fixes
  *  3.0.0 - 05/05/23 - JP: Refactor driver
  *  2.6.4 - 09/06/22 - Added option to export all life360 Places to file
  *  2.6.3 - 08/15/22 - Bundle Manager changes
@@ -71,8 +72,6 @@
  *  ---
  *  v1.0.0 - 06/30/19 - Initial port of ST app (cwwilson08) (bptworld)
  */
-
-// #include BPTWorld.bpt-normalStuff
 
 String.metaClass.encodeURL = {
      java.net.URLEncoder.encode(delegate, "UTF-8")
@@ -673,7 +672,7 @@ def createDataChildDevice(driverName) {
     if(!getChildDevice(dataName)) {
         if(logEnable) log.debug "In createDataChildDevice - Child device not found - Creating device: ${dataName}"
         try {
-            addChildDevice("BPTWorld", driverName, dataName, 1234, ["name": "${dataName}", isComponent: false])
+            addChildDevice("jpage4500", driverName, dataName, 1234, ["name": "${dataName}", isComponent: false])
             if(logEnable) log.debug "In createDataChildDevice - Child device has been created! (${dataName})"
             statusMessageD = "<b>Device has been been created. (${dataName})</b>"
         } catch (e) { if(logEnable) log.debug "Unable to create device - ${e}" }
