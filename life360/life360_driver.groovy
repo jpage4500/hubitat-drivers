@@ -264,21 +264,8 @@ def generatePresenceEvent(member, thePlaces, home) {
     }
 
     // *** Presence ***
-    // def linkText = getLinkText(device)
-    // def handlerName = ( memberPresence == "present" ) ? "arrived" : "left"
-    // def descriptionText = "Life360 member " + linkText + " has " + handlerName
-
-    // if(logEnable) log.debug "linkText = $linkText, descriptionText = $descriptionText, handlerName = $handlerName, memberPresence = $memberPresence"
-
-    // def results = [
-    //       name: "presence",
-    //       value: memberPresence,
-    //       linkText: linkText,
-    //       descriptionText: descriptionText,
-    //       handlerName: handlerName
-    // ]
-
-    // sendEvent (results)
+    def descriptionText = device.displayName + " has " + ( memberPresence == "present" ) ? "arrived" : "left"
+    sendEvent (name: "presence", value: memberPresence, descriptionText: descriptionText)
     state.presence = memberPresence
 
     // if(logEnable) log.debug "results = $results"
