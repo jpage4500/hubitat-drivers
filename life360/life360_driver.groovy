@@ -44,6 +44,8 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.3 - 05/11/23 - JP: fix status attribute
+ *  3.0.2 - 05/11/23 - JP: set presence attribute
  *  3.0.0 - 05/05/23 - JP: Refactor driver
  *                       - Only notify on location or battery change
  *                       - add accuracy - useful to know how accurate a given location is
@@ -295,13 +297,13 @@ def generatePresenceEvent(member, thePlaces, home) {
         speedUnits = (speedMetric * 2.23694).toDouble().round(2)
         // Distance in miles
         distanceUnits = ((distanceAway / 1000) / 1.609344).toDouble().round(2)
-        sStatus = sprintf("%.2f", speedUnits) + " miles from Home"
+        sStatus = sprintf("%.2f", distanceUnits) + " miles from Home"
     } else {
         // Speed in km
         speedUnits = (speedMetric * 3.6).toDouble().round(2)
         // Distance in km
         distanceUnits = (distanceAway / 1000).toDouble().round(2)
-        sStatus = sprintf("%.2f", speedUnits) + "  km from Home"
+        sStatus = sprintf("%.2f", distanceUnits) + "  km from Home"
     }
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
     if (movethreshold > 0) inTransit = (speedUnits > movethreshold) ? "true" : "false"
