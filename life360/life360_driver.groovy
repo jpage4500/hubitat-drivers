@@ -95,6 +95,7 @@ metadata {
         attribute "inTransit", "string"
         attribute "isDriving", "string"
         attribute "speed", "number"
+        attribute "distance", "number"
         attribute "since", "number"
 
         // device data
