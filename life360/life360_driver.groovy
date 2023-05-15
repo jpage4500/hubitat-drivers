@@ -44,9 +44,10 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
- *  3.0.3 - 05/11/23 - JP: fix status attribute
- *  3.0.2 - 05/11/23 - JP: set presence attribute
- *  3.0.0 - 05/05/23 - JP: Refactor driver
+ *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
+ *  3.0.3 - 05/11/23 - fix status attribute
+ *  3.0.2 - 05/11/23 - set presence attribute
+ *  3.0.0 - 05/05/23 - refactor driver
  *                       - Only notify on location or battery change
  *                       - add accuracy - useful to know how accurate a given location is
  *                       - don't set fields for both miles and km - just the one the user selects
