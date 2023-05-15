@@ -422,8 +422,7 @@ def sendStatusTile1() {
     tileMap += "</table></div>"
 
     tileDevice1Count = tileMap.length()
-    if(tileDevice1Count > 1024) {
-        log.warn "In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
+    if (tileDevice1Count > 1024) log.warn "In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
 }
 
