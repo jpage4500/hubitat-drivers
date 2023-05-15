@@ -165,7 +165,7 @@ def refreshCirclePush() {
 def installed() {
     log.trace "Location Tracker User Driver Installed"
 
-    if(logEnable) log.debug "Setting attributes to initial values"
+    if (logEnable) log.debug "Setting attributes to initial values"
 
     address1prev = "No Data"
     sendEvent ( name: address1prev, value: address1prev )
@@ -196,7 +196,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     if (prevLatitude != null && prevLatitude.toDouble() == latitude && prevLongitude != null && prevLongitude.toDouble() == longitude 
         && prevAccuracy != null && prevAccuracy.toDouble() == accuracy 
         && prevBattery != null && Math.round(prevBattery.toDouble()) == battery) {
-        if(logEnable) log.trace "No change: lat:$latitude, long:$longitude, accuracy:$accuracy, battery:$battery"
+        if (logEnable) log.trace "No change: lat:$latitude, long:$longitude, accuracy:$accuracy, battery:$battery"
         return
     }
     // location changed -- fetch any other useful values
@@ -204,7 +204,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def isDriving = (member.location.isDriving == "0") ? false : true
     def speed = member.location.speed.toDouble()
     def inTransit = (member.location.inTransit == "0") ? false : true
-    log.debug "changed: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, charge:$charge, wifi:$wifiState"
+    if (logEnable) log.debug "changed: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, charge:$charge, wifi:$wifiState"
     if (logEnable && (isDriving == true || inTransit == true)) log.trace "isDriving: $isDriving, inTransit: $inTransit, speed: $speed"
 
     def charge = (member.location.charge == "0") ? false : true
@@ -258,7 +258,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def prevAddress = device.currentValue('address1')
 
     if (address1 != prevAddress) {
-        if(logEnable) log.trace "address1:$address1, prevAddress = $prevAddress"
+        if (logEnable) log.trace "address1:$address1, prevAddress = $prevAddress"
         // Update old and current address information and trigger events
         sendEvent( name: "address1prev", value: prevAddress)
         sendEvent( name: "address1", value: address1 )
@@ -271,7 +271,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent (name: "presence", value: memberPresence, descriptionText: descriptionText)
     state.presence = memberPresence
 
-    // if(logEnable) log.debug "results = $results"
+    // if (logEnable) log.debug "results = $results"
 
     // *** Coordinates ***
     sendEvent( name: "longitude", value: longitude )
@@ -312,7 +312,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     if (drivethreshold > 0) isDriving = (speedUnits > drivethreshold) ? true : false
     if (logEnable && (isDriving == true || inTransit == true)) {
         // *** On the move ***
-        if(logEnable) log.debug "speed: $speedUnits, distance: $distanceUnits, moverthreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
+        if (logEnable) log.debug "speed: $speedUnits, distance: $distanceUnits, moverthreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
     }
     sendEvent( name: "inTransit", value: inTransit )
     sendEvent( name: "isDriving", value: isDriving )
@@ -368,7 +368,7 @@ def generatePresenceEvent(member, thePlaces, home) {
 }
 
 def sendStatusTile1() {
-    //if(logEnable) log.trace "In sendStatusTile1 - Making the Avatar Tile"
+    //if (logEnable) log.trace "In sendStatusTile1 - Making the Avatar Tile"
     def avat = device.currentValue("avatar")
     if(avat == null || avat == "") avat = avatarURL
     def add1 = device.currentValue('address1')
@@ -421,21 +421,18 @@ def sendStatusTile1() {
     tileMap += "</table></div>"
 
     tileDevice1Count = tileMap.length()
-    if(tileDevice1Count <= 1024) {
-        if(logEnable) log.debug "tileMap - has ${tileDevice1Count} Characters<br>${tileMap}"
-    } else {
+    if(tileDevice1Count > 1024) {
         log.warn "In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
-    }
     sendEvent(name: "html", value: tileMap, displayed: true)
 }
 
 def setMemberId(String memberId) {
-   if(logEnable) log.debug "MemberId = ${memberId}"
+   if (logEnable) log.debug "MemberId = ${memberId}"
    state.life360MemberId = memberId
 }
 
 def getMemberId() {
-  if(logEnable) log.debug "MemberId = ${state.life360MemberId}"
+  if (logEnable) log.debug "MemberId = ${state.life360MemberId}"
     return(state.life360MemberId)
 }
 
