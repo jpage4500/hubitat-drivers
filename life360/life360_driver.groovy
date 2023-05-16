@@ -90,7 +90,7 @@ metadata {
         attribute "latitude", "number"
         attribute "longitude", "number"
         attribute "accuracy", "number"
-        attribute "lastUpdated", "string"
+        attribute "lastUpdated", "date"
 
         // driving data
         attribute "inTransit", "bool"
@@ -136,11 +136,11 @@ preferences {
     input "isMiles", "bool", title: "Units: Miles (false for Kilometer)", required: true, defaultValue: true
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
 
-    input "transitThreshold", "text", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: "0"
-    input "drivingThreshold", "text", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: "0"
+    input "transitThreshold", "number", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: new Double (0)
+    input "drivingThreshold", "number", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: new Double (0)
 
-    input "avatarFontSize", "text", title: "Avatar Font Size", required: true, defaultValue: "15"
-    input "avatarSize", "text", title: "Avatar Size by Percentage", required: true, defaultValue: "75"
+    input "avatarFontSize", "number", title: "Avatar Font Size", required: true, defaultValue: 15
+    input "avatarSize", "number", title: "Avatar Size by Percentage", required: true, defaultValue: 75
 
     input "logEnable", "bool", title: "Enable logging", required: true, defaultValue: false
 }
@@ -185,44 +185,44 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     // NOTE: only interested in sending updates device when location or battery changes
     // -- current values --
-    def latitude = member.location.latitude.toDouble()               // current latitude
-    def longitude = member.location.longitude.toDouble()             // current longitude
-    def accuracy = member.location.accuracy.toDouble()               // current accuracy
-    def battery = Math.round(member.location.battery.toDouble())    // current battery level
+    def Double latitude = member.location.latitude.toDouble()           // current latitude
+    def Double longitude = member.location.longitude.toDouble()         // current longitude
+    def Double accuracy = member.location.accuracy.toDouble()           // current accuracy
+    def Double battery = Math.round(member.location.battery.toDouble()) // current battery level
+    def Boolean charge = (member.location.charge == "1")                // current sharge state
+    def Boolean wifiState = ( member.location.wifiState == "1" )        // current WifiState
+    def Boolean isDriving = (member.location.isDriving == "1")          // current isDriving
+    def Double speed = member.location.speed.toDouble()                 // current speed
+    def Boolean inTransit = (member.location.inTransit == "1")          // current inTransit
+
     // -- previous values (could be null) --
-    def prevLatitude = device.currentValue('latitude')
-    def prevLongitude = device.currentValue('longitude')
-    def prevAccuracy = device.currentValue('accuracy')
-    def prevBattery = device.currentValue('battery')
-    if (prevLatitude != null && prevLatitude.toDouble() == latitude && prevLongitude != null && prevLongitude.toDouble() == longitude 
-        && prevAccuracy != null && prevAccuracy.toDouble() == accuracy 
-        && prevBattery != null && Math.round(prevBattery.toDouble()) == battery) {
-        if (logEnable) log.trace "No change: lat:$latitude, long:$longitude, accuracy:$accuracy, battery:$battery"
+    def Double prevLatitude = device.currentValue('latitude')
+    def Double prevLongitude = device.currentValue('longitude')
+    def Double prevAccuracy = device.currentValue('accuracy')
+    def Double prevBattery = device.currentValue('battery')
+    // -- Skip Update if location remains constant and Accuracy or Battery have no changes.
+    if (prevLatitude != null && prevLatitude == latitude && prevLongitude != null && prevLongitude == longitude 
+        && prevAccuracy != null && prevAccuracy == accuracy 
+        && prevBattery != null && Math.round(prevBattery) == battery) {
+        if (logEnable) log.trace "No change: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, charge:$charge, wifi:$wifiState, inTransit:$inTransit, isDriving:$isDriving, speed: $speed"
         return
     }
-    // location changed -- fetch any other useful values
-    def lastUpdated = new Date()
-    def isDriving = (member.location.isDriving == "0") ? false : true
-    def speed = member.location.speed.toDouble()
-    def inTransit = (member.location.inTransit == "0") ? false : true
-    if (logEnable) log.debug "changed: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, charge:$charge, wifi:$wifiState"
-    if (logEnable && (isDriving == true || inTransit == true)) log.trace "isDriving: $isDriving, inTransit: $inTransit, speed: $speed"
-
-    def charge = (member.location.charge == "0") ? false : true
-    def wifiState = ( member.location.wifiState == "0" ) ? false : true
+    // location changed, or Accuracy or Battery changed -- fetch any other useful values
+    def Date lastUpdated = new Date()
+    if (logEnable) log.debug "changed: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, charge:$charge, wifi:$wifiState, inTransit:$inTransit, isDriving:$isDriving, speed: $speed"
 
     // *** Member Name ***
-    def memberFirstName = (member.firstName) ? member.firstName : ""
-    def memberLastName = (member.lastName) ? member.lastName : ""
-    def memberFullName = memberFirstName + " " + memberLastName
+    def String memberFirstName = (member.firstName) ? member.firstName : ""
+    def String memberLastName = (member.lastName) ? member.lastName : ""
+    def String memberFullName = memberFirstName + " " + memberLastName
     sendEvent( name: "memberName", value: memberFullName )
 
     // *** Places List ***
     sendEvent( name: "savedPlaces", value: thePlaces )
 
     // *** Avatar ***
-    def avatar
-    def avatarHtml
+    def String avatar
+    def String avatarHtml
     if (member.avatar != null){
         avatar = member.avatar
         avatarHtml =  "<img src= \"${avatar}\">"
@@ -236,27 +236,27 @@ def generatePresenceEvent(member, thePlaces, home) {
     else if (device.currentValue('avatarHtml') != null) sendEvent( name: "avatarHtml", value: null)
 
     // *** Location ***
-    def homeLatitude = home.latitude.toDouble() // home latitude
-    def homeLongitude = home.longitude.toDouble() // home longitude
-    def homeRadius = home.radius.toDouble() // home radius
-    def distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
+    def Double homeLatitude = home.latitude.toDouble() // home latitude
+    def Double homeLongitude = home.longitude.toDouble() // home longitude
+    def Double homeRadius = home.radius.toDouble() // home radius
+    def Double distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
     // It is safe to assume that if we are within home radius then we are
     // both present and at home (to address any potential radius jitter)
-    def memberPresence = (distanceAway <= homeRadius) ? "present" : "not present"
+    def String memberPresence = (distanceAway <= homeRadius) ? "present" : "not present"
 
     // Where we think we are now is either at a named place or at address1
-    def address1 = (member.location.name) ? member.location.name : member.location.address1
+    def String address1 = (member.location.name) ? member.location.name : member.location.address1
     // or perhaps we are on the free version of Life360 (address1  = null)
     if (address1 == null || address1 == "") address1 = "No Data"
 
-    def address2 = (member.location.address2) ? member.location.address2 : member.location.shortaddress
+    def String address2 = (member.location.address2) ? member.location.address2 : member.location.shortaddress
     if (address2 == null || address2 == "") address2 = "No Data"
 
     // *** Address ***
     // If we are present then we are Home...
     address1 = (memberPresence == "present") ? "Home" : address1
 
-    def prevAddress = device.currentValue('address1')
+    def String prevAddress = device.currentValue('address1')
 
     if (address1 != prevAddress) {
         if (logEnable) log.trace "address1:$address1, prevAddress = $prevAddress"
@@ -268,11 +268,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     }
 
     // *** Presence ***
-    def descriptionText = device.displayName + " has " + ( memberPresence == "present" ) ? "arrived" : "left"
+    def String descriptionText = device.displayName + " has " + ( memberPresence == "present" ) ? "arrived" : "left"
     sendEvent (name: "presence", value: memberPresence, descriptionText: descriptionText)
     state.presence = memberPresence
-
-    // if (logEnable) log.debug "results = $results"
 
     // *** Coordinates ***
     sendEvent( name: "longitude", value: longitude )
@@ -281,19 +279,19 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     // *** Speed ***
     // Below includes a check for iPhone sometime reporting speed of -1 and set to 0
-    def speedMetric = (speed == -1) ? new Double (0) : speed.toDouble()
+    def Double speedMetric = (speed == -1) ? new Double (0) : speed.toDouble()
 
     // Update status attribute with appropriate distance units
     // and update temperature attribute with appropriate speed units
     // as chosen by users in device preferences
-    def sStatus
+    def String sStatus
     if (transitThreshold == null) transitThreshold = new Double (0)
-    def movethreshold = transitThreshold.toDouble().round(2)
+    def Double movethreshold = transitThreshold.toDouble().round(2)
 
     if (drivingThreshold == null) drivingThreshold = new Double (0)
-    def drivethreshold = drivingThreshold.toDouble().round(2)
-    def speedUnits
-    def distanceUnits
+    def Double drivethreshold = drivingThreshold.toDouble().round(2)
+    def Double speedUnits
+    def Double distanceUnits
     if (isMiles) {
         // Speed in miles
         speedUnits = (speedMetric * 2.23694).toDouble().round(2)
@@ -311,7 +309,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     if (movethreshold > 0) inTransit = (speedUnits > movethreshold) ? true : false
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
     if (drivethreshold > 0) isDriving = (speedUnits > drivethreshold) ? true : false
-    if (logEnable && (isDriving == true || inTransit == true)) {
+    if (logEnable && (isDriving || inTransit)) {
         // *** On the move ***
         if (logEnable) log.debug "speed: $speedUnits, distance: $distanceUnits, moverthreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
     }
@@ -323,7 +321,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     state.status = sStatus
 
     // Set acceleration to active state if we are either moving or if we are anywhere outside home radius
-    def sAcceleration = (inTransit == true || isDriving == true || memberPresence == "not present" ) ? "active" : "inactive"
+    def String sAcceleration = (inTransit || isDriving || memberPresence == "not present" ) ? "active" : "inactive"
     sendEvent( name: "acceleration", value: sAcceleration )
 
     // *** Battery Level ***
@@ -331,26 +329,26 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     // *** Charging State ***
     sendEvent( name: "charge", value: charge )
-    sendEvent( name: "powerSource", value: (charge == "true"? "DC" : "BTRY"))
+    sendEvent( name: "powerSource", value: (charge ? "DC" : "BTRY"))
 
-    def cContact = (charge == true ) ? "open" : "closed"
+    def String cContact = (charge) ? "open" : "closed"
     sendEvent( name: "contact", value: cContact )
 
     // *** Wifi ***
-    def sSwitch = ( wifiState == true ) ? "on" : "off"
+    def String sSwitch = (wifiState) ? "on" : "off"
     sendEvent( name: "wifiState", value: wifiState )
     sendEvent( name: "switch", value: sSwitch )
 
     // ** Member Features **
     if (member.features != null) {
-        def shareLocation = member.features.shareLocation == "0" ? false : true
+        def Boolean shareLocation = member.features.shareLocation == "0" ? false : true
         sendEvent ( name: "shareLocation", value: shareLocation )
     }
 
     // ** Member Communications **
     if (member.communications != null) {
         member.communications.each { comm ->
-            def commType = comm.get('channel')
+            def String commType = comm.get('channel')
             if (commType != null && commType == "Voice") {
                 sendEvent ( name: "phone", value: comm.value )
             } else if (commType != null && commType == "Email") {
@@ -370,24 +368,26 @@ def generatePresenceEvent(member, thePlaces, home) {
 
 def sendStatusTile1() {
     //if (logEnable) log.trace "In sendStatusTile1 - Making the Avatar Tile"
-    def avat = device.currentValue("avatar")
+    def String avat = device.currentValue("avatar")
     if(avat == null || avat == "") avat = avatarURL
-    def add1 = device.currentValue('address1')
-    def bLevel = device.currentValue('battery')
-    def bCharge = device.currentValue('powerSource')
-    def bSpeed = device.currentValue('speed')
+    def String add1 = device.currentValue('address1')
+    def Double bLevel = device.currentValue('battery')
+    def String bCharge = device.currentValue('powerSource')
+    def Double bSpeed = device.currentValue('speed')
 
     if(add1 == "No Data") add1 = "Between Places"
 
-    def binTransit = device.currentValue('inTransit')
-    if(binTransit == true) {
+    def Boolean binTransit = device.currentValue('inTransit') == "1"
+    def String binTransita
+    if(binTransit) {
         binTransita = "Moving"
     } else {
         binTransita = "Not Moving"
     }
 
-    def bWifi = device.currentValue('wifiState')
-    if(bWifi == true) {
+    def Boolean bWifi = device.currentValue('wifiState')
+    def String bWifiS
+    if(bWifi) {
         bWifiS = "Wifi"
     } else {
         bWifiS = "No Wifi"
@@ -403,12 +403,11 @@ def sendStatusTile1() {
             new Date( 0 ) + sEpoch.seconds
         }
     }
-    lUpdated = device.currentValue('lastUpdated')
-    sFont = avatarFontSize.toInteger() / 1.25
+    String lUpdated = device.currentValue('lastUpdated')
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
     String dateSince = DATE_FORMAT.format(theDate)
 
-    theMap = "https://www.google.com/maps/search/?api=1&query=${device.currentValue('latitude')},${device.currentValue('longitude')}"
+    String theMap = "https://www.google.com/maps/search/?api=1&query=${device.currentValue('latitude')},${device.currentValue('longitude')}"
 
     tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
     tileMap += "<tr><td width='25%' align=center><img src='${avat}' height='${avatarSize}%'>"
@@ -421,7 +420,7 @@ def sendStatusTile1() {
     tileMap += "<p style='width:100%'>${lUpdated}</p>" //Avi - cleaned up formatting (cosmetic / personal preference only)
     tileMap += "</table></div>"
 
-    tileDevice1Count = tileMap.length()
+    int tileDevice1Count = tileMap.length()
     if (tileDevice1Count > 1024) log.warn "In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
 }
@@ -437,16 +436,16 @@ def getMemberId() {
 }
 
 def haversine(lat1, lon1, lat2, lon2) {
-    def R = 6372.8
+    def Double R = 6372.8
     // In kilometers
-    def dLat = Math.toRadians(lat2 - lat1)
-    def dLon = Math.toRadians(lon2 - lon1)
+    def Double dLat = Math.toRadians(lat2 - lat1)
+    def Double dLon = Math.toRadians(lon2 - lon1)
     lat1 = Math.toRadians(lat1)
     lat2 = Math.toRadians(lat2)
 
-    def a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2)
-    def c = 2 * Math.asin(Math.sqrt(a))
-    def d = R * c
+    def Double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2)
+    def Double c = 2 * Math.asin(Math.sqrt(a))
+    def Double d = R * c
     return(d)
 }
 
