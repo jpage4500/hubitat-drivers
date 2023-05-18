@@ -94,18 +94,18 @@ metadata {
         attribute "lastUpdated", "date"
 
         // driving data
-        attribute "inTransit", "bool"
-        attribute "isDriving", "bool"
+        attribute "inTransit", "string"
+        attribute "isDriving", "string"
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
 
         // device data
         attribute "battery", "number"
-        attribute "charge", "bool"
+        attribute "charge", "string"
         attribute "status", "string"
-        attribute "wifiState", "bool"
-        attribute "shareLocation", "bool"
+        attribute "wifiState", "string"
+        attribute "shareLocation", "string"
 
         // user data
         attribute "avatar", "string"
