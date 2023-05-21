@@ -492,8 +492,13 @@ def cmdHandler(resp, data) {
         state.members = members
 
         // Get a *** sorted *** list of places for easier navigation
-        def thePlaces = state.places.sort { a, b -> a.name <=> b.name }.name
+        def thePlaces = state.places.sort { a, b -> a.name <=> b.name }
         def home = state.places.find{it.id==settings.place}
+
+        placesMap = [:]
+        for (rec in thePlaces) {
+            placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}") 
+        }
 
         // Iterate through each member and trigger an update from payload
         settings.users.each {memberId->
@@ -504,7 +509,7 @@ def cmdHandler(resp, data) {
                 def deviceWrapper = getChildDevice("${externalId}")
 
                 // send circle places and home to individual children
-                deviceWrapper.generatePresenceEvent(member, thePlaces, home)
+                deviceWrapper.generatePresenceEvent(member, placesMap, home)
 
             } catch(e) {
                 if(logEnable) log.debug "In cmdHandler - catch - member: ${member}"
