@@ -165,16 +165,16 @@ def refreshCirclePush() {
 }
 
 def installed() {
-    log.trace "Location Tracker User Driver Installed"
+    log.trace "Life360: Location Tracker User Driver Installed"
 
-    if (logEnable) log.debug "Setting attributes to initial values"
+    if (logEnable) log.debug "Life360: Setting attributes to initial values"
 
     address1prev = "No Data"
     sendEvent ( name: address1prev, value: address1prev )
 }
 
 def updated() {
-    log.info "Location Tracker User Driver has been Updated"
+    log.info "Life360: Location Tracker User Driver has been Updated"
     refresh()
 }
 
@@ -197,17 +197,17 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Integer prevAccuracy = device.currentValue('accuracy')
     def Integer prevBattery = device.currentValue('battery')
     def String prevWifiState = device.currentValue('wifiState')
-    
+
     // -- Skip Update if location remains constant and Accuracy or Battery have no changes.
     if ((prevLatitude != null && prevLatitude == latitude) 
         && (prevLongitude != null && prevLongitude == longitude) 
         && (prevAccuracy != null && prevAccuracy == accuracy) 
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState == wifiState)) {
-        if (logEnable) log.trace "No change: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
+        if (logEnable) log.trace "Life360: No change: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
         return
     } else {
-        if (logEnable) log.trace "There was a <strong>change</strong>: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
+        if (logEnable) log.debug "Life360: <strong>change</strong>: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
     }
     
     // location changed, or Accuracy or Battery changed -- fetch any other useful values
@@ -261,7 +261,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def String prevAddress = device.currentValue('address1')
 
     if (address1 != prevAddress) {
-        if (logEnable) log.trace "address1:$address1, prevAddress = $prevAddress"
+        if (logEnable) log.trace "Life360:  address1:$address1, prevAddress = $prevAddress"
         // Update old and current address information and trigger events
         sendEvent( name: "address1prev", value: prevAddress)
         sendEvent( name: "address1", value: address1 )
@@ -280,8 +280,8 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "accuracy", value: accuracy )
 
     // *** Speed ***
-    // Below includes a check for iPhone sometime reporting speed of -1 and set to 0
     def Double speed = member.location.speed.toDouble() // current speed
+    // Below includes a check for iPhone sometime reporting speed of -1 and set to 0
     def Double speedMetric = (speed == -1) ? 0 : device.currentValue('speed')
 
     // Update status attribute with appropriate distance units
@@ -304,9 +304,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     if (movethreshold > 0) { inTransit = (speedUnits >= movethreshold) ? "1" : "0"}
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
     if (drivethreshold > 0) { isDriving = (speedUnits >= drivethreshold) ? "1" : "0"}
-    if (logEnable && (isDriving == "1" || inTransit == "1")) {
+    if (logEnable && (isDriving == "1" || inTransit == "1" || speed > 0)) {
         // *** On the move ***
-        if (logEnable) log.debug "speed: $speedUnits, distance: $distanceUnits, moverthreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
+        log.debug "Life360: speed: $speedUnits, distance: $distanceUnits, movethreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
     }
     
     def String sStatus
@@ -416,16 +416,6 @@ def sendStatusTile1() {
     sendEvent(name: "html", value: tileMap, displayed: true)
 }
 
-def setMemberId(String memberId) {
-   if (logEnable) log.debug "MemberId = ${memberId}"
-   state.life360MemberId = memberId
-}
-
-def getMemberId() {
-  if (logEnable) log.debug "MemberId = ${state.life360MemberId}"
-    return(state.life360MemberId)
-}
-
 def haversine(lat1, lon1, lat2, lon2) {
     def Double R = 6372.8
     // In kilometers
@@ -438,24 +428,4 @@ def haversine(lat1, lon1, lat2, lon2) {
     def Double c = 2 * Math.asin(Math.sqrt(a))
     def Double d = R * c
     return(d)
-}
-
-private arriving() {
-  if (device.currentValue('presence') == "not present" && memberPresence == "present")
-    return true
-  else
-    return false
-}
-
-private departing() {
-  if (device.currentValue('presence') == "present" && memberPresence == "not present")
-    return true
-  else
-    return false
-}
-
-private formatLocalTime(format = "EEE, MMM d yyyy @ h:mm:ss a z", time = now()) {
-  def formatter = new java.text.SimpleDateFormat(format)
-  formatter.setTimeZone(location.timeZone)
-  return formatter.format(time)
 }
