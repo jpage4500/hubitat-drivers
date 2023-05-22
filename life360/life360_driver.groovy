@@ -137,8 +137,8 @@ preferences {
     input "isMiles", "bool", title: "Units: Miles (false for Kilometer)", required: true, defaultValue: true
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
 
-    input "transitThreshold", "number", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: new Double (0)
-    input "drivingThreshold", "number", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: new Double (0)
+    input "transitThreshold", "number", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: 0
+    input "drivingThreshold", "number", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: 0
 
     input "avatarFontSize", "number", title: "Avatar Font Size", required: true, defaultValue: 15
     input "avatarSize", "number", title: "Avatar Size by Percentage", required: true, defaultValue: 75
@@ -297,9 +297,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     def String isDriving = member.location.isDriving
     def String inTransit = member.location.inTransit
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
-    if (transitThreshold > 0) { inTransit = (speedUnits >= transitThreshold) ? "1" : "0"}
+    if (transitThreshold > 0.0) { inTransit = (speedUnits >= transitThreshold) ? "1" : "0" }
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
-    if (drivingThreshold > 0) { isDriving = (speedUnits >= drivingThreshold) ? "1" : "0"}
+    if (drivingThreshold > 0.0) { isDriving = (speedUnits >= drivingThreshold) ? "1" : "0" }
     if (logEnable && (isDriving == "1" || inTransit == "1" || speed > 0)) {
         // *** On the move ***
         log.debug "Life360: speed: $speedUnits, distance: $distanceUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
