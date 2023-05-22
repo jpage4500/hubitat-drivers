@@ -116,7 +116,7 @@ metadata {
         // place data
         attribute "address1", "string"
         attribute "address1prev", "string"
-        attribute "savedPlaces", "map"
+        attribute "savedPlaces", "string"
 
         // hubitat device states
         attribute "contact", "string"
@@ -220,7 +220,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "memberName", value: memberFullName )
 
     // *** Places List ***
-    sendEvent( name: "savedPlaces", value: thePlaces )
+    // format as JSON string for better parsing
+    def savedPlacesJson = new groovy.json.JsonBuilder(thePlaces)
+    sendEvent( name: "savedPlaces", value: savedPlacesJson.toString() )
 
     // *** Avatar ***
     def String avatar
