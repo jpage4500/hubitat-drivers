@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
  *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
  *  3.0.3 - 05/11/23 - fix status attribute
  *  3.0.2 - 05/11/23 - set presence attribute
@@ -93,18 +94,18 @@ metadata {
         attribute "lastUpdated", "date"
 
         // driving data
-        attribute "inTransit", "bool"
-        attribute "isDriving", "bool"
+        attribute "inTransit", "string"
+        attribute "isDriving", "string"
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
 
         // device data
         attribute "battery", "number"
-        attribute "charge", "bool"
+        attribute "charge", "string"
         attribute "status", "string"
-        attribute "wifiState", "bool"
-        attribute "shareLocation", "bool"
+        attribute "wifiState", "string"
+        attribute "shareLocation", "string"
 
         // user data
         attribute "avatar", "string"
@@ -280,24 +281,24 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     // *** Speed ***
     // Below includes a check for iPhone sometime reporting speed of -1 and set to 0
-    def Double speed = member.location.speed.toDouble() // current speed
-    def Double speedMetric = (speed == -1) ? 0 : device.currentValue('speed')
+    def Double speed = member.location.speed.toDouble() // current speed in meters per second
+    def Double speedMetric = (speed == -1) ? 0 : member.location.speed.toDouble()
 
     // Update status attribute with appropriate distance units
     // and update appropriate speed units
     // as chosen by users in device preferences
     def Double speedUnits
     def Double distanceUnits
-    speedUnits = (speedMetric * ((isMiles) ? 2.23694 : 3.6)).round(2)
+    speedUnits = (speedMetric / ((isMiles) ? 2.23694 : 3.6)).round(2)
     distanceUnits = ((distanceAway / 1000) / ((isMiles) ? 1.609344 : 1)).round(2)
 
     def Double movethreshold
     def Double drivethreshold
     def String isDriving = member.location.isDriving    // current isDriving
     def String inTransit = member.location.inTransit    // current inTransit
-    if (device.currentValue('transitThreshold') == null) { transitThreshold = 0 }
+    if(transitThreshold == null) { transitThreshold = 0 }
     movethreshold = transitThreshold.toDouble().round(2)
-    if (device.currentValue('drivingThreshold') == null) { drivingThreshold = 0 }
+    if(drivingThreshold == null) { drivingThreshold = 0 }
     drivethreshold = drivingThreshold.toDouble().round(2)
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
     if (movethreshold > 0) { inTransit = (speedUnits >= movethreshold) ? "1" : "0"}
@@ -305,7 +306,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     if (drivethreshold > 0) { isDriving = (speedUnits >= drivethreshold) ? "1" : "0"}
     if (logEnable && (isDriving == "1" || inTransit == "1")) {
         // *** On the move ***
-        if (logEnable) log.debug "speed: $speedUnits, distance: $distanceUnits, moverthreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
+        if (logEnable) log.debug "Life360+ speed: " + sprintf("%.2f", speedUnits) +  " ${(isMiles ? 'MPH':'KPH')}, distance: " + sprintf("%.2f", distanceUnits) + " ${(isMiles ? 'miles':'km')}, movethreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
     }
     
     def String sStatus
@@ -361,13 +362,12 @@ def generatePresenceEvent(member, thePlaces, home) {
 }
 
 def sendStatusTile1() {
-    def String avat = device.currentValue("avatar")
+/*    def String avat = device.currentValue("avatar")
     def String add1 = device.currentValue('address1')
     def Double bLevel = device.currentValue('battery')
     def String bCharge = device.currentValue('powerSource')
-    def Double bSpeed = device.currentValue('speed')
-
-    if(add1 == "No Data") add1 = "Between Places"
+*/
+    if(device.currentValue('address1') == "No Data") add1 = "Between Places"
 
     def String binTransita
     if(device.currentValue('isDriving') == "1") {
@@ -395,17 +395,17 @@ def sendStatusTile1() {
     String theMap = "https://www.google.com/maps/search/?api=1&query=" + device.currentValue('latitude').toString() + "," + device.currentValue('longitude').toString()
     
     tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
-    tileMap += "<tr><td width='25%' align=center><img src='${avat}' height='${avatarSize}%'>"
+    tileMap += "<tr><td width='25%' align=center><img src='${device.currentValue("avatar")}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
-    tileMap += "At: <a href='${theMap}' target='_blank'>${add1}</a><br>"
+    tileMap += "At: <a href='${theMap}' target='_blank'>${device.currentValue('address1')}</a><br>"
     tileMap += "Since: ${dateSince}<br>"
     tileMap += (device.currentValue('status') == "At Home") ? "" : "${device.currentValue('status')}<br>"
     tileMap += "${binTransita}"
     if(add1 != "Home" && device.currentValue('inTransit') == "1") {
-        tileMap += "- ${bSpeed} "
+        tileMap += "- ${sprintf("%.1f", device.currentValue('speed'))} "
         tileMap += (isMiles) ? "MPH":"KMH"
     }
-    tileMap += "<br>Phone Lvl: ${bLevel} - ${bCharge} - "
+    tileMap += "<br>Phone Lvl: ${device.currentValue('battery')} - ${device.currentValue('powerSource')} - "
     tileMap += (device.currentValue('wifiState') == "1") ? "WiFi" : "No WiFi"
     tileMap += "<br><p style='width:100%'>${lUpdated}</p>" //Avi - cleaned up formatting (cosmetic / personal preference only)
     tileMap += "</table></div>"
