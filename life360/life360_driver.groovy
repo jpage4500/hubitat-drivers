@@ -297,9 +297,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     def String isDriving = member.location.isDriving
     def String inTransit = member.location.inTransit
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
-    if (transitThreshold > 0.0) { inTransit = (speedUnits >= transitThreshold) ? "1" : "0" }
+    if (transitThreshold.toDouble() > 0.0) { inTransit = (speedUnits >= transitThreshold.toDouble()) ? "1" : "0" }
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
-    if (drivingThreshold > 0.0) { isDriving = (speedUnits >= drivingThreshold) ? "1" : "0" }
+    if (drivingThreshold.toDouble() > 0.0) { isDriving = (speedUnits >= drivingThreshold.toDouble()) ? "1" : "0" }
     if (logEnable && (isDriving == "1" || inTransit == "1" || speed > 0)) {
         // *** On the move ***
         log.debug "Life360: speed: $speedUnits, distance: $distanceUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
