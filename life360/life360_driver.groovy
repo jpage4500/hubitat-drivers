@@ -290,23 +290,17 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Double speedUnits
     def Double distanceUnits
     speedUnits = (speedMetric * (isMiles ? 2.23694 : 3.6)).round(2)
-    distanceUnits = ((distanceAway / 1000) / ((isMiles ? 1.609344 : 1)).round(2)
+    distanceUnits = ((distanceAway / 1000) / ((isMiles ? 1.609344 : 1))).round(2)
 
-    def Double movethreshold
-    def Double drivethreshold
-    def String isDriving = member.location.isDriving    // current isDriving
-    def String inTransit = member.location.inTransit    // current inTransit
-    if (device.currentValue('transitThreshold') == null) { transitThreshold = 0 }
-    movethreshold = transitThreshold.toDouble().round(2)
-    if (device.currentValue('drivingThreshold') == null) { drivingThreshold = 0 }
-    drivethreshold = drivingThreshold.toDouble().round(2)
+    def String isDriving = member.location.isDriving
+    def String inTransit = member.location.inTransit
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
-    if (movethreshold > 0) { inTransit = (speedUnits >= movethreshold) ? "1" : "0"}
+    if (transitThreshold > 0) { inTransit = (speedUnits >= transitThreshold) ? "1" : "0"}
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
-    if (drivethreshold > 0) { isDriving = (speedUnits >= drivethreshold) ? "1" : "0"}
-    if (logEnable) { // && (isDriving == "1" || inTransit == "1" || speed > 0)) {
+    if (drivingThreshold > 0) { isDriving = (speedUnits >= drivingThreshold) ? "1" : "0"}
+    if (logEnable && (isDriving == "1" || inTransit == "1" || speed > 0)) {
         // *** On the move ***
-        log.debug "Life360: speed: $speedUnits, distance: $distanceUnits, movethreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
+        log.debug "Life360: speed: $speedUnits, distance: $distanceUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
     }
     
     def String sStatus
