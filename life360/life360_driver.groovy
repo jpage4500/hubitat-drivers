@@ -116,7 +116,7 @@ metadata {
         // place data
         attribute "address1", "string"
         attribute "address1prev", "string"
-        attribute "savedPlaces", "map"
+        attribute "savedPlaces", "string"
 
         // hubitat device states
         attribute "contact", "string"
@@ -137,8 +137,8 @@ preferences {
     input "isMiles", "bool", title: "Units: Miles (false for Kilometer)", required: true, defaultValue: true
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
 
-    input "transitThreshold", "number", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: new Double (0)
-    input "drivingThreshold", "number", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: new Double (0)
+    input "transitThreshold", "number", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: 0
+    input "drivingThreshold", "number", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: 0
 
     input "avatarFontSize", "number", title: "Avatar Font Size", required: true, defaultValue: 15
     input "avatarSize", "number", title: "Avatar Size by Percentage", required: true, defaultValue: 75
@@ -160,27 +160,27 @@ def refresh() {
 
 def refreshCirclePush() {
     // Manually ensure that Life360 notifications subscription is current / valid
-    log.info "Attempting to resubscribe to circle notifications"
+    log.info "Life360+ Driver: Attempting to resubscribe to circle notifications"
     parent.createCircleSubscription()
 }
 
 def installed() {
-    log.trace "Location Tracker User Driver Installed"
+    log.info "Life360+ Driver: Location Tracker User Driver Installed"
 
-    if (logEnable) log.debug "Setting attributes to initial values"
+    if (logEnable) log.info "Life360+ Driver: Setting attributes to initial values"
 
     address1prev = "No Data"
     sendEvent ( name: address1prev, value: address1prev )
 }
 
 def updated() {
-    log.info "Location Tracker User Driver has been Updated"
+    log.info "Life360+ Driver: Location Tracker User Driver has been Updated"
     refresh()
 }
 
 def generatePresenceEvent(member, thePlaces, home) {
     if (member.location == null) {
-        // log.info "no location set for $member"
+        // log.info "Life360+ Driver: no location set for $member"
         return
     }
 
@@ -197,17 +197,17 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Integer prevAccuracy = device.currentValue('accuracy')
     def Integer prevBattery = device.currentValue('battery')
     def String prevWifiState = device.currentValue('wifiState')
-    
+
     // -- Skip Update if location remains constant and Accuracy or Battery have no changes.
     if ((prevLatitude != null && prevLatitude == latitude) 
         && (prevLongitude != null && prevLongitude == longitude) 
         && (prevAccuracy != null && prevAccuracy == accuracy) 
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState == wifiState)) {
-        if (logEnable) log.trace "No change: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
+        if (logEnable) log.info "Life360+ Driver: No change: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
         return
     } else {
-        if (logEnable) log.trace "There was a <strong>change</strong>: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
+        if (logEnable) log.info "Life360+ Driver: <strong>change</strong>: lat:$latitude, long:$longitude, acc:$accuracy, bat:$battery, wifi:$wifiState"
     }
     
     // location changed, or Accuracy or Battery changed -- fetch any other useful values
@@ -220,7 +220,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "memberName", value: memberFullName )
 
     // *** Places List ***
-    sendEvent( name: "savedPlaces", value: thePlaces )
+    // format as JSON string for better parsing
+    def savedPlacesJson = new groovy.json.JsonBuilder(thePlaces)
+    sendEvent( name: "savedPlaces", value: savedPlacesJson.toString() )
 
     // *** Avatar ***
     def String avatar
@@ -261,7 +263,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def String prevAddress = device.currentValue('address1')
 
     if (address1 != prevAddress) {
-        if (logEnable) log.trace "address1:$address1, prevAddress = $prevAddress"
+        if (logEnable) log.info "Life360+ Driver:  address1:$address1, prevAddress = $prevAddress"
         // Update old and current address information and trigger events
         sendEvent( name: "address1prev", value: prevAddress)
         sendEvent( name: "address1", value: address1 )
@@ -279,38 +281,30 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "latitude", value: latitude )
     sendEvent( name: "accuracy", value: accuracy )
 
-    // *** Speed ***
-    // Below includes a check for iPhone sometime reporting speed of -1 and set to 0
-    def Double speed = member.location.speed.toDouble() // current speed in meters per second
-    def Double speedMetric = (speed == -1) ? 0 : member.location.speed.toDouble()
+    // *** Speed ***     Below includes a check for iPhone sometime reporting speed of -1 and set to 0
+    def Double speed = (member.location.speed.toDouble() == -1) ? 0.0 : member.location.speed.toDouble() // current speed in meters per second
 
     // Update status attribute with appropriate distance units
     // and update appropriate speed units
     // as chosen by users in device preferences
-    def Double speedUnits
-    def Double distanceUnits
-    speedUnits = (speedMetric / ((isMiles) ? 2.23694 : 3.6)).round(2)
-    distanceUnits = ((distanceAway / 1000) / ((isMiles) ? 1.609344 : 1)).round(2)
+    def Double speedUnits       // in user's preference of MPH or KPH
+    def Double distanceUnits    // in user's preference of miles or km
+    speedUnits = (speed * (isMiles ? 2.23694 : 3.6)).round(2)
+    distanceUnits = ((distanceAway / 1000) / ((isMiles ? 1.609344 : 1))).round(2)
 
-    def Double movethreshold
-    def Double drivethreshold
-    def String isDriving = member.location.isDriving    // current isDriving
-    def String inTransit = member.location.inTransit    // current inTransit
-    if(transitThreshold == null) { transitThreshold = 0 }
-    movethreshold = transitThreshold.toDouble().round(2)
-    if(drivingThreshold == null) { drivingThreshold = 0 }
-    drivethreshold = drivingThreshold.toDouble().round(2)
+    def String isDriving = member.location.isDriving
+    def String inTransit = member.location.inTransit
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
-    if (movethreshold > 0) { inTransit = (speedUnits >= movethreshold) ? "1" : "0"}
+    if (transitThreshold.toDouble() > 0.0) { inTransit = (speedUnits >= transitThreshold.toDouble()) ? "1" : "0" }
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
-    if (drivethreshold > 0) { isDriving = (speedUnits >= drivethreshold) ? "1" : "0"}
-    if (logEnable && (isDriving == "1" || inTransit == "1")) {
+    if (drivingThreshold.toDouble() > 0.0) { isDriving = (speedUnits >= drivingThreshold.toDouble()) ? "1" : "0" }
+    if (logEnable && (isDriving == "1" || inTransit == "1" || speed > 0.0)) {
         // *** On the move ***
-        if (logEnable) log.debug "Life360+ speed: " + sprintf("%.2f", speedUnits) +  " ${(isMiles ? 'MPH':'KPH')}, distance: " + sprintf("%.2f", distanceUnits) + " ${(isMiles ? 'miles':'km')}, movethreshold: $movethreshold, inTransit: $inTransit, drivethreshold: $drivethreshold, isDriving: $isDriving"
+        log.debug "Life360+ Driver: speed: " + sprintf("%.2f", speedUnits) + ((isMiles) ? " MPH" : "KPH") + ", distance: " + sprintf("%.2f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home") + ", transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
     }
     
     def String sStatus
-    sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.2f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
+    sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
     sendEvent( name: "status", value: sStatus )
     state.status = sStatus
 
@@ -320,7 +314,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "distance", value: distanceUnits )
 
     // Set acceleration to active state if we are either moving or if we are anywhere outside home radius
-    sendEvent( name: "acceleration", value: (inTransit || isDriving || memberPresence == "not present" ) ? "active" : "inactive" )
+    sendEvent( name: "acceleration", value: (inTransit == "1" || isDriving == "1" || memberPresence == "not present" ) ? "active" : "inactive" )
 
     // *** Battery Level ***
     sendEvent( name: "battery", value: battery )
@@ -362,13 +356,6 @@ def generatePresenceEvent(member, thePlaces, home) {
 }
 
 def sendStatusTile1() {
-/*    def String avat = device.currentValue("avatar")
-    def String add1 = device.currentValue('address1')
-    def Double bLevel = device.currentValue('battery')
-    def String bCharge = device.currentValue('powerSource')
-*/
-    if(device.currentValue('address1') == "No Data") add1 = "Between Places"
-
     def String binTransita
     if(device.currentValue('isDriving') == "1") {
         binTransita = "Driving"
@@ -388,7 +375,6 @@ def sendStatusTile1() {
             new Date( 0 ) + sEpoch.seconds
         }
     }
-    String lUpdated = device.currentValue('lastUpdated')
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
     String dateSince = DATE_FORMAT.format(theDate)
 
@@ -397,32 +383,22 @@ def sendStatusTile1() {
     tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
     tileMap += "<tr><td width='25%' align=center><img src='${device.currentValue("avatar")}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
-    tileMap += "At: <a href='${theMap}' target='_blank'>${device.currentValue('address1')}</a><br>"
+    tileMap += "At: <a href='${theMap}' target='_blank'>${device.currentValue('address1') == "No Data" ? "Between Places" : device.currentValue('address1')}</a><br>"
     tileMap += "Since: ${dateSince}<br>"
     tileMap += (device.currentValue('status') == "At Home") ? "" : "${device.currentValue('status')}<br>"
     tileMap += "${binTransita}"
-    if(add1 != "Home" && device.currentValue('inTransit') == "1") {
-        tileMap += "- ${sprintf("%.1f", device.currentValue('speed'))} "
-        tileMap += (isMiles) ? "MPH":"KMH"
+    if(device.currentValue('address1') == "No Data" ? "Between Places" : device.currentValue('address1') != "Home" && device.currentValue('inTransit') == "1") {
+        tileMap += " @ ${sprintf("%.1f", device.currentValue('speed'))} "
+        tileMap += (isMiles) ? "MPH":"KPH"
     }
     tileMap += "<br>Phone Lvl: ${device.currentValue('battery')} - ${device.currentValue('powerSource')} - "
     tileMap += (device.currentValue('wifiState') == "1") ? "WiFi" : "No WiFi"
-    tileMap += "<br><p style='width:100%'>${lUpdated}</p>" //Avi - cleaned up formatting (cosmetic / personal preference only)
+    tileMap += "<br><p style='width:100%'>${device.currentValue('lastUpdated')}</p>" //Avi - cleaned up formatting (cosmetic / personal preference only)
     tileMap += "</table></div>"
 
     int tileDevice1Count = tileMap.length()
-    if (tileDevice1Count > 1024) log.warn "In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
+    if (tileDevice1Count > 1024) log.warn "Life360+ Driver: In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
-}
-
-def setMemberId(String memberId) {
-   if (logEnable) log.debug "MemberId = ${memberId}"
-   state.life360MemberId = memberId
-}
-
-def getMemberId() {
-  if (logEnable) log.debug "MemberId = ${state.life360MemberId}"
-    return(state.life360MemberId)
 }
 
 def haversine(lat1, lon1, lat2, lon2) {
@@ -437,24 +413,4 @@ def haversine(lat1, lon1, lat2, lon2) {
     def Double c = 2 * Math.asin(Math.sqrt(a))
     def Double d = R * c
     return(d)
-}
-
-private arriving() {
-  if (device.currentValue('presence') == "not present" && memberPresence == "present")
-    return true
-  else
-    return false
-}
-
-private departing() {
-  if (device.currentValue('presence') == "present" && memberPresence == "not present")
-    return true
-  else
-    return false
-}
-
-private formatLocalTime(format = "EEE, MMM d yyyy @ h:mm:ss a z", time = now()) {
-  def formatter = new java.text.SimpleDateFormat(format)
-  formatter.setTimeZone(location.timeZone)
-  return formatter.format(time)
 }
