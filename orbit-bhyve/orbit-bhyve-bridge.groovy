@@ -15,7 +15,13 @@
 */
 
 metadata {
-    definition (name: "Orbit Bhyve Bridge+", namespace: "jpage4500", author: "Joe Page") {
+    definition (
+        name: "Orbit Bhyve Bridge", 
+        namespace: "jpage4500", 
+        author: "Joe Page",
+        importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-bridge.groovy",
+        ) 
+    {
         capability "Refresh"
         capability "Sensor"
 

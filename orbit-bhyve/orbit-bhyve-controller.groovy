@@ -33,7 +33,8 @@ definition(
     iconUrl: 	"",
     iconX2Url: 	"",
     iconX3Url: 	"",
-    singleInstance: true
+    singleInstance: true,
+    importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-controller.groovy",
 )
 preferences {
     page(name:"mainMenu")
@@ -238,6 +239,7 @@ def updateTiles(data) {
                     scheduled_auto_on = true
                     d = getChildDevice("${DTHDNI(it.id)}:${station}")
                     infoVerbose "Processing Orbit Sprinkler Device: '${it.name}', Orbit Station #${station}, Zone Name: '${zoneData.name}'"
+                    debugVerbose "STATUS:${it.status}"
                     
                     if (it.status.watering_status) {
                         if (it.status.watering_status.stations != null) {
@@ -262,7 +264,7 @@ def updateTiles(data) {
                         else {
                             for (valveDevice in getValveDevices(it.id)) {
                                 def deviceStationId = getStationFromDNI(valveDevice.deviceNetworkId)
-                                if (it.status.watering_status.current_station.toInteger() == deviceStationId.toInteger()) {
+                                if (it.status.watering_status.current_station != null && it.status.watering_status.current_station.toInteger() == deviceStationId.toInteger()) {
                                     if (valveDevice.currentValue("valve") != "open") {
                                         debugVerbose "Opening station ${deviceStationId}"
                                         valveDevice.sendEvent(name:"valve", value: "open")
@@ -280,7 +282,6 @@ def updateTiles(data) {
                         }
                     }
                     else {
-
                         getValveDevices(it.id).each {
                             if (it.currentValue("valve") != "closed")
                                 it.sendEvent(name:"valve", value: "closed") 
@@ -320,10 +321,12 @@ def updateTiles(data) {
                         }
                     }
                     d.sendEvent(name:"scheduled_auto_on", value: scheduled_auto_on)
-                    if (scheduled_auto_on) {
+                    def next_start_time = it.status.next_start_time
+                    debugVerbose "scheduled_auto_on: ${scheduled_auto_on}, next_start_time:${next_start_time}"
+                    if (scheduled_auto_on && next_start_time != null) {
                         if (it.status.rain_delay > 0) {
                             d.sendEvent(name:"rain_icon", value: "rain")
-                            def nextRun = Date.parse("yyyy-MM-dd'T'HH:mm:ssX",it.status.next_start_time)
+                            def nextRun = Date.parse("yyyy-MM-dd'T'HH:mm:ssX",next_start_time)
                             def rainDelay = it.status.rain_delay
                             use (TimeCategory) {
                                 nextRun = nextRun + rainDelay.hours
@@ -332,7 +335,7 @@ def updateTiles(data) {
                         } 
                         else {
                             d.sendEvent(name:"rain_icon", value: "sun")
-                            def next_start_time_local = Date.parse("yyyy-MM-dd'T'HH:mm:ssX",it.status.next_start_time)
+                            def next_start_time_local = Date.parse("yyyy-MM-dd'T'HH:mm:ssX",next_start_time)
                             d.sendEvent(name:"next_start_time", value: next_start_time_local.getTime())
                         }
                     }
@@ -593,12 +596,14 @@ def add_bhyve_ChildDevice() {
                             DTHlabel: "Bhyve ${it.zones[i].name?:it.name}"
                         ]
                         def sprinkler = createDevice(data)
+                        if (sprinkler == null) break;
                         if (!findMasterDevice()) {
                             sprinkler.updateDataValue("master", "true")
                             sprinkler.initialize()
                         }
-                        else if (sprinkler.getDataValue("master") != "true")
+                        else if (sprinkler.getDataValue("master") != "true") {
                             sprinkler.updateDataValue("master", "false")
+                        }
                     }
                     break
                 case 'bridge':
@@ -632,6 +637,8 @@ def createDevice(data) {
             d = addChildDevice("jpage4500", data.DTHname, data.DTHid, null, ["name": "${data.DTHlabel}", label: "${data.DTHlabel}", completedSetup: true])
         } 
         catch(e) {
+            log.error "Exception in createDevice(): ${data}"
+            log.error e
             return null
         }
         infoVerbose "Success: Added a new device named '${data.DTHlabel}' as DTH:'${data.DTHname}' with DNI:'${data.DTHid}'"
