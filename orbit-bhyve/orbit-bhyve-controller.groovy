@@ -4,8 +4,8 @@
 * 2020 (c) Dominick Meglio (Hubitat port and significant rewrites)
 *
 * Author:   Kurt Sanders
-* Email:	Kurt@KurtSanders.com
-* Date:	    3/2017
+* Email:    Kurt@KurtSanders.com
+* Date:     3/2017
 * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
 * in compliance with the License. You may obtain a copy of the License at:
 *
@@ -25,14 +25,14 @@ import groovy.time.TimeCategory
 @Field String apiUrl = "https://api.orbitbhyve.com/v1/"
 
 definition(
-    name: 		"Orbit Bhyve+",
-    namespace: 	"jpage4500",
-    author: 	"Joe Page",
+    name:       "Orbit Bhyve+",
+    namespace:  "jpage4500",
+    author:     "Joe Page",
     description:"Control and monitor your network connected Orbit™ Bhyve Timer anywhere via Hubitat",
-    category: 	"My Apps",
-    iconUrl: 	"",
-    iconX2Url: 	"",
-    iconX3Url: 	"",
+    category:   "My Apps",
+    iconUrl:    "",
+    iconX2Url:  "",
+    iconX3Url:  "",
     singleInstance: true,
     importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-controller.groovy",
 )
@@ -410,7 +410,7 @@ def timestamp(type='long', mobileTZ=false) {
 
     if (mobileTZ) 
         return datenow.format(formatstring, location.timeZone).replace("AM", "am").replace("PM","pm")
-	else 
+    else 
         tf.setTimeZone(TimeZone.getTimeZone(state.timezone))
 
     return tf.format(datenow).replace("AM", "am").replace("PM","pm")
@@ -419,11 +419,11 @@ def timestamp(type='long', mobileTZ=false) {
 def OrbitGet(command, device_id=null, mesh_id=null) {
     def respdata
     def params = [
-        uri		: apiUrl,
+        uri     : apiUrl,
         contentType: "application/json",
-        'headers'	: OrbitBhyveLoginHeaders(),
+        'headers'   : OrbitBhyveLoginHeaders(),
     ]
-    params.headers << ["orbit-api-key"	: state.orbit_api_key]
+    params.headers << ["orbit-api-key"  : state.orbit_api_key]
     switch (command) {
         case 'users':
             params.path = "${command}/${state.user_id}"
@@ -608,9 +608,9 @@ def add_bhyve_ChildDevice() {
                     break
                 case 'bridge':
                     data = [
-                        DTHid: 	"${DTHDNI(it.id)}:0",
-                        DTHname:	DTHName(it.type.split(" |-|_").collect{it.capitalize()}.join(" ")),
-                        DTHlabel: 	"Bhyve ${it.name}"
+                        DTHid:  "${DTHDNI(it.id)}:0",
+                        DTHname:    DTHName(it.type.split(" |-|_").collect{it.capitalize()}.join(" ")),
+                        DTHlabel:   "Bhyve ${it.name}"
                     ]
                     createDevice(data)
                     break
@@ -692,9 +692,9 @@ def isDebugLogEnabled() {
 }
 
 // Constant Declarations
-String DTHDNI(id) 					{(id.startsWith('bhyve'))?id:"bhyve-${app.id}-${id}"}
-String DTHName(type) 			{ return "Orbit Bhyve ${type}" }
-Map OrbitBhyveLoginHeaders() 	{
+String DTHDNI(id)                   {(id.startsWith('bhyve'))?id:"bhyve-${app.id}-${id}"}
+String DTHName(type)            { return "Orbit Bhyve ${type}" }
+Map OrbitBhyveLoginHeaders()    {
     return [
         'orbit-app-id':'Orbit Support Dashboard'
     ]
