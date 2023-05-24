@@ -28,7 +28,7 @@ import groovy.json.JsonSlurper
 
 metadata {
     definition (
-        name: "Orbit Bhyve Timer+", 
+        name: "Orbit Bhyve Sprinkler Timer", 
         namespace: "jpage4500", 
         author: "Joe Page",
         importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-sprinkler-timer.groovy",
