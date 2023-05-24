@@ -1,0 +1,36 @@
+{
+  "packageName": "Orbit Bhyve+",
+  "author": "Joe Page",
+  "version": "3.0.0",
+  "minimumHEVersion": "2.1.9",
+  "dateReleased": "2023-05-24",
+  "communityLink": "https://community.hubitat.com/t/release-life360/118544",
+  "releaseNotes": "initial version",
+  "apps": [
+    {
+      "id": "a2f2b1a3-98db-4eb6-906a-ab213182cf32",
+      "name": "Orbit Bhyve+",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-controller.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": false
+    }
+  ],
+  "drivers": [
+    {
+      "id": "9d94ceb2-dd3c-4fc2-b3b5-4c88e57772f5",
+      "name": "Orbit Bhyve Bridge",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-bridge.groovy",
+      "required": true
+    },
+    {
+      "id": "ff27e6ae-f2d1-461d-b416-77be6aec739c",
+      "name": "Orbit Bhyve Sprinkler Timer",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-sprinkler-timer.groovy",
+      "required": true
+    }
+  ]
+}
