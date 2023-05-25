@@ -239,7 +239,7 @@ def updateTiles(data) {
                     scheduled_auto_on = true
                     d = getChildDevice("${DTHDNI(it.id)}:${station}")
                     infoVerbose "Processing Orbit Sprinkler Device: '${it.name}', Orbit Station #${station}, Zone Name: '${zoneData.name}'"
-                    debugVerbose "STATUS:${it.status}"
+                    //debugVerbose "STATUS:${it.status}"
                     
                     if (it.status.watering_status) {
                         if (it.status.watering_status.stations != null) {
@@ -322,7 +322,7 @@ def updateTiles(data) {
                     }
                     d.sendEvent(name:"scheduled_auto_on", value: scheduled_auto_on)
                     def next_start_time = it.status.next_start_time
-                    debugVerbose "scheduled_auto_on: ${scheduled_auto_on}, next_start_time:${next_start_time}"
+                    //debugVerbose "scheduled_auto_on: ${scheduled_auto_on}, next_start_time:${next_start_time}"
                     if (scheduled_auto_on && next_start_time != null) {
                         if (it.status.rain_delay > 0) {
                             d.sendEvent(name:"rain_icon", value: "rain")

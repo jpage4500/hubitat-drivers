@@ -7,9 +7,23 @@
       "id": "7562796d-dd9f-42d1-a2ce-cd8caaf1533e",
       "name": "Life360+",
       "category": "Integrations",
-      "tags": ["Presence & Location"],
+      "tags": [
+        "Presence & Location"
+      ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/packageManifest.json",
       "description": "Life360 app that exposes more details than the built-in driver"
+    },
+    {
+      "id": "d35cca76-eea2-4c3d-9843-0e5e2f806893",
+      "name": "Orbit Bhyve+",
+      "category": "Integrations",
+      "tags": [
+        "Irrigation",
+        "Water",
+        "Valves"
+      ],
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/packageManifest.json",
+      "description": "Orbit Bhyve Integration"
     }
   ]
 }

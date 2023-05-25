@@ -4,7 +4,7 @@
   "version": "3.0.0",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-24",
-  "communityLink": "https://community.hubitat.com/t/release-life360/118544",
+  "communityLink": "https://community.hubitat.com/t/release-orbit-bhyve/119349",
   "releaseNotes": "initial version",
   "apps": [
     {
