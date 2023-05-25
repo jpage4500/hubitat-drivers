@@ -20,5 +20,6 @@ hpm manifest-add-app packageManifest.json --location=https://raw.githubuserconte
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-bridge.groovy --required=true
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/orbit-bhyve-sprinkler-timer.groovy --required=true
 
-hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/packageManifest.json --name="Orbit Bhyve+" --category="Integrations" --description="Orbit Bhyve Integration"
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/packageManifest.json --name="Orbit Bhyve+" --category="Integrations" --description="Orbit Bhyve Integration"
 
+# NOTE: add tags to repository.json from list here: https://raw.githubusercontent.com/HubitatCommunity/hubitat-packagerepositories/master/settings.json
