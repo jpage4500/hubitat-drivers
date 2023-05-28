@@ -196,14 +196,15 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Boolean isDriving = member.location.isDriving == "1"
     def Boolean inTransit = member.location.inTransit == "1"
     def Integer since = member.location.since.toLong()
+    // -- name --
     def String memberFirstName = (member.firstName) ? member.firstName : ""
     def String memberLastName = (member.lastName) ? member.lastName : ""
     def String address1 = (member.location.name) ? member.location.name : member.location.address1
     def String address2 = (member.location.address2) ? member.location.address2 : member.location.shortaddress
     // -- home --
-    def Double homeLatitude = home.latitude.toDouble() // home latitude
-    def Double homeLongitude = home.longitude.toDouble() // home longitude
-    def Double homeRadius = home.radius.toDouble() // home radius
+    def Double homeLatitude = home.latitude.toDouble()
+    def Double homeLongitude = home.longitude.toDouble()
+    def Double homeRadius = home.radius.toDouble()
 
     // -- previous values (could be null) --
     def Double prevLatitude = device.currentValue('latitude')
