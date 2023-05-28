@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.12 - 05/28/23 - change isDriving, isTransit, wifiState from string to boolean (enum)
  *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
  *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
  *  3.0.3 - 05/11/23 - fix status attribute
@@ -102,7 +103,7 @@ metadata {
 
         // device data
         attribute "battery", "number"
-        attribute "charge", "string"
+        attribute "charge", "enum", ["true","false"]
         attribute "status", "string"
         attribute "wifiState", "enum", ["true","false"]
         attribute "shareLocation", "string"
@@ -191,7 +192,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Integer accuracy = member.location.accuracy.toDouble().round(0).toInteger()
     def Integer battery = member.location.battery.toDouble().round(0).toInteger()
     def Boolean wifiState = member.location.wifiState == "1"
-    def String charge = member.location.charge
+    def Boolean charge = member.location.charge == "1"
     def Double speed = member.location.speed.toDouble()
     def Boolean isDriving = member.location.isDriving == "1"
     def Boolean inTransit = member.location.inTransit == "1"
@@ -326,9 +327,8 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     // *** Charging State ***
     sendEvent( name: "charge", value: charge )
-    sendEvent( name: "powerSource", value: (charge == "1") ? "DC" : "BTRY")
-    def String cContact = (charge == "1") ? "open" : "closed"
-    sendEvent( name: "contact", value: cContact )
+    sendEvent( name: "powerSource", value: charge ? "DC" : "BTRY")
+    sendEvent( name: "contact", value: charge ? "open" : "closed" )
 
     // *** Wifi ***
     sendEvent( name: "wifiState", value: wifiState )
