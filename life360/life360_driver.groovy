@@ -94,8 +94,8 @@ metadata {
         attribute "lastUpdated", "date"
 
         // driving data
-        attribute "inTransit", "string"
-        attribute "isDriving", "string"
+        attribute "inTransit", "bool"
+        attribute "isDriving", "bool"
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
@@ -104,7 +104,7 @@ metadata {
         attribute "battery", "number"
         attribute "charge", "string"
         attribute "status", "string"
-        attribute "wifiState", "string"
+        attribute "wifiState", "bool"
         attribute "shareLocation", "string"
 
         // user data
@@ -190,11 +190,11 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Double longitude = member.location.longitude.toDouble()
     def Integer accuracy = member.location.accuracy.toDouble().round(0).toInteger()
     def Integer battery = member.location.battery.toDouble().round(0).toInteger()
-    def String wifiState = member.location.wifiState
+    def Boolean wifiState = member.location.wifiState == "1"
     def String charge = member.location.charge
     def Double speed = member.location.speed.toDouble()
-    def String isDriving = member.location.isDriving
-    def String inTransit = member.location.inTransit
+    def Boolean isDriving = member.location.isDriving == "1"
+    def Boolean inTransit = member.location.inTransit == "1"
     def Integer since = member.location.since.toLong()
     def String memberFirstName = (member.firstName) ? member.firstName : ""
     def String memberLastName = (member.lastName) ? member.lastName : ""
@@ -217,9 +217,9 @@ def generatePresenceEvent(member, thePlaces, home) {
         && (prevLongitude != null && prevLongitude == longitude)
         && (prevAccuracy != null && prevAccuracy == accuracy)
         && (prevBattery != null && prevBattery == battery)
-        && (prevWifiState != null && prevWifiState == wifiState)) {
+        && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
-        // if (logEnable) log.trace "Life360+ Driver: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
+        //if (logEnable) log.trace "Life360+ Driver: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
         return
     } else {
         if (logEnable) log.info "Life360+ Driver: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
@@ -298,13 +298,13 @@ def generatePresenceEvent(member, thePlaces, home) {
     distanceUnits = ((distanceAway / 1000) / ((isMiles ? 1.609344 : 1))).round(2)
 
     // if transit threshold specified in preferences then use it; else, use info provided by Life360
-    if (transitThreshold.toDouble() > 0.0) { inTransit = (speedUnits >= transitThreshold.toDouble()) ? "1" : "0" }
+    if (transitThreshold.toDouble() > 0.0) { inTransit = (speedUnits >= transitThreshold.toDouble()) }
     // if driving threshold specified in preferences then use it; else, use info provided by Life360
-    if (drivingThreshold.toDouble() > 0.0) { isDriving = (speedUnits >= drivingThreshold.toDouble()) ? "1" : "0" }
+    if (drivingThreshold.toDouble() > 0.0) { isDriving = (speedUnits >= drivingThreshold.toDouble()) }
 
     def String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
 
-    if (logEnable && (isDriving == "1" || inTransit == "1")) {
+    if (logEnable && (isDriving || inTransit)) {
         // *** On the move ***
         log.debug "Life360+ Driver: $sStatus, speedUnits:$speedUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
     }
@@ -318,7 +318,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "distance", value: distanceUnits )
 
     // Set acceleration to active state if we are either moving or if we are anywhere outside home radius
-    sendEvent( name: "acceleration", value: (inTransit == "1" || isDriving == "1" || memberPresence == "not present" ) ? "active" : "inactive" )
+    sendEvent( name: "acceleration", value: (inTransit || isDriving || memberPresence == "not present" ) ? "active" : "inactive" )
 
     // *** Battery Level ***
     sendEvent( name: "battery", value: battery )
@@ -331,7 +331,7 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     // *** Wifi ***
     sendEvent( name: "wifiState", value: wifiState )
-    sendEvent( name: "switch", value: (wifiState == "1") ? "on" : "off" )
+    sendEvent( name: "switch", value: wifiState ? "on" : "off" )
 
     // ** Member Features **
     if (member.features != null) {
@@ -361,9 +361,9 @@ def generatePresenceEvent(member, thePlaces, home) {
 
 def sendStatusTile1() {
     def String binTransita
-    if(device.currentValue('isDriving') == "1") {
+    if(device.currentValue('isDriving') == true) {
         binTransita = "Driving"
-    } else if(device.currentValue('inTransit') == "1") {
+    } else if(device.currentValue('inTransit') == true) {
         binTransita = "Moving"
     } else {
         binTransita = "Not Moving"
@@ -391,12 +391,12 @@ def sendStatusTile1() {
     tileMap += "Since: ${dateSince}<br>"
     tileMap += (device.currentValue('status') == "At Home") ? "" : "${device.currentValue('status')}<br>"
     tileMap += "${binTransita}"
-    if(device.currentValue('address1') == "No Data" ? "Between Places" : device.currentValue('address1') != "Home" && device.currentValue('inTransit') == "1") {
+    if(device.currentValue('address1') == "No Data" ? "Between Places" : device.currentValue('address1') != "Home" && device.currentValue('inTransit') == true) {
         tileMap += " @ ${sprintf("%.1f", device.currentValue('speed'))} "
         tileMap += (isMiles) ? "MPH":"KPH"
     }
     tileMap += "<br>Phone Lvl: ${device.currentValue('battery')} - ${device.currentValue('powerSource')} - "
-    tileMap += (device.currentValue('wifiState') == "1") ? "WiFi" : "No WiFi"
+    tileMap += (device.currentValue('wifiState') == true) ? "WiFi" : "No WiFi"
     tileMap += "<br><p style='width:100%'>${device.currentValue('lastUpdated')}</p>" //Avi - cleaned up formatting (cosmetic / personal preference only)
     tileMap += "</table></div>"
 
