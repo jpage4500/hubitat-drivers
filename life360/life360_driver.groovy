@@ -94,8 +94,8 @@ metadata {
         attribute "lastUpdated", "date"
 
         // driving data
-        attribute "inTransit", "bool"
-        attribute "isDriving", "bool"
+        attribute "inTransit", "enum", ["true","false"]
+        attribute "isDriving", "enum", ["true","false"]
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
@@ -104,7 +104,7 @@ metadata {
         attribute "battery", "number"
         attribute "charge", "string"
         attribute "status", "string"
-        attribute "wifiState", "bool"
+        attribute "wifiState", "enum", ["true","false"]
         attribute "shareLocation", "string"
 
         // user data
