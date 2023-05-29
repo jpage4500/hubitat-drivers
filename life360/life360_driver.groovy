@@ -250,9 +250,6 @@ def generatePresenceEvent(member, thePlaces, home) {
         avatarHtml = "not set"
     }
     sendEvent( name: "avatar", value: avatar )
-    // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    if (generateHtml) sendEvent( name: "avatarHtml", value: generateHtml)
-    else if (device.currentValue('avatarHtml') != null) sendEvent( name: "avatarHtml", value: null)
 
     // *** Location ***
     def Double distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
@@ -357,7 +354,15 @@ def generatePresenceEvent(member, thePlaces, home) {
     state.update = true
 
     // ** HTML attributes (optional) **
-    if (!generateHtml) return
+    if (!generateHtml) {
+        // clear out existing html values (only useful if you previously had HTML enabled..)
+        sendEvent ( name: "avatarHtml", value: null )
+        sendEvent ( name: "html", value: null )
+        return
+    }
+
+    // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
+    sendEvent( name: "avatarHtml", value: generateHtml)
 
     def String binTransita
     if (isDriving) binTransita = "Driving"
@@ -366,11 +371,11 @@ def generatePresenceEvent(member, thePlaces, home) {
 
     if(since == 0) {
         theDate = use( groovy.time.TimeCategory ) {
-            new Date( 0 )
+            new Date(0)
         }
     } else {
         theDate = use( groovy.time.TimeCategory ) {
-            new Date( 0 ) + since
+            new Date(0) + since
         }
     }
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
@@ -381,9 +386,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
     tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
-    tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" :$address1}</a><br>"
+    tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" :address1}</a><br>"
     tileMap += "Since: ${dateSince}<br>"
-    tileMap += ($status == "At Home") ? "" : "${status}<br>"
+    tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
     if(address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
         tileMap += " @ ${sprintf("%.1f", speed)} "
