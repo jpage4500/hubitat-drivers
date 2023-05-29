@@ -196,7 +196,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Double speed = member.location.speed.toDouble()
     def Boolean isDriving = member.location.isDriving == "1"
     def Boolean inTransit = member.location.inTransit == "1"
-    def Integer since = member.location.since.toLong()
+    def Long since = member.location.since.toLong()
     // -- name --
     def String memberFirstName = (member.firstName) ? member.firstName : ""
     def String memberLastName = (member.lastName) ? member.lastName : ""
@@ -369,13 +369,14 @@ def generatePresenceEvent(member, thePlaces, home) {
     else if (inTransit) binTransita = "Moving"
     else binTransita = "Not Moving"
 
-    if(since == 0) {
+    int sEpoch = device.currentValue('since')
+    if(sEpoch == null) {
         theDate = use( groovy.time.TimeCategory ) {
             new Date(0)
         }
     } else {
         theDate = use( groovy.time.TimeCategory ) {
-            new Date(0) + since
+            new Date( 0 ) + sEpoch.seconds
         }
     }
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
