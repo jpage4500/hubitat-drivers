@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.13 - 05/30/23 - minor changes
  *  3.0.12 - 05/28/23 - change isDriving, isTransit, wifiState from string to boolean (enum)
  *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
  *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
@@ -196,7 +197,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Double speed = member.location.speed.toDouble()
     def Boolean isDriving = member.location.isDriving == "1"
     def Boolean inTransit = member.location.inTransit == "1"
-    def Integer since = member.location.since.toLong()
+    def Long since = member.location.since.toLong()
     // -- name --
     def String memberFirstName = (member.firstName) ? member.firstName : ""
     def String memberLastName = (member.lastName) ? member.lastName : ""
@@ -250,9 +251,6 @@ def generatePresenceEvent(member, thePlaces, home) {
         avatarHtml = "not set"
     }
     sendEvent( name: "avatar", value: avatar )
-    // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    if (generateHtml) sendEvent( name: "avatarHtml", value: generateHtml)
-    else if (device.currentValue('avatarHtml') != null) sendEvent( name: "avatarHtml", value: null)
 
     // *** Location ***
     def Double distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
@@ -326,8 +324,9 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent( name: "battery", value: battery )
 
     // *** Charging State ***
+    def String powerSource = charge ? "DC" : "BTRY"
     sendEvent( name: "charge", value: charge )
-    sendEvent( name: "powerSource", value: charge ? "DC" : "BTRY")
+    sendEvent( name: "powerSource", value: powerSource)
     sendEvent( name: "contact", value: charge ? "open" : "closed" )
 
     // *** Wifi ***
@@ -355,25 +354,26 @@ def generatePresenceEvent(member, thePlaces, home) {
     sendEvent ( name: "lastUpdated", value: lastUpdated )
     state.update = true
 
-    // Lastly update the status tile
-    if (generateHtml) sendStatusTile1()
-    else if (device.currentValue('html') != null) sendEvent( name: "html", value: null)
-}
-
-def sendStatusTile1() {
-    def String binTransita
-    if(device.currentValue('isDriving') == true) {
-        binTransita = "Driving"
-    } else if(device.currentValue('inTransit') == true) {
-        binTransita = "Moving"
-    } else {
-        binTransita = "Not Moving"
+    // ** HTML attributes (optional) **
+    if (!generateHtml) {
+        // clear out existing html values (only useful if you previously had HTML enabled..)
+        sendEvent ( name: "avatarHtml", value: null )
+        sendEvent ( name: "html", value: null )
+        return
     }
+
+    // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
+    sendEvent( name: "avatarHtml", value: generateHtml)
+
+    def String binTransita
+    if (isDriving) binTransita = "Driving"
+    else if (inTransit) binTransita = "Moving"
+    else binTransita = "Not Moving"
 
     int sEpoch = device.currentValue('since')
     if(sEpoch == null) {
         theDate = use( groovy.time.TimeCategory ) {
-            new Date( 0 )
+            new Date(0)
         }
     } else {
         theDate = use( groovy.time.TimeCategory ) {
@@ -383,22 +383,22 @@ def sendStatusTile1() {
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
     String dateSince = DATE_FORMAT.format(theDate)
 
-    String theMap = "https://www.google.com/maps/search/?api=1&query=" + device.currentValue('latitude').toString() + "," + device.currentValue('longitude').toString()
+    String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
 
     tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
-    tileMap += "<tr><td width='25%' align=center><img src='${device.currentValue("avatar")}' height='${avatarSize}%'>"
+    tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
-    tileMap += "At: <a href='${theMap}' target='_blank'>${device.currentValue('address1') == "No Data" ? "Between Places" : device.currentValue('address1')}</a><br>"
+    tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" :address1}</a><br>"
     tileMap += "Since: ${dateSince}<br>"
-    tileMap += (device.currentValue('status') == "At Home") ? "" : "${device.currentValue('status')}<br>"
+    tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
-    if(device.currentValue('address1') == "No Data" ? "Between Places" : device.currentValue('address1') != "Home" && device.currentValue('inTransit') == true) {
-        tileMap += " @ ${sprintf("%.1f", device.currentValue('speed'))} "
-        tileMap += (isMiles) ? "MPH":"KPH"
+    if(address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
+        tileMap += " @ ${sprintf("%.1f", speed)} "
+        tileMap += isMiles ? "MPH":"KPH"
     }
-    tileMap += "<br>Phone Lvl: ${device.currentValue('battery')} - ${device.currentValue('powerSource')} - "
-    tileMap += (device.currentValue('wifiState') == true) ? "WiFi" : "No WiFi"
-    tileMap += "<br><p style='width:100%'>${device.currentValue('lastUpdated')}</p>" //Avi - cleaned up formatting (cosmetic / personal preference only)
+    tileMap += "<br>Phone Lvl: ${battery} - ${powerSource} - "
+    tileMap += wifiState ? "WiFi" : "No WiFi"
+    tileMap += "<br><p style='width:100%'>${lastUpdated}</p>"
     tileMap += "</table></div>"
 
     int tileDevice1Count = tileMap.length()
