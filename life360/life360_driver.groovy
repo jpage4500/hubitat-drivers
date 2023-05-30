@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.13 - 05/30/23 - minor changes
  *  3.0.12 - 05/28/23 - change isDriving, isTransit, wifiState from string to boolean (enum)
  *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
  *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
