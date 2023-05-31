@@ -51,8 +51,19 @@
  *  This would not be possible without his work.
  *
  *  Changes:
- *  3.0.1 - 05/10/23 - JP: minor fixes
- *  3.0.0 - 05/05/23 - JP: Refactor driver
+ *  3.0.14 - 05/31/23 - add setting to auto-adjust refresh rate when users are moving
+ *  3.0.13 - 05/30/23 - minor changes
+ *  3.0.12 - 05/28/23 - change isDriving, isTransit, wifiState from string to boolean (enum)
+ *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
+ *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
+ *  3.0.3 - 05/11/23 - fix status attribute
+ *  3.0.2 - 05/11/23 - set presence attribute
+ *  3.0.0 - 05/05/23 - refactor driver
+ *                       - Only notify on location or battery change
+ *                       - add accuracy - useful to know how accurate a given location is
+ *                       - don't set fields for both miles and km - just the one the user selects
+ *                       - last updated time
+ *                       - add phone and email fields
  *  2.6.4 - 09/06/22 - Added option to export all life360 Places to file
  *  2.6.3 - 08/15/22 - Bundle Manager changes
  *  2.6.2 - 05/06/22 - Bundle Manager
