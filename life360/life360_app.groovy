@@ -77,14 +77,7 @@ String.metaClass.encodeURL = {
      java.net.URLEncoder.encode(delegate, "UTF-8")
 }
 
-def setVersion(){
-    state.name = "Life360+"
-    state.version = "3.0.0"
-}
-
 def syncVersion(evt){
-    setVersion()
-    sendLocationEvent(name: "updateVersionsInfo", value: "${state.name}:${state.version}")
 }
 
 definition(
@@ -126,7 +119,7 @@ mappings {
 }
 
 def getCredentialsPage() {
-    if(logEnable) log.debug "In getCredentialsPage - (${state.version})"
+    if(logEnable) log.debug "In getCredentialsPage"
     if(state.life360AccessToken) {
         listCircles()
     } else {
@@ -140,7 +133,7 @@ def getCredentialsPage() {
 }
 
 def getCredentialsErrorPage(String message) {
-    if(logEnable) log.debug "In getCredentialsErrorPage - (${state.version})"
+    if(logEnable) log.debug "In getCredentialsErrorPage"
     dynamicPage(name: "Credentials", title: "Enter Life360 Credentials", nextPage: "listCirclesPage", uninstall: uninstallOption, install:false) {
       section(getFormat("header-green", "${getImage("Blank")}"+" Life360 Credentials")) {
         input "username", "text", title: "Life360 Username?", multiple: false, required: true
@@ -151,7 +144,7 @@ def getCredentialsErrorPage(String message) {
 }
 
 def testLife360Connection() {
-    if(logEnable) log.debug "In testLife360Connection - (${state.version})"
+    if(logEnable) log.debug "In testLife360Connection"
     if(state.life360AccessToken) {
         if(logEnable) log.debug "In testLife360Connection - Good!"
         true
@@ -162,7 +155,7 @@ def testLife360Connection() {
 }
 
  def initializeLife360Connection() {
-    if(logEnable) log.debug "In initializeLife360Connection - (${state.version})"
+    if(logEnable) log.debug "In initializeLife360Connection"
 
     initialize()
 
@@ -195,7 +188,7 @@ def testLife360Connection() {
 }
 
 def listCircles() {
-    if(logEnable) log.debug "In listCircles - (${state.version})"
+    if(logEnable) log.debug "In listCircles"
     def uninstallOption = false
     if (app.installationState == "COMPLETE") uninstallOption = true
     dynamicPage(name: "listCirclesPage", title: "", install: true, uninstall: true) {
@@ -223,7 +216,7 @@ def listCircles() {
         }
 
         if(circle) {
-            if(logEnable) log.trace "In listPlaces - (${state.version})"
+            if(logEnable) log.trace "In listPlaces"
             if (app.installationState == "COMPLETE") uninstallOption = true
 
             if (!state?.circle) state.circle = settings.circle
@@ -264,7 +257,7 @@ def listCircles() {
         }
 
         if(place && circle) {
-            if(logEnable) log.trace "In listUsers - (${state.version})"
+            if(logEnable) log.trace "In listUsers"
             if (app.installationState == "COMPLETE") uninstallOption = true
             if (!state?.circle) state.circle = settings.circle
 
@@ -293,7 +286,7 @@ def listCircles() {
 }
 
 def installed() {
-    if(logEnable) log.trace "In installed - (${state.version})"
+    if(logEnable) log.trace "In installed"
     if(!state?.circle) state.circle = settings.circle
 
     settings.users.each {memberId->
@@ -323,7 +316,7 @@ def installed() {
 }
 
 def createCircleSubscription() {
-    if(logEnable) log.trace "In createCircleSubscription - (${state.version})"
+    if(logEnable) log.trace "In createCircleSubscription"
     if(logEnable) log.info "Remove any existing Life360 Webhooks for this Circle."
 
     def deleteUrl = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
@@ -362,7 +355,7 @@ def createCircleSubscription() {
 }
 
 def updated() {
-    if(logEnable) log.trace "In updated - (${state.version})"
+    if(logEnable) log.trace "In updated"
     if (!state?.circle) { state.circle = settings.circle }
 
     settings.users.each {memberId->
@@ -415,7 +408,6 @@ def initialize() {
 
 def placeEventHandler() {
   if(logEnable) log.debug "Life360 placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
-  setVersion()
   def circleId = params?.circleId
   def placeId = params?.placeId
   def memberId = params?.userId
@@ -467,8 +459,7 @@ def scheduleUpdates() {
 }
 
 def updateMembers(){
-    setVersion()
-    if(logEnable) log.trace "In updateMembers - (${state.version})"
+    if(logEnable) log.trace "In updateMembers"
 
     if (!state?.circle) state.circle = settings.circle
 
@@ -672,7 +663,7 @@ def createDeviceSection(driverName) {
 }
 
 def createDataChildDevice(driverName) {    
-    if(logEnable) log.debug "In createDataChildDevice (${state.version})"
+    if(logEnable) log.debug "In createDataChildDevice"
     statusMessageD = ""
     if(!getChildDevice(dataName)) {
         if(logEnable) log.debug "In createDataChildDevice - Child device not found - Creating device: ${dataName}"
@@ -688,7 +679,6 @@ def createDataChildDevice(driverName) {
 }
 
 def uninstalled() {
-    sendLocationEvent(name: "updateVersionInfo", value: "${app.id}:remove")
     removeChildDevices(getChildDevices())
 }
 
@@ -720,27 +710,16 @@ def display(data) {
         }
     }
     if(theName == null || theName == "") theName = "New Child App"
-    if(!state.name) { state.name = "" }
-    if(state.name == theName) {
-        headerName = state.name
-    } else {
-        headerName = "${state.name} - ${theName}"
-    }
+    headerName = "Life360+"
     section() {
     }
 }
 
 def display2() {
-    setVersion()
     section() {
         if(state.appType == "parent") { href "removePage", title:"${getImage("optionsRed")} <b>Remove App and all child apps</b>", description:"" }
         paragraph getFormat("line")
-        if(state.version) {
-            bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name}, version: ${state.version}"
-        } else {
-            bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name}"
-        }
-        bMes += "</div>"
+        bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>Life360+</div>"
         paragraph "${bMes}"
     }
 }
