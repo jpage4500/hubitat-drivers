@@ -1,6 +1,6 @@
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
- * ** LIFE360+ Hubitat Driver **
+ * ** LIFE360+ Hubitat App **
  * 
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  * 
@@ -165,13 +165,12 @@ def testLife360Connection() {
     def url = "https://api.life360.com/v3/oauth2/token.json"
 
     def postBody =  "grant_type=password&" +
-            "username=${username}&"+
-                    "password=${password}"
+        "username=${username}&"+
+        "password=${password}"
 
     def result = null
 
     try {
-
          httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
              result = response
         }
@@ -407,27 +406,26 @@ def initialize() {
 }
 
 def placeEventHandler() {
-  if(logEnable) log.debug "Life360 placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
-  def circleId = params?.circleId
-  def placeId = params?.placeId
-  def memberId = params?.userId
-  def direction = params?.direction
-  def timestamp = params?.timestamp
-  def requestId = null
-  def requestResult = null
-  def isPollable = null
-
-  def externalId = "${app.id}.${memberId}"
-  def deviceWrapper = getChildDevice("${externalId}")
-
-  if(logEnable) log.trace "In placeHandler - about to post request update..."
-  def postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
-  requestResult = null
-
+    if(logEnable) log.debug "Life360 placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
+    def circleId = params?.circleId
+    def placeId = params?.placeId
+    def memberId = params?.userId
+    def direction = params?.direction
+    def timestamp = params?.timestamp
+    def requestId = null
+    def requestResult = null
+    def isPollable = null
+  
+    def externalId = "${app.id}.${memberId}"
+    def deviceWrapper = getChildDevice("${externalId}")
+  
+    if(logEnable) log.trace "In placeHandler - about to post request update..."
+    def postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
+    requestResult = null
+  
     // once a push event is received, we can force a real-time update of location data via issuing the following
     // post request against the member for which the push event was received
     try {
-
         httpPost(uri: postUrl, body: ["type": "location"], headers: ["Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
             requestResult = response
         }
@@ -439,10 +437,10 @@ def placeEventHandler() {
     catch (e) {
         log.error "Life360 request post / get, error: $e"
     }
-
-  // we got a PUSH EVENT from Life360 - better update everything by pulling a fresh data packet
-  // But first, wait a second to let packet catch-up with push event
-  updateMembers()
+  
+    // we got a PUSH EVENT from Life360 - better update everything by pulling a fresh data packet
+    // But first, wait a second to let packet catch-up with push event
+    updateMembers()
 }
 
 
@@ -453,9 +451,19 @@ def refresh() {
 }
 
 def scheduleUpdates() {
-    if (logEnable) log.trace "In scheduleUpdates..."
-    // Continue to update Info for all members every 30 seconds
-    schedule("0/30 * * * * ? *", updateMembers)
+    def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+    if (logEnable) log.debug ("scheduleUpdates: numLocationUpdates:$numLocationUpdates")
+    // TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
+    if (numLocationUpdates == 0) {
+        // update every 30 seconds
+        schedule("0/30 * * * * ? *", updateMembers)
+    } else if (numLocationUpdates == 1) {
+        // update every 15 seconds
+        schedule("0/15 * * * * ? *", updateMembers)
+    } else if (numLocationUpdates >= 2) {
+        // update every 10 seconds
+        schedule("0/10 * * * * ? *", updateMembers)
+    }
 }
 
 def updateMembers(){
@@ -475,7 +483,6 @@ def sendCmd(url, result){
 
 def cmdHandler(resp, data) {
     if(logEnable) log.trace "In cmdHandler..."
-    // Avi - pushed all data straight down to child device for self-containment
 
     if(resp.getStatus() == 200 || resp.getStatus() == 207) {
         result = resp.getJson()
@@ -492,6 +499,7 @@ def cmdHandler(resp, data) {
         }
 
         // Iterate through each member and trigger an update from payload
+        def Boolean isAnyChanged = false
         settings.users.each {memberId->
             def externalId = "${app.id}.${memberId}"
             def member = state.members.find{it.id==memberId}
@@ -500,13 +508,23 @@ def cmdHandler(resp, data) {
                 def deviceWrapper = getChildDevice("${externalId}")
 
                 // send circle places and home to individual children
-                deviceWrapper.generatePresenceEvent(member, placesMap, home)
-
+                def Boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
+                if (isChanged) isAnyChanged = true
             } catch(e) {
-                if(logEnable) log.debug "In cmdHandler - catch - member: ${member}"
-                if(logEnable) log.debug e
+                log.error "cmdHandler: Exception: member: ${member}"
+                log.error e
             }
         }
+
+        // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
+        // - if 1+ users are moving, update more frequently; if no one moves, update less frequently
+        def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+        if (!isAnyChanged) numLocationUpdates = 0
+        else numLocationUpdates = numLocationUpdates + 1
+        if (logEnable) log.debug("cmdHandler: isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates")
+        state.numLocationUpdates = numLocationUpdates
+
+        scheduleUpdates()
     }
 }
 

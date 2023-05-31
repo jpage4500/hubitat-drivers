@@ -180,10 +180,10 @@ def updated() {
     refresh()
 }
 
-def generatePresenceEvent(member, thePlaces, home) {
+Boolean generatePresenceEvent(member, thePlaces, home) {
     if (member.location == null) {
         // log.info "Life360+ Driver: no location set for $member"
-        return
+        return false
     }
 
     // NOTE: only interested in sending updates device when location or battery changes
@@ -215,15 +215,18 @@ def generatePresenceEvent(member, thePlaces, home) {
     def Integer prevBattery = device.currentValue('battery')
     def String prevWifiState = device.currentValue('wifiState')
 
-    // skip update if location, accuracy or battery have not changed
-    if ((prevLatitude != null && prevLatitude == latitude)
-        && (prevLongitude != null && prevLongitude == longitude)
-        && (prevAccuracy != null && prevAccuracy == accuracy)
+    // detect if location (lat/lng/accuracy) changed from previous update
+    def Boolean isLocationChanged = (prevLatitude == null || prevLatitude != latitude
+        || (prevLongitude == null || prevLongitude != longitude)
+        || (prevAccuracy == null || prevAccuracy != accuracy))
+
+    // skip update if location, accuracy and battery have not changed
+    if (!isLocationChanged
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
         //if (logEnable) log.trace "Life360+ Driver: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
-        return
+        return false
     } else {
         if (logEnable) log.info "Life360+ Driver: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
     }
@@ -359,7 +362,7 @@ def generatePresenceEvent(member, thePlaces, home) {
         // clear out existing html values (only useful if you previously had HTML enabled..)
         sendEvent ( name: "avatarHtml", value: null )
         sendEvent ( name: "html", value: null )
-        return
+        return isLocationChanged
     }
 
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
@@ -404,6 +407,7 @@ def generatePresenceEvent(member, thePlaces, home) {
     int tileDevice1Count = tileMap.length()
     if (tileDevice1Count > 1024) log.warn "Life360+ Driver: In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
+    return isLocationChanged
 }
 
 def haversine(lat1, lon1, lat2, lon2) {
