@@ -191,7 +191,7 @@ def listCircles() {
     def uninstallOption = false
     if (app.installationState == "COMPLETE") uninstallOption = true
     dynamicPage(name: "listCirclesPage", title: "", install: true, uninstall: true) {
-        display()
+        displayHeader()
 
       if(testLife360Connection()) {
           def urlCircles = "https://api.life360.com/v3/circles.json"
@@ -277,9 +277,11 @@ def listCircles() {
             }
 
             section(getFormat("header-green", "${getImage("Blank")}"+" Other Options")) {
-          input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
-          }
-            display2()
+                input (name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute'])
+                
+                input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            }
+            displayFooter()
         }
     }
 }
@@ -445,29 +447,54 @@ def placeEventHandler() {
 
 
 def refresh() {
+    if (logEnable) log.debug ("refresh:")
     listCircles()
     updateMembers()
     scheduleUpdates()
 }
 
 def scheduleUpdates() {
-    def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
-    if (logEnable) log.debug ("scheduleUpdates: numLocationUpdates:$numLocationUpdates")
-    // TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
-    if (numLocationUpdates == 0) {
-        // update every 30 seconds
-        schedule("0/30 * * * * ? *", updateMembers)
-    } else if (numLocationUpdates == 1) {
-        // update every 15 seconds
-        schedule("0/15 * * * * ? *", updateMembers)
-    } else if (numLocationUpdates >= 2) {
-        // update every 10 seconds
-        schedule("0/10 * * * * ? *", updateMembers)
+    unschedule()
+
+    def Integer refreshSecs = 30
+    if (pollFreq == "auto") {
+        // adjust refresh rate based on if devices are moving
+        def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+        // TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
+        if (numLocationUpdates == 0) {
+            // update every 30 seconds
+            refreshSecs = 30
+        } else if (numLocationUpdates == 1) {
+            // update every 15 seconds
+            refreshSecs = 15
+        } else if (numLocationUpdates >= 2) {
+            // update every 10 seconds
+            refreshSecs = 10
+        }
+    } else {
+        refreshSecs = pollFreq.toInteger()
+    }
+    if (logEnable) log.debug ("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
+    if (refreshSecs > 0 && refreshSecs < 60) {
+        // seconds
+        schedule("0/${refreshSecs} * * * * ? *", updateMembers)
+    } else {
+        // mins
+        schedule("0 */${refreshSecs/60} * * * ? *", updateMembers)
     }
 }
 
 def updateMembers(){
-    if(logEnable) log.trace "In updateMembers"
+    // prevent calling API too frequently
+    def Long currentTimeMs = new Date().getTime()
+    def Long lastUpdateMs = state.lastUpdateMs != null ? state.lastUpdateMs : 0
+    def Long diff = currentTimeMs - lastUpdateMs
+    if (diff < 3000) {
+        if(logEnable) log.trace "updateMembers: already up-to-date; ${diff}ms"
+        return
+    }
+    state.lastUpdateMs = currentTimeMs
+    if(logEnable) log.trace "updateMembers: ${diff}ms"
 
     if (!state?.circle) state.circle = settings.circle
 
@@ -482,8 +509,6 @@ def sendCmd(url, result){
 }
 
 def cmdHandler(resp, data) {
-    if(logEnable) log.trace "In cmdHandler..."
-
     if(resp.getStatus() == 200 || resp.getStatus() == 207) {
         result = resp.getJson()
         def members = result.members
@@ -516,15 +541,24 @@ def cmdHandler(resp, data) {
             }
         }
 
-        // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
-        // - if 1+ users are moving, update more frequently; if no one moves, update less frequently
-        def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
-        if (!isAnyChanged) numLocationUpdates = 0
-        else numLocationUpdates = numLocationUpdates + 1
-        if (logEnable) log.debug("cmdHandler: isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates")
-        state.numLocationUpdates = numLocationUpdates
+        if (pollFreq == "auto") {
+            // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
+            // - if user(s) are moving, update more frequently; if not, update less frequently
+            def Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+            def Integer numLocationUpdates = prevLocationUpdates
+            numLocationUpdates += isAnyChanged ? 1 : -1
+            if (numLocationUpdates < 0) numLocationUpdates = 0
+            state.numLocationUpdates = numLocationUpdates
+            //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
 
-        scheduleUpdates()
+            // calling schedule() can result in it firing right away so only do it if anything changes
+            if (numLocationUpdates != prevLocationUpdates) {
+                scheduleUpdates()
+            }
+        }
+    } else {
+        // connection error
+        log.error("cmdHandler: resp:$resp")
     }
 }
 
@@ -617,85 +651,6 @@ def login() {        // Modified from code by @dman2306
     }
 }
 
-def checkHubVersion() {
-    hubVersion = getHubVersion()
-    hubFirmware = location.hub.firmwareVersionString
-    if(logEnable) log.debug "In checkHubVersion - Info: ${hubVersion} - ${hubFirware}"
-}
-
-def parentCheck(){  
-    state.appInstalled = app.getInstallationState() 
-    if(state.appInstalled != 'COMPLETE'){
-        parentChild = true
-      } else {
-        parentChild = false
-      }
-}
-
-def appControlSection() {
-    input "pauseApp", "bool", title: "Pause App", defaultValue:false, submitOnChange:true
-    if(pauseApp) {
-        if(app.label) {
-            if(!app.label.contains("(Paused)")) {
-                app.updateLabel(app.label + " <span style='color:red'>(Paused)</span>")
-            }
-        }
-    } else {
-        if(app.label) {
-            if(app.label.contains("(Paused)")) {
-                app.updateLabel(app.label - " <span style='color:red'>(Paused)</span>")
-            }
-        }
-    }
-    if(pauseApp) { 
-        paragraph app.label
-    } else {
-        label title: "Enter a name for this automation", required:true
-    }
-}
-
-def appGeneralSection() {
-    input "logEnable", "bool", title: "Enable Debug Options", description: "Log Options", defaultValue:false, submitOnChange:true
-    if(logEnable) {
-        input "logOffTime", "enum", title: "Logs Off Time", required:false, multiple:false, options: ["1 Hour", "2 Hours", "3 Hours", "4 Hours", "5 Hours", "Keep On"]
-    }
-    paragraph "This app can be enabled/disabled by using a switch. The switch can also be used to enable/disable several apps at the same time."
-    input "disableSwitch", "capability.switch", title: "Switch Device(s) to Enable / Disable this app <small>(When selected switch is ON, app is disabled.)</small>", submitOnChange:true, required:false, multiple:true
-}
-
-def createDeviceSection(driverName) {
-    paragraph "This child app needs a virtual device to store values."
-    input "useExistingDevice", "bool", title: "Use existing device (off) or have one created for you (on)", defaultValue:false, submitOnChange:true
-    if(useExistingDevice) {
-        input "dataName", "text", title: "Enter a name for this vitual Device (ie. 'Front Door')", required:true, submitOnChange:true
-        paragraph "<b>A device will automatically be created for you as soon as you click outside of this field.</b>"
-        if(dataName) createDataChildDevice(driverName)
-        if(statusMessageD == null) statusMessageD = "Waiting on status message..."
-        paragraph "${statusMessageD}"
-    }
-    input "dataDevice", "capability.actuator", title: "Virtual Device specified above", required:true, multiple:false, submitOnChange:true
-    if(!useExistingDevice) {
-        app.removeSetting("dataName")
-        paragraph "<small>* Device must use the '${driverName}'.</small>"
-    }
-}
-
-def createDataChildDevice(driverName) {    
-    if(logEnable) log.debug "In createDataChildDevice"
-    statusMessageD = ""
-    if(!getChildDevice(dataName)) {
-        if(logEnable) log.debug "In createDataChildDevice - Child device not found - Creating device: ${dataName}"
-        try {
-            addChildDevice("jpage4500", driverName, dataName, 1234, ["name": "${dataName}", isComponent: false])
-            if(logEnable) log.debug "In createDataChildDevice - Child device has been created! (${dataName})"
-            statusMessageD = "<b>Device has been been created. (${dataName})</b>"
-        } catch (e) { if(logEnable) log.debug "Unable to create device - ${e}" }
-    } else {
-        statusMessageD = "<b>Device Name (${dataName}) already exists.</b>"
-    }
-    return statusMessageD
-}
-
 def uninstalled() {
     removeChildDevices(getChildDevices())
 }
@@ -718,7 +673,7 @@ def getFormat(type, myText=null, page=null) {            // Modified code from @
     if(type == "button-blue") return "<a style='color:white;text-align:center;font-size:20px;font-weight:bold;background-color:#03FDE5;border:1px solid #000000;box-shadow:3px 4px #8B8F8F;border-radius:10px' href='${page}'>${myText}</a>"
 }
 
-def display(data) {
+def displayHeader(data) {
     if(data == null) data = ""
     if(app.label) {
         if(app.label.contains("(Paused)")) {
@@ -733,7 +688,7 @@ def display(data) {
     }
 }
 
-def display2() {
+def displayFooter() {
     section() {
         if(state.appType == "parent") { href "removePage", title:"${getImage("optionsRed")} <b>Remove App and all child apps</b>", description:"" }
         paragraph getFormat("line")
