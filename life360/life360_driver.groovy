@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.14 - 05/31/23 - add setting to auto-adjust refresh rate when users are moving
  *  3.0.13 - 05/30/23 - minor changes
  *  3.0.12 - 05/28/23 - change isDriving, isTransit, wifiState from string to boolean (enum)
  *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
