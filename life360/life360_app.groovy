@@ -130,7 +130,7 @@ mappings {
 }
 
 def getCredentialsPage() {
-    if(logEnable) log.debug "In getCredentialsPage"
+    if (logEnable) log.debug "Life360+: In getCredentialsPage"
     if(state.life360AccessToken) {
         listCircles()
     } else {
@@ -144,7 +144,7 @@ def getCredentialsPage() {
 }
 
 def getCredentialsErrorPage(String message) {
-    if(logEnable) log.debug "In getCredentialsErrorPage"
+    if (logEnable) log.debug "Life360+: getCredentialsErrorPage:"
     dynamicPage(name: "Credentials", title: "Enter Life360 Credentials", nextPage: "listCirclesPage", uninstall: uninstallOption, install:false) {
       section(getFormat("header-green", "${getImage("Blank")}"+" Life360 Credentials")) {
         input "username", "text", title: "Life360 Username?", multiple: false, required: true
@@ -155,18 +155,17 @@ def getCredentialsErrorPage(String message) {
 }
 
 def testLife360Connection() {
-    if(logEnable) log.debug "In testLife360Connection"
     if(state.life360AccessToken) {
-        if(logEnable) log.debug "In testLife360Connection - Good!"
+        if (logEnable) log.debug "Life360+: testLife360Connection - Good!"
         true
     } else {
-        if(logEnable) log.debug "In testLife360Connection - Bad!"
-      initializeLife360Connection()
+        if (logEnable) log.debug "Life360+: testLife360Connection - Bad!"
+        initializeLife360Connection()
     }
 }
 
  def initializeLife360Connection() {
-    if(logEnable) log.debug "In initializeLife360Connection"
+    if (logEnable) log.debug "Life360+: initializeLife360Connection"
 
     initialize()
 
@@ -192,13 +191,13 @@ def testLife360Connection() {
         return ;
     }
     catch (e) {
-       log.error "Life360 initializeLife360Connection, error: $e"
+       log.error "Life360+: initializeLife360Connection, error: $e"
        return false;
     }
 }
 
 def listCircles() {
-    if(logEnable) log.debug "In listCircles"
+    if (logEnable) log.debug "Life360+: listCircles:"
     def uninstallOption = false
     if (app.installationState == "COMPLETE") uninstallOption = true
     dynamicPage(name: "listCirclesPage", title: "", install: true, uninstall: true) {
@@ -226,7 +225,7 @@ def listCircles() {
         }
 
         if(circle) {
-            if(logEnable) log.trace "In listPlaces"
+            if (logEnable) log.trace "Life360+: listPlaces"
             if (app.installationState == "COMPLETE") uninstallOption = true
 
             if (!state?.circle) state.circle = settings.circle
@@ -267,7 +266,7 @@ def listCircles() {
         }
 
         if(place && circle) {
-            if(logEnable) log.trace "In listUsers"
+            if (logEnable) log.trace "Life360+: listUsers"
             if (app.installationState == "COMPLETE") uninstallOption = true
             if (!state?.circle) state.circle = settings.circle
 
@@ -298,7 +297,7 @@ def listCircles() {
 }
 
 def installed() {
-    if(logEnable) log.trace "In installed"
+    if (logEnable) log.trace "Life360+: installed"
     if(!state?.circle) state.circle = settings.circle
 
     settings.users.each {memberId->
@@ -307,9 +306,9 @@ def installed() {
             // Modified from @Stephack
             def childDevice = childList()
             if(childDevice.find{it.data.vcId == "${member}"}){
-                if(logEnable) log.info "${member.firstName} already exists...skipping"
+                if (logEnable) log.info "${member.firstName} already exists...skipping"
             } else {
-                if(logEnable) log.info "Creating Life360 Device: " + member
+                if (logEnable) log.info "Creating Life360 Device: " + member
                 try{
                     addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
                 }
@@ -320,7 +319,7 @@ def installed() {
             // end mod
 
             if (childDevice) {
-                if(logEnable) log.info "Child Device Successfully Created"
+                if (logEnable) log.info "Child Device Successfully Created"
             }
         }
     }
@@ -328,23 +327,22 @@ def installed() {
 }
 
 def createCircleSubscription() {
-    if(logEnable) log.trace "In createCircleSubscription"
-    if(logEnable) log.info "Remove any existing Life360 Webhooks for this Circle."
+    if (logEnable) log.trace "Life360+: createCircleSubscription:"
+    if (logEnable) log.info "Life360+: Remove any existing Life360 Webhooks for this Circle."
 
     def deleteUrl = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
-    try { // ignore any errors - there many not be any existing webhooks
-
+    try { 
+        // ignore any errors - there many not be any existing webhooks
         httpDelete (uri: deleteUrl, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     }
-
     catch (e) {
-        log.debug (e)
+        log.debug(e)
     }
 
     // subscribe to the life360 webhook to get push notifications on place events within this circle
 
-    if(logEnable) log.info "Create a new Life360 Webhooks for this Circle."
+    if (logEnable) log.info "Life360+: Create a new Life360 Webhooks for this Circle."
     createAccessToken() // create our own OAUTH access token to use in webhook url
     def hookUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/placecallback?access_token=${state.accessToken}"
     def url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
@@ -354,12 +352,12 @@ def createCircleSubscription() {
         httpPost(uri: url, body: postBody, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     } catch (e) {
-        log.debug (e)
+        log.debug(e)
     }
 
     if (result.data?.hookUrl) {
-        log.info "Successfully subscribed to Life360 circle push events"
-        if(logEnable) log.debug "Confirmation: ${result.data?.hookUrl}"
+        log.info "Life360+: Successfully subscribed to Life360 circle push events"
+        if (logEnable) log.debug "Life360+: Confirmation: ${result.data?.hookUrl}"
         updateMembers()
         scheduleUpdates()
     }
@@ -367,7 +365,7 @@ def createCircleSubscription() {
 }
 
 def updated() {
-    if(logEnable) log.trace "In updated"
+    if (logEnable) log.trace "Life360+: updated"
     if (!state?.circle) { state.circle = settings.circle }
 
     settings.users.each {memberId->
@@ -379,9 +377,9 @@ def updated() {
             // Modified from @Stephack
             def childDevice = childList()
             if(childDevice.find{it.data.vcId == "${member}"}){
-                if(logEnable) log.info "${member.firstName} already exists...skipping"
+                if (logEnable) log.info "${member.firstName} already exists...skipping"
             } else {
-                if(logEnable) log.info "Creating Life360 Device: " + member
+                if (logEnable) log.info "Creating Life360 Device: " + member
                 try{
                     addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
                 }
@@ -392,14 +390,14 @@ def updated() {
             // end mod
 
             if (childDevice) {
-                if(logEnable) log.info "Child Device Successfully Created"
+                if (logEnable) log.info "Child Device Successfully Created"
                 createCircleSubscription()
             }
         }
     }
 
     def childDevices = childList()
-    if(logEnable) log.debug "Child Devices: ${childDevices}"
+    if (logEnable) log.debug "Life360+: Child Devices: ${childDevices}"
     childDevices.each {childDevice->
         def (childAppName, childMemberId) = childDevice.deviceNetworkId.split("\\.")
         if (!settings.users.find{it==childMemberId}) {
@@ -419,7 +417,7 @@ def initialize() {
 }
 
 def placeEventHandler() {
-    if(logEnable) log.debug "Life360 placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
+    if (logEnable) log.debug "Life360+: placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
     def circleId = params?.circleId
     def placeId = params?.placeId
     def memberId = params?.userId
@@ -432,7 +430,7 @@ def placeEventHandler() {
     def externalId = "${app.id}.${memberId}"
     def deviceWrapper = getChildDevice("${externalId}")
   
-    if(logEnable) log.trace "In placeHandler - about to post request update..."
+    if (logEnable) log.trace "Life360+: placeEventHandler: about to post request update..."
     def postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
     requestResult = null
   
@@ -444,11 +442,11 @@ def placeEventHandler() {
         }
         requestId = requestResult.data?.requestId
         isPollable = requestResult.data?.isPollable
-        if(logEnable) log.debug "PlaceHandler Post response = ${requestResult.data}  params direction = $direction"
-        if(logEnable) log.debug "PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
+        if (logEnable) log.debug "Life360+: PlaceHandler Post response = ${requestResult.data}  params direction = $direction"
+        if (logEnable) log.debug "Life360+: PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
     }
     catch (e) {
-        log.error "Life360 request post / get, error: $e"
+        log.error "Life360+: request post / get, error: $e"
     }
   
     // we got a PUSH EVENT from Life360 - better update everything by pulling a fresh data packet
@@ -458,7 +456,7 @@ def placeEventHandler() {
 
 
 def refresh() {
-    if (logEnable) log.debug ("refresh:")
+    if (logEnable) log.debug("Life360+: refresh:")
     listCircles()
     updateMembers()
     scheduleUpdates()
@@ -485,7 +483,7 @@ def scheduleUpdates() {
     } else {
         refreshSecs = pollFreq.toInteger()
     }
-    if (logEnable) log.debug ("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
+    if (logEnable) log.debug("Life360+: scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", updateMembers)
@@ -502,11 +500,11 @@ def updateMembers(){
     def Long lastUpdateMs = state.lastUpdateMs != null ? state.lastUpdateMs : 0
     def Long diff = currentTimeMs - lastUpdateMs
     if (diff < 2000) {
-        if (logEnable) log.trace "updateMembers: already up-to-date; ${diff}ms"
+        if (logEnable) log.trace "Life360+: updateMembers: already up-to-date; ${diff}ms"
         return
     }
     state.lastUpdateMs = currentTimeMs
-    if (logEnable) log.trace "updateMembers: last:${diff}ms"
+    if (logEnable) log.trace "Life360+: updateMembers: last:${diff}ms"
 
     if (!state?.circle) state.circle = settings.circle
 
@@ -548,7 +546,7 @@ def cmdHandler(resp, data) {
                 def Boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
                 if (isChanged) isAnyChanged = true
             } catch(e) {
-                log.error "cmdHandler: Exception: member: ${member}"
+                log.error "Life360+: cmdHandler: Exception: member: ${member}"
                 log.error e
             }
         }
@@ -572,30 +570,30 @@ def cmdHandler(resp, data) {
         }
     } else {
         // connection error
-        log.error("cmdHandler: resp:$resp")
+        log.error("Life360+: cmdHandler: resp:$resp")
     }
 }
 
 def childList() {
     def children = getChildDevices()
-    if(logEnable) log.debug "In childList - children: ${children}"
+    if (logEnable) log.debug "Life360+: childList: children: ${children}"
     return children
 }
 
 def saveLif360PlacesHandler(data) {
     if(data) {
-        if(logEnable) log.debug "In saveLif360PlacesHandler - writting to file: life360Places.txt"
+        if (logEnable) log.debug "Life360+: saveLif360PlacesHandler: writting to file: life360Places.txt"
         writeFile("life360Places.txt", data)
         finished = true
     } else {
-        log.info "There is no data to save."
+        log.info "Life360+: There is no data to save."
         finished = false
     }
     return finished
 }
 
 Boolean writeFile(fName, fData) {
-    //if(logEnable) log.debug "Writing to file - ${fName} - ${fData}"
+    //if (logEnable) log.debug "Writing to file - ${fName} - ${fData}"
     login()
     try {
         def params = [
@@ -625,12 +623,12 @@ Content-Disposition: form-data; name="folder"
         httpPost(params) { resp ->    
         }
     } catch (e) {
-        log.error "Error writing file $fName: ${e}"
+        log.error "Life360+: Error writing file $fName: ${e}"
     }
 }
 
 def login() {        // Modified from code by @dman2306
-    if(logEnable) log.debug "In login - Checking Hub Security"
+    if (logEnable) log.debug "Life360+: login: Checking Hub Security"
     state.cookie = ""
     if(hubSecurity) {
         try{
@@ -654,7 +652,7 @@ def login() {        // Modified from code by @dman2306
             )
             { resp ->
                 if (resp.data?.text?.contains("The login information you supplied was incorrect.")) {
-                    log.warn "Quick Chart Data Collector - username/password is incorrect."
+                    log.warn "Life360+: Quick Chart Data Collector - username/password is incorrect."
                 } else {
                     state.cookie = resp?.headers?.'Set-Cookie'?.split(';')?.getAt(0)
                 }

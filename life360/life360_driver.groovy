@@ -226,7 +226,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
-        if (logEnable) log.trace "Life360+ Driver: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
+        //if (logEnable) log.trace "Life360+ Driver: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
         return false
     } else {
         if (logEnable) log.info "Life360+ Driver: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
