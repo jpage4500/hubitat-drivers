@@ -496,16 +496,17 @@ def scheduleUpdates() {
 }
 
 def updateMembers(){
-    // prevent calling API too frequently
+    // prevent calling API too frequently 
+    // - I noticed calling schedule() can cause it to fire immediately sometimes
     def Long currentTimeMs = new Date().getTime()
     def Long lastUpdateMs = state.lastUpdateMs != null ? state.lastUpdateMs : 0
     def Long diff = currentTimeMs - lastUpdateMs
-    if (diff < 3000) {
-        if(logEnable) log.trace "updateMembers: already up-to-date; ${diff}ms"
+    if (diff < 2000) {
+        if (logEnable) log.trace "updateMembers: already up-to-date; ${diff}ms"
         return
     }
     state.lastUpdateMs = currentTimeMs
-    if(logEnable) log.trace "updateMembers: ${diff}ms"
+    if (logEnable) log.trace "updateMembers: last:${diff}ms"
 
     if (!state?.circle) state.circle = settings.circle
 
@@ -558,7 +559,9 @@ def cmdHandler(resp, data) {
             def Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
             def Integer numLocationUpdates = prevLocationUpdates
             numLocationUpdates += isAnyChanged ? 1 : -1
+            // max out at 3 to prevent a long drive from not slowing down API calls for a while after
             if (numLocationUpdates < 0) numLocationUpdates = 0
+            else if (numLocationUpdates > 2) numLocationUpdates = 2
             state.numLocationUpdates = numLocationUpdates
             //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
 
