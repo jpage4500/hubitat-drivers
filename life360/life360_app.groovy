@@ -1,6 +1,6 @@
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
- * ** LIFE360+ Hubitat Driver **
+ * ** LIFE360+ Hubitat App **
  * 
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  * 
@@ -51,8 +51,19 @@
  *  This would not be possible without his work.
  *
  *  Changes:
- *  3.0.1 - 05/10/23 - JP: minor fixes
- *  3.0.0 - 05/05/23 - JP: Refactor driver
+ *  3.0.14 - 05/31/23 - add setting to auto-adjust refresh rate when users are moving
+ *  3.0.13 - 05/30/23 - minor changes
+ *  3.0.12 - 05/28/23 - change isDriving, isTransit, wifiState from string to boolean (enum)
+ *  3.0.8 - 05/18/23 - more changes/cleanup from @Scottma61
+ *  3.0.5 - 05/15/23 - several changes including PR from @Scottma61
+ *  3.0.3 - 05/11/23 - fix status attribute
+ *  3.0.2 - 05/11/23 - set presence attribute
+ *  3.0.0 - 05/05/23 - refactor driver
+ *                       - Only notify on location or battery change
+ *                       - add accuracy - useful to know how accurate a given location is
+ *                       - don't set fields for both miles and km - just the one the user selects
+ *                       - last updated time
+ *                       - add phone and email fields
  *  2.6.4 - 09/06/22 - Added option to export all life360 Places to file
  *  2.6.3 - 08/15/22 - Bundle Manager changes
  *  2.6.2 - 05/06/22 - Bundle Manager
@@ -77,14 +88,7 @@ String.metaClass.encodeURL = {
      java.net.URLEncoder.encode(delegate, "UTF-8")
 }
 
-def setVersion(){
-    state.name = "Life360+"
-    state.version = "3.0.0"
-}
-
 def syncVersion(evt){
-    setVersion()
-    sendLocationEvent(name: "updateVersionsInfo", value: "${state.name}:${state.version}")
 }
 
 definition(
@@ -126,7 +130,7 @@ mappings {
 }
 
 def getCredentialsPage() {
-    if(logEnable) log.debug "In getCredentialsPage - (${state.version})"
+    if (logEnable) log.debug "Life360+: In getCredentialsPage"
     if(state.life360AccessToken) {
         listCircles()
     } else {
@@ -140,7 +144,7 @@ def getCredentialsPage() {
 }
 
 def getCredentialsErrorPage(String message) {
-    if(logEnable) log.debug "In getCredentialsErrorPage - (${state.version})"
+    if (logEnable) log.debug "Life360+: getCredentialsErrorPage:"
     dynamicPage(name: "Credentials", title: "Enter Life360 Credentials", nextPage: "listCirclesPage", uninstall: uninstallOption, install:false) {
       section(getFormat("header-green", "${getImage("Blank")}"+" Life360 Credentials")) {
         input "username", "text", title: "Life360 Username?", multiple: false, required: true
@@ -151,18 +155,17 @@ def getCredentialsErrorPage(String message) {
 }
 
 def testLife360Connection() {
-    if(logEnable) log.debug "In testLife360Connection - (${state.version})"
     if(state.life360AccessToken) {
-        if(logEnable) log.debug "In testLife360Connection - Good!"
+        if (logEnable) log.debug "Life360+: testLife360Connection - Good!"
         true
     } else {
-        if(logEnable) log.debug "In testLife360Connection - Bad!"
-      initializeLife360Connection()
+        if (logEnable) log.debug "Life360+: testLife360Connection - Bad!"
+        initializeLife360Connection()
     }
 }
 
  def initializeLife360Connection() {
-    if(logEnable) log.debug "In initializeLife360Connection - (${state.version})"
+    if (logEnable) log.debug "Life360+: initializeLife360Connection"
 
     initialize()
 
@@ -172,13 +175,12 @@ def testLife360Connection() {
     def url = "https://api.life360.com/v3/oauth2/token.json"
 
     def postBody =  "grant_type=password&" +
-            "username=${username}&"+
-                    "password=${password}"
+        "username=${username}&"+
+        "password=${password}"
 
     def result = null
 
     try {
-
          httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
              result = response
         }
@@ -189,17 +191,17 @@ def testLife360Connection() {
         return ;
     }
     catch (e) {
-       log.error "Life360 initializeLife360Connection, error: $e"
+       log.error "Life360+: initializeLife360Connection, error: $e"
        return false;
     }
 }
 
 def listCircles() {
-    if(logEnable) log.debug "In listCircles - (${state.version})"
+    if (logEnable) log.debug "Life360+: listCircles:"
     def uninstallOption = false
     if (app.installationState == "COMPLETE") uninstallOption = true
     dynamicPage(name: "listCirclesPage", title: "", install: true, uninstall: true) {
-        display()
+        displayHeader()
 
       if(testLife360Connection()) {
           def urlCircles = "https://api.life360.com/v3/circles.json"
@@ -223,7 +225,7 @@ def listCircles() {
         }
 
         if(circle) {
-            if(logEnable) log.trace "In listPlaces - (${state.version})"
+            if (logEnable) log.trace "Life360+: listPlaces"
             if (app.installationState == "COMPLETE") uninstallOption = true
 
             if (!state?.circle) state.circle = settings.circle
@@ -264,7 +266,7 @@ def listCircles() {
         }
 
         if(place && circle) {
-            if(logEnable) log.trace "In listUsers - (${state.version})"
+            if (logEnable) log.trace "Life360+: listUsers"
             if (app.installationState == "COMPLETE") uninstallOption = true
             if (!state?.circle) state.circle = settings.circle
 
@@ -285,15 +287,17 @@ def listCircles() {
             }
 
             section(getFormat("header-green", "${getImage("Blank")}"+" Other Options")) {
-          input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
-          }
-            display2()
+                input (name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute'])
+                
+                input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            }
+            displayFooter()
         }
     }
 }
 
 def installed() {
-    if(logEnable) log.trace "In installed - (${state.version})"
+    if (logEnable) log.trace "Life360+: installed"
     if(!state?.circle) state.circle = settings.circle
 
     settings.users.each {memberId->
@@ -302,9 +306,9 @@ def installed() {
             // Modified from @Stephack
             def childDevice = childList()
             if(childDevice.find{it.data.vcId == "${member}"}){
-                if(logEnable) log.info "${member.firstName} already exists...skipping"
+                if (logEnable) log.info "${member.firstName} already exists...skipping"
             } else {
-                if(logEnable) log.info "Creating Life360 Device: " + member
+                if (logEnable) log.info "Creating Life360 Device: " + member
                 try{
                     addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
                 }
@@ -315,7 +319,7 @@ def installed() {
             // end mod
 
             if (childDevice) {
-                if(logEnable) log.info "Child Device Successfully Created"
+                if (logEnable) log.info "Child Device Successfully Created"
             }
         }
     }
@@ -323,23 +327,22 @@ def installed() {
 }
 
 def createCircleSubscription() {
-    if(logEnable) log.trace "In createCircleSubscription - (${state.version})"
-    if(logEnable) log.info "Remove any existing Life360 Webhooks for this Circle."
+    if (logEnable) log.trace "Life360+: createCircleSubscription:"
+    if (logEnable) log.info "Life360+: Remove any existing Life360 Webhooks for this Circle."
 
     def deleteUrl = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
-    try { // ignore any errors - there many not be any existing webhooks
-
+    try { 
+        // ignore any errors - there many not be any existing webhooks
         httpDelete (uri: deleteUrl, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     }
-
     catch (e) {
-        log.debug (e)
+        log.debug(e)
     }
 
     // subscribe to the life360 webhook to get push notifications on place events within this circle
 
-    if(logEnable) log.info "Create a new Life360 Webhooks for this Circle."
+    if (logEnable) log.info "Life360+: Create a new Life360 Webhooks for this Circle."
     createAccessToken() // create our own OAUTH access token to use in webhook url
     def hookUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/placecallback?access_token=${state.accessToken}"
     def url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
@@ -349,12 +352,12 @@ def createCircleSubscription() {
         httpPost(uri: url, body: postBody, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     } catch (e) {
-        log.debug (e)
+        log.debug(e)
     }
 
     if (result.data?.hookUrl) {
-        log.info "Successfully subscribed to Life360 circle push events"
-        if(logEnable) log.debug "Confirmation: ${result.data?.hookUrl}"
+        log.info "Life360+: Successfully subscribed to Life360 circle push events"
+        if (logEnable) log.debug "Life360+: Confirmation: ${result.data?.hookUrl}"
         updateMembers()
         scheduleUpdates()
     }
@@ -362,7 +365,7 @@ def createCircleSubscription() {
 }
 
 def updated() {
-    if(logEnable) log.trace "In updated - (${state.version})"
+    if (logEnable) log.trace "Life360+: updated"
     if (!state?.circle) { state.circle = settings.circle }
 
     settings.users.each {memberId->
@@ -374,9 +377,9 @@ def updated() {
             // Modified from @Stephack
             def childDevice = childList()
             if(childDevice.find{it.data.vcId == "${member}"}){
-                if(logEnable) log.info "${member.firstName} already exists...skipping"
+                if (logEnable) log.info "${member.firstName} already exists...skipping"
             } else {
-                if(logEnable) log.info "Creating Life360 Device: " + member
+                if (logEnable) log.info "Creating Life360 Device: " + member
                 try{
                     addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
                 }
@@ -387,14 +390,14 @@ def updated() {
             // end mod
 
             if (childDevice) {
-                if(logEnable) log.info "Child Device Successfully Created"
+                if (logEnable) log.info "Child Device Successfully Created"
                 createCircleSubscription()
             }
         }
     }
 
     def childDevices = childList()
-    if(logEnable) log.debug "Child Devices: ${childDevices}"
+    if (logEnable) log.debug "Life360+: Child Devices: ${childDevices}"
     childDevices.each {childDevice->
         def (childAppName, childMemberId) = childDevice.deviceNetworkId.split("\\.")
         if (!settings.users.find{it==childMemberId}) {
@@ -414,61 +417,94 @@ def initialize() {
 }
 
 def placeEventHandler() {
-  if(logEnable) log.debug "Life360 placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
-  setVersion()
-  def circleId = params?.circleId
-  def placeId = params?.placeId
-  def memberId = params?.userId
-  def direction = params?.direction
-  def timestamp = params?.timestamp
-  def requestId = null
-  def requestResult = null
-  def isPollable = null
-
-  def externalId = "${app.id}.${memberId}"
-  def deviceWrapper = getChildDevice("${externalId}")
-
-  if(logEnable) log.trace "In placeHandler - about to post request update..."
-  def postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
-  requestResult = null
-
+    if (logEnable) log.debug "Life360+: placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
+    def circleId = params?.circleId
+    def placeId = params?.placeId
+    def memberId = params?.userId
+    def direction = params?.direction
+    def timestamp = params?.timestamp
+    def requestId = null
+    def requestResult = null
+    def isPollable = null
+  
+    def externalId = "${app.id}.${memberId}"
+    def deviceWrapper = getChildDevice("${externalId}")
+  
+    if (logEnable) log.trace "Life360+: placeEventHandler: about to post request update..."
+    def postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
+    requestResult = null
+  
     // once a push event is received, we can force a real-time update of location data via issuing the following
     // post request against the member for which the push event was received
     try {
-
         httpPost(uri: postUrl, body: ["type": "location"], headers: ["Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
             requestResult = response
         }
         requestId = requestResult.data?.requestId
         isPollable = requestResult.data?.isPollable
-        if(logEnable) log.debug "PlaceHandler Post response = ${requestResult.data}  params direction = $direction"
-        if(logEnable) log.debug "PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
+        if (logEnable) log.debug "Life360+: PlaceHandler Post response = ${requestResult.data}  params direction = $direction"
+        if (logEnable) log.debug "Life360+: PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
     }
     catch (e) {
-        log.error "Life360 request post / get, error: $e"
+        log.error "Life360+: request post / get, error: $e"
     }
-
-  // we got a PUSH EVENT from Life360 - better update everything by pulling a fresh data packet
-  // But first, wait a second to let packet catch-up with push event
-  updateMembers()
+  
+    // we got a PUSH EVENT from Life360 - better update everything by pulling a fresh data packet
+    // But first, wait a second to let packet catch-up with push event
+    updateMembers()
 }
 
 
 def refresh() {
+    if (logEnable) log.debug("Life360+: refresh:")
     listCircles()
     updateMembers()
     scheduleUpdates()
 }
 
 def scheduleUpdates() {
-    if (logEnable) log.trace "In scheduleUpdates..."
-    // Continue to update Info for all members every 30 seconds
-    schedule("0/30 * * * * ? *", updateMembers)
+    unschedule()
+
+    def Integer refreshSecs = 30
+    if (pollFreq == "auto") {
+        // adjust refresh rate based on if devices are moving
+        def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+        // TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
+        if (numLocationUpdates == 0) {
+            // update every 30 seconds
+            refreshSecs = 30
+        } else if (numLocationUpdates == 1) {
+            // update every 15 seconds
+            refreshSecs = 15
+        } else if (numLocationUpdates >= 2) {
+            // update every 10 seconds
+            refreshSecs = 10
+        }
+    } else {
+        refreshSecs = pollFreq.toInteger()
+    }
+    if (logEnable) log.debug("Life360+: scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
+    if (refreshSecs > 0 && refreshSecs < 60) {
+        // seconds
+        schedule("0/${refreshSecs} * * * * ? *", updateMembers)
+    } else {
+        // mins
+        schedule("0 */${refreshSecs/60} * * * ? *", updateMembers)
+    }
 }
 
 def updateMembers(){
-    setVersion()
-    if(logEnable) log.trace "In updateMembers - (${state.version})"
+    // prevent calling API too frequently 
+    // - I noticed calling schedule() can cause it to fire immediately sometimes
+    def Long currentTimeMs = new Date().getTime()
+    def Long lastUpdateMs = state.lastUpdateMs != null ? state.lastUpdateMs : 0
+    def Long diff = currentTimeMs - lastUpdateMs
+    if (diff < 2000) {
+        if (logEnable) log.trace "Life360+: updateMembers: already up-to-date; ${diff}ms"
+        return
+    }
+    state.lastUpdateMs = currentTimeMs
+    if (logEnable) log.trace "Life360+: updateMembers: last:${diff}ms"
 
     if (!state?.circle) state.circle = settings.circle
 
@@ -483,9 +519,6 @@ def sendCmd(url, result){
 }
 
 def cmdHandler(resp, data) {
-    if(logEnable) log.trace "In cmdHandler..."
-    // Avi - pushed all data straight down to child device for self-containment
-
     if(resp.getStatus() == 200 || resp.getStatus() == 207) {
         result = resp.getJson()
         def members = result.members
@@ -501,6 +534,7 @@ def cmdHandler(resp, data) {
         }
 
         // Iterate through each member and trigger an update from payload
+        def Boolean isAnyChanged = false
         settings.users.each {memberId->
             def externalId = "${app.id}.${memberId}"
             def member = state.members.find{it.id==memberId}
@@ -509,36 +543,57 @@ def cmdHandler(resp, data) {
                 def deviceWrapper = getChildDevice("${externalId}")
 
                 // send circle places and home to individual children
-                deviceWrapper.generatePresenceEvent(member, placesMap, home)
-
+                def Boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
+                if (isChanged) isAnyChanged = true
             } catch(e) {
-                if(logEnable) log.debug "In cmdHandler - catch - member: ${member}"
-                if(logEnable) log.debug e
+                log.error "Life360+: cmdHandler: Exception: member: ${member}"
+                log.error e
             }
         }
+
+        if (pollFreq == "auto") {
+            // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
+            // - if user(s) are moving, update more frequently; if not, update less frequently
+            def Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+            def Integer numLocationUpdates = prevLocationUpdates
+            numLocationUpdates += isAnyChanged ? 1 : -1
+            // max out at 3 to prevent a long drive from not slowing down API calls for a while after
+            if (numLocationUpdates < 0) numLocationUpdates = 0
+            else if (numLocationUpdates > 2) numLocationUpdates = 2
+            state.numLocationUpdates = numLocationUpdates
+            //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
+
+            // calling schedule() can result in it firing right away so only do it if anything changes
+            if (numLocationUpdates != prevLocationUpdates) {
+                scheduleUpdates()
+            }
+        }
+    } else {
+        // connection error
+        log.error("Life360+: cmdHandler: resp:$resp")
     }
 }
 
 def childList() {
     def children = getChildDevices()
-    if(logEnable) log.debug "In childList - children: ${children}"
+    if (logEnable) log.debug "Life360+: childList: children: ${children}"
     return children
 }
 
 def saveLif360PlacesHandler(data) {
     if(data) {
-        if(logEnable) log.debug "In saveLif360PlacesHandler - writting to file: life360Places.txt"
+        if (logEnable) log.debug "Life360+: saveLif360PlacesHandler: writting to file: life360Places.txt"
         writeFile("life360Places.txt", data)
         finished = true
     } else {
-        log.info "There is no data to save."
+        log.info "Life360+: There is no data to save."
         finished = false
     }
     return finished
 }
 
 Boolean writeFile(fName, fData) {
-    //if(logEnable) log.debug "Writing to file - ${fName} - ${fData}"
+    //if (logEnable) log.debug "Writing to file - ${fName} - ${fData}"
     login()
     try {
         def params = [
@@ -568,12 +623,12 @@ Content-Disposition: form-data; name="folder"
         httpPost(params) { resp ->    
         }
     } catch (e) {
-        log.error "Error writing file $fName: ${e}"
+        log.error "Life360+: Error writing file $fName: ${e}"
     }
 }
 
 def login() {        // Modified from code by @dman2306
-    if(logEnable) log.debug "In login - Checking Hub Security"
+    if (logEnable) log.debug "Life360+: login: Checking Hub Security"
     state.cookie = ""
     if(hubSecurity) {
         try{
@@ -597,7 +652,7 @@ def login() {        // Modified from code by @dman2306
             )
             { resp ->
                 if (resp.data?.text?.contains("The login information you supplied was incorrect.")) {
-                    log.warn "Quick Chart Data Collector - username/password is incorrect."
+                    log.warn "Life360+: Quick Chart Data Collector - username/password is incorrect."
                 } else {
                     state.cookie = resp?.headers?.'Set-Cookie'?.split(';')?.getAt(0)
                 }
@@ -608,87 +663,7 @@ def login() {        // Modified from code by @dman2306
     }
 }
 
-def checkHubVersion() {
-    hubVersion = getHubVersion()
-    hubFirmware = location.hub.firmwareVersionString
-    if(logEnable) log.debug "In checkHubVersion - Info: ${hubVersion} - ${hubFirware}"
-}
-
-def parentCheck(){  
-    state.appInstalled = app.getInstallationState() 
-    if(state.appInstalled != 'COMPLETE'){
-        parentChild = true
-      } else {
-        parentChild = false
-      }
-}
-
-def appControlSection() {
-    input "pauseApp", "bool", title: "Pause App", defaultValue:false, submitOnChange:true
-    if(pauseApp) {
-        if(app.label) {
-            if(!app.label.contains("(Paused)")) {
-                app.updateLabel(app.label + " <span style='color:red'>(Paused)</span>")
-            }
-        }
-    } else {
-        if(app.label) {
-            if(app.label.contains("(Paused)")) {
-                app.updateLabel(app.label - " <span style='color:red'>(Paused)</span>")
-            }
-        }
-    }
-    if(pauseApp) { 
-        paragraph app.label
-    } else {
-        label title: "Enter a name for this automation", required:true
-    }
-}
-
-def appGeneralSection() {
-    input "logEnable", "bool", title: "Enable Debug Options", description: "Log Options", defaultValue:false, submitOnChange:true
-    if(logEnable) {
-        input "logOffTime", "enum", title: "Logs Off Time", required:false, multiple:false, options: ["1 Hour", "2 Hours", "3 Hours", "4 Hours", "5 Hours", "Keep On"]
-    }
-    paragraph "This app can be enabled/disabled by using a switch. The switch can also be used to enable/disable several apps at the same time."
-    input "disableSwitch", "capability.switch", title: "Switch Device(s) to Enable / Disable this app <small>(When selected switch is ON, app is disabled.)</small>", submitOnChange:true, required:false, multiple:true
-}
-
-def createDeviceSection(driverName) {
-    paragraph "This child app needs a virtual device to store values."
-    input "useExistingDevice", "bool", title: "Use existing device (off) or have one created for you (on)", defaultValue:false, submitOnChange:true
-    if(useExistingDevice) {
-        input "dataName", "text", title: "Enter a name for this vitual Device (ie. 'Front Door')", required:true, submitOnChange:true
-        paragraph "<b>A device will automatically be created for you as soon as you click outside of this field.</b>"
-        if(dataName) createDataChildDevice(driverName)
-        if(statusMessageD == null) statusMessageD = "Waiting on status message..."
-        paragraph "${statusMessageD}"
-    }
-    input "dataDevice", "capability.actuator", title: "Virtual Device specified above", required:true, multiple:false, submitOnChange:true
-    if(!useExistingDevice) {
-        app.removeSetting("dataName")
-        paragraph "<small>* Device must use the '${driverName}'.</small>"
-    }
-}
-
-def createDataChildDevice(driverName) {    
-    if(logEnable) log.debug "In createDataChildDevice (${state.version})"
-    statusMessageD = ""
-    if(!getChildDevice(dataName)) {
-        if(logEnable) log.debug "In createDataChildDevice - Child device not found - Creating device: ${dataName}"
-        try {
-            addChildDevice("jpage4500", driverName, dataName, 1234, ["name": "${dataName}", isComponent: false])
-            if(logEnable) log.debug "In createDataChildDevice - Child device has been created! (${dataName})"
-            statusMessageD = "<b>Device has been been created. (${dataName})</b>"
-        } catch (e) { if(logEnable) log.debug "Unable to create device - ${e}" }
-    } else {
-        statusMessageD = "<b>Device Name (${dataName}) already exists.</b>"
-    }
-    return statusMessageD
-}
-
 def uninstalled() {
-    sendLocationEvent(name: "updateVersionInfo", value: "${app.id}:remove")
     removeChildDevices(getChildDevices())
 }
 
@@ -710,7 +685,7 @@ def getFormat(type, myText=null, page=null) {            // Modified code from @
     if(type == "button-blue") return "<a style='color:white;text-align:center;font-size:20px;font-weight:bold;background-color:#03FDE5;border:1px solid #000000;box-shadow:3px 4px #8B8F8F;border-radius:10px' href='${page}'>${myText}</a>"
 }
 
-def display(data) {
+def displayHeader(data) {
     if(data == null) data = ""
     if(app.label) {
         if(app.label.contains("(Paused)")) {
@@ -720,27 +695,16 @@ def display(data) {
         }
     }
     if(theName == null || theName == "") theName = "New Child App"
-    if(!state.name) { state.name = "" }
-    if(state.name == theName) {
-        headerName = state.name
-    } else {
-        headerName = "${state.name} - ${theName}"
-    }
+    headerName = "Life360+"
     section() {
     }
 }
 
-def display2() {
-    setVersion()
+def displayFooter() {
     section() {
         if(state.appType == "parent") { href "removePage", title:"${getImage("optionsRed")} <b>Remove App and all child apps</b>", description:"" }
         paragraph getFormat("line")
-        if(state.version) {
-            bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name}, version: ${state.version}"
-        } else {
-            bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>${state.name}"
-        }
-        bMes += "</div>"
+        bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>Life360+</div>"
         paragraph "${bMes}"
     }
 }
