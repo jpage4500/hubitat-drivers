@@ -367,7 +367,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     }
 
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    sendEvent( name: "avatarHtml", value: generateHtml)
+    sendEvent( name: "avatarHtml", value: avatarHtml)
 
     def String binTransita
     if (isDriving) binTransita = "Driving"
