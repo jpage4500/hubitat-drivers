@@ -400,8 +400,8 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         sendEvent(name: "html", value: tileMap, displayed: true)
     } else {
         // clear out existing html values
-        sendEvent ( name: "avatarHtml", value: "" )
-        sendEvent ( name: "html", value: "" )
+        device.deleteCurrentState("avatarHtml")
+        device.deleteCurrentState("html")
     }
 
     // *** Timestamp ***
