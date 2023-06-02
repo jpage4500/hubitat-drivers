@@ -354,60 +354,60 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         }
     }
 
+    // ** HTML attributes (optional) **
+    if (generateHtml) {
+        // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
+        sendEvent( name: "avatarHtml", value: avatarHtml)
+
+        def String binTransita
+        if (isDriving) binTransita = "Driving"
+        else if (inTransit) binTransita = "Moving"
+        else binTransita = "Not Moving"
+
+        int sEpoch = device.currentValue('since')
+        if(sEpoch == null) {
+            theDate = use( groovy.time.TimeCategory ) {
+                new Date(0)
+            }
+        } else {
+            theDate = use( groovy.time.TimeCategory ) {
+                new Date( 0 ) + sEpoch.seconds
+            }
+        }
+        SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
+        String dateSince = DATE_FORMAT.format(theDate)
+
+        String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
+
+        tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
+        tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
+        tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
+        tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" :address1}</a><br>"
+        tileMap += "Since: ${dateSince}<br>"
+        tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
+        tileMap += "${binTransita}"
+        if(address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
+            tileMap += " @ ${sprintf("%.1f", speed)} "
+            tileMap += isMiles ? "MPH":"KPH"
+        }
+        tileMap += "<br>Phone Lvl: ${battery} - ${powerSource} - "
+        tileMap += wifiState ? "WiFi" : "No WiFi"
+        tileMap += "<br><p style='width:100%'>${lastUpdated}</p>"
+        tileMap += "</table></div>"
+
+        int tileDevice1Count = tileMap.length()
+        if (tileDevice1Count > 1024) log.warn "Life360+ Driver: In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
+        sendEvent(name: "html", value: tileMap, displayed: true)
+    } else {
+        // clear out existing html values
+        sendEvent ( name: "avatarHtml", value: "" )
+        sendEvent ( name: "html", value: "" )
+    }
+
     // *** Timestamp ***
     sendEvent ( name: "lastUpdated", value: lastUpdated )
     state.update = true
 
-    // ** HTML attributes (optional) **
-    if (!generateHtml) {
-        // clear out existing html values (only useful if you previously had HTML enabled..)
-        sendEvent ( name: "avatarHtml", value: null )
-        sendEvent ( name: "html", value: null )
-        return isLocationChanged
-    }
-
-    // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    sendEvent( name: "avatarHtml", value: avatarHtml)
-
-    def String binTransita
-    if (isDriving) binTransita = "Driving"
-    else if (inTransit) binTransita = "Moving"
-    else binTransita = "Not Moving"
-
-    int sEpoch = device.currentValue('since')
-    if(sEpoch == null) {
-        theDate = use( groovy.time.TimeCategory ) {
-            new Date(0)
-        }
-    } else {
-        theDate = use( groovy.time.TimeCategory ) {
-            new Date( 0 ) + sEpoch.seconds
-        }
-    }
-    SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
-    String dateSince = DATE_FORMAT.format(theDate)
-
-    String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
-
-    tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
-    tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
-    tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
-    tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" :address1}</a><br>"
-    tileMap += "Since: ${dateSince}<br>"
-    tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
-    tileMap += "${binTransita}"
-    if(address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
-        tileMap += " @ ${sprintf("%.1f", speed)} "
-        tileMap += isMiles ? "MPH":"KPH"
-    }
-    tileMap += "<br>Phone Lvl: ${battery} - ${powerSource} - "
-    tileMap += wifiState ? "WiFi" : "No WiFi"
-    tileMap += "<br><p style='width:100%'>${lastUpdated}</p>"
-    tileMap += "</table></div>"
-
-    int tileDevice1Count = tileMap.length()
-    if (tileDevice1Count > 1024) log.warn "Life360+ Driver: In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
-    sendEvent(name: "html", value: tileMap, displayed: true)
     return isLocationChanged
 }
 
