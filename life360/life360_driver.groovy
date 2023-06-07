@@ -102,6 +102,9 @@ metadata {
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
+        attribute "startTimestamp", "number"
+        attribute "endTimestamp", "number"
+        attribute "timestamp", "number"
 
         // device data
         attribute "battery", "number"
@@ -203,6 +206,9 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     def Boolean isDriving = member.location.isDriving == "1"
     def Boolean inTransit = member.location.inTransit == "1"
     def Long since = member.location.since.toLong()
+    def Long startTimestamp = member.location.startTimestamp.toLong()
+    def Long endTimestamp = member.location.endTimestamp.toLong()
+    def Long timestamp = member.location.timestamp.toLong()
     // -- name --
     def String memberFirstName = (member.firstName) ? member.firstName : ""
     def String memberLastName = (member.lastName) ? member.lastName : ""
@@ -409,6 +415,9 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     }
 
     // *** Timestamp ***
+    sendEvent( name: "startTimestamp", value: startTimestamp )
+    sendEvent( name: "endTimestamp", value: endTimestamp )
+    sendEvent( name: "timestamp", value: timestamp )
     sendEvent ( name: "lastUpdated", value: lastUpdated )
     state.update = true
 
