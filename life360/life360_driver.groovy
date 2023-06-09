@@ -206,9 +206,9 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     def Boolean isDriving = member.location.isDriving == "1"
     def Boolean inTransit = member.location.inTransit == "1"
     def Long since = member.location.since.toLong()
-    def Long startTimestamp = member.location.startTimestamp.toLong()
-    def Long endTimestamp = member.location.endTimestamp.toLong()
-    def Long timestamp = member.location.timestamp.toLong()
+    def Long startTimestamp = (member.location.startTimestamp) ? member.location.startTimestamp.toLong() : 0
+    def Long endTimestamp = (member.location.endTimestamp) ? member.location.endTimestamp.toLong() : 0
+    def Long timestamp = (member.location.timestamp) ? member.location.timestamp.toLong() : 0
     // -- name --
     def String memberFirstName = (member.firstName) ? member.firstName : ""
     def String memberLastName = (member.lastName) ? member.lastName : ""
