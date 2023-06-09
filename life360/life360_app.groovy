@@ -287,7 +287,7 @@ def listCircles() {
             }
 
             section(getFormat("header-green", "${getImage("Blank")}"+" Other Options")) {
-                input (name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute'])
+                input (name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','auto2':'Auto Refresh 2 (polls a little faster)','30':'30 seconds','60':'1 minute'])
                 
                 input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             }
@@ -466,19 +466,25 @@ def scheduleUpdates() {
     unschedule()
 
     def Integer refreshSecs = 30
-    if (pollFreq == "auto") {
-        // adjust refresh rate based on if devices are moving
+    if (pollFreq.startsWith("auto")) {
+        // adjust refresh rate (faster if devices are moving; slower if no changes between updates)
         def Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
-        // TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
-        if (numLocationUpdates == 0) {
-            // update every 30 seconds
-            refreshSecs = 30
-        } else if (numLocationUpdates == 1) {
-            // update every 15 seconds
-            refreshSecs = 15
-        } else if (numLocationUpdates >= 2) {
-            // update every 10 seconds
-            refreshSecs = 10
+        switch (numLocationUpdates) {
+            case 0:
+                refreshSecs = 30
+                break
+            case 1:
+            case 2:
+                refreshSecs = 15
+                break
+            case 3:
+            case 4:
+                refreshSecs = 10
+                break
+            default:
+                // don't refresh any faster than 5 seconds
+                refreshSecs = 5
+                break
         }
     } else {
         refreshSecs = pollFreq.toInteger()
@@ -551,15 +557,16 @@ def cmdHandler(resp, data) {
             }
         }
 
-        if (pollFreq == "auto") {
+        if (pollFreq.startsWith("auto")) {
             // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
             // - if user(s) are moving, update more frequently; if not, update less frequently
             def Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
             def Integer numLocationUpdates = prevLocationUpdates
             numLocationUpdates += isAnyChanged ? 1 : -1
-            // max out at 3 to prevent a long drive from not slowing down API calls for a while after
+            // set a max for numLocationUpdates to prevent a long drive from not slowing down API calls for a while after
+            def Integer max = (prefFreq == "auto" ? 4 : 6)
             if (numLocationUpdates < 0) numLocationUpdates = 0
-            else if (numLocationUpdates > 2) numLocationUpdates = 2
+            else if (numLocationUpdates > max) numLocationUpdates = max
             state.numLocationUpdates = numLocationUpdates
             //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
 
