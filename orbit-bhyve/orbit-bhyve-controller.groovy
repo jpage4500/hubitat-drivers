@@ -466,18 +466,20 @@ def OrbitGet(command, device_id=null, mesh_id=null) {
         if  (status >= 400 && status <= 499) {
             log.error "Received a 4xx error, logging back in"
             OrbitBhyveLogin()
-            return null
         } 
+        return null
     }
     catch (Exception e) {
         log.error "OrbitGet($command): something went wrong: $e"
         return null
     }
     if (command=='devices') {
-        def bridgeCount = respdata.type.count { it == "bridge" }
-        def bridgeMsg = (bridgeCount==0)?'in your Orbit b•hyve™ account':"and ${bridgeCount} network bridge device(s)"
-        state.devices = "Found ${respdata.type.count { it== "sprinkler_timer" }} sprinkler timer(s) ${bridgeMsg}."
-        state.timezone = respdata[0].timezone.timezone_id
+        if (respdata != null) {
+            def bridgeCount = respdata.type.count { it == "bridge" }
+            def bridgeMsg = (bridgeCount==0)?'in your Orbit b•hyve™ account':"and ${bridgeCount} network bridge device(s)"
+            state.devices = "Found ${respdata.type.count { it== "sprinkler_timer" }} sprinkler timer(s) ${bridgeMsg}."
+            state.timezone = respdata[0].timezone.timezone_id
+        }
     }
     return respdata
 }
