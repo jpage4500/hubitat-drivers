@@ -300,7 +300,7 @@ def webSocketStatus(String message) {
     }
     else if (message == "status: closing") {
         synchronized (socketStatusLock) {
-            log.error "Lost connection to Web Socket: ${message}, will reconnect."
+            logDebug "Lost connection to Web Socket: ${message}, will reconnect."
             setWebSocketStatus(false)
         }
     }
