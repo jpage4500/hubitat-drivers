@@ -259,6 +259,11 @@ def parse(String message) {
                 dev*.sendEvent(name:"manual_preset_runtime_min", value: presetWateringInt)
             }
             break
+        case "battery_status":
+            // "percent":44
+            def dev = parent.getDeviceById(payload.device_id)
+            if (dev) dev*.sendEvent(name:"battery", value: payload.percent)
+            break
         case "program_changed":
         case "device_idle":
         case "clear_low_battery":
