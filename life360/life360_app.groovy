@@ -525,7 +525,9 @@ def sendCmd(url, result){
 }
 
 def cmdHandler(resp, data) {
-    if(resp.getStatus() == 200 || resp.getStatus() == 207) {
+    if (resp == null) return
+    def rc = resp.getStatus()
+    if (rc == 200 || rc == 207) {
         result = resp.getJson()
         def members = result.members
         state.members = members
@@ -577,7 +579,7 @@ def cmdHandler(resp, data) {
         }
     } else {
         // connection error
-        log.error("Life360+: cmdHandler: resp:$resp")
+        log.error("Life360+: cmdHandler: http:$rc, resp:$resp")
     }
 }
 
