@@ -172,7 +172,7 @@ def testLife360Connection() {
     def username = settings.username.encodeURL()
     def password = settings.password.encodeURL()
 
-    def url = "https://api.life360.com/v3/oauth2/token.json"
+    def url = "https://api-cloudfront.life360.com:443/v3/oauth2/token.json"
 
     def postBody =  "grant_type=password&" +
         "username=${username}&"+
@@ -181,7 +181,7 @@ def testLife360Connection() {
     def result = null
 
     try {
-         httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
+        httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic Y2F0aGFwYWNyQVBoZUtVc3RlOGV2ZXZldnVjSGFmZVRydVl1ZnJhYzpkOEM5ZVlVdkE2dUZ1YnJ1SmVnZXRyZVZ1dFJlQ1JVWQ==" ]) {response ->
              result = response
         }
         if (result.data.access_token) {
