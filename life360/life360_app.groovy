@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.16 - 08/25/23 - handle http:401 response from life360 and clear token; allowing re-login
  *  3.0.15 - 08/22/23 - merge PR from @jbaruch - Fixed url and auth token after Life360 migration to cloudfront
  *  3.0.14 - 05/31/23 - add setting to auto-adjust refresh rate when users are moving
  *  3.0.13 - 05/30/23 - minor changes
