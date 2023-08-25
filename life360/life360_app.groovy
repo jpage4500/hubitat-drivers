@@ -150,18 +150,16 @@ def getCredentialsErrorPage(String message) {
       section(getFormat("header-green", "${getImage("Blank")}"+" Life360 Credentials")) {
         input "username", "text", title: "Life360 Username?", multiple: false, required: true
         input "password", "password", title: "Life360 Password?", multiple: false, required: true, autoCorrect: false
-            paragraph "${message}"
+        paragraph "${message}"
       }
     }
 }
 
 def testLife360Connection() {
     if(state.life360AccessToken) {
-        if (logEnable) log.debug "Life360+: testLife360Connection - Good!"
-        true
+        return true
     } else {
-        if (logEnable) log.debug "Life360+: testLife360Connection - Bad!"
-        initializeLife360Connection()
+        return initializeLife360Connection()
     }
 }
 
@@ -173,6 +171,7 @@ def testLife360Connection() {
     def username = settings.username.encodeURL()
     def password = settings.password.encodeURL()
 
+    //def url = "https://api.life360.com/v3/oauth2/token.json"
     def url = "https://api-cloudfront.life360.com:443/v3/oauth2/token.json"
 
     def postBody =  "grant_type=password&" +
@@ -182,17 +181,21 @@ def testLife360Connection() {
     def result = null
 
     try {
+        //httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
         httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic Y2F0aGFwYWNyQVBoZUtVc3RlOGV2ZXZldnVjSGFmZVRydVl1ZnJhYzpkOEM5ZVlVdkE2dUZ1YnJ1SmVnZXRyZVZ1dFJlQ1JVWQ==" ]) {response ->
              result = response
         }
         if (result.data.access_token) {
            state.life360AccessToken = result.data.access_token
             return true;
-         }
-        return ;
+        }
+        getCredentialsErrorPage("Life360 Data Error: ${status}")
+        return false;
     }
     catch (e) {
+       def status = e.getResponse().status
        log.error "Life360+: initializeLife360Connection, error: $e"
+       getCredentialsErrorPage("Life360 Connection Error: ${status}")
        return false;
     }
 }
@@ -204,25 +207,38 @@ def listCircles() {
     dynamicPage(name: "listCirclesPage", title: "", install: true, uninstall: true) {
         displayHeader()
 
-      if(testLife360Connection()) {
-          def urlCircles = "https://api.life360.com/v3/circles.json"
-          def resultCircles = null
-
-        httpGet(uri: urlCircles, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
-               resultCircles = response
+        if (!testLife360Connection()) {
+            return
         }
 
-          def circles = resultCircles.data.circles
+        def urlCircles = "https://api.life360.com/v3/circles.json"
+        def resultCircles = null
 
-            section(getFormat("header-green", "${getImage("Blank")}"+" Select Life360 Circle")) {
-              input "circle", "enum", multiple: false, required:true, title:"Life360 Circle", options: circles.collectEntries{[it.id, it.name]}, submitOnChange: true
-            }
+        try {
+            httpGet(uri: urlCircles, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> resultCircles = response }
+        }
+        catch (e) {
+           def status = e.getResponse().status
+           log.error "Life360+: listCircles, error: http:$status, $e"
+           // on 401 Unauthorized response, clear access token
+           if (status == 401) {
+               state.life360AccessToken = null
+           }
+           getCredentialsErrorPage("Error logging into Life360!")
+           displayFooter()
+           return
+        }
 
-            if(circles) {
-                  state.circle = settings.circle
-            } else {
-              getCredentialsErrorPage("Invalid Usernaname or password.")
-            }
+        def circles = resultCircles.data.circles
+
+        section(getFormat("header-green", "${getImage("Blank")}"+" Select Life360 Circle")) {
+          input "circle", "enum", multiple: false, required:true, title:"Life360 Circle", options: circles.collectEntries{[it.id, it.name]}, submitOnChange: true
+        }
+
+        if(circles) {
+            state.circle = settings.circle
+        } else {
+            getCredentialsErrorPage("Invalid Usernaname or password.")
         }
 
         if(circle) {
@@ -234,10 +250,15 @@ def listCircles() {
             def url = "https://api.life360.com/v3/circles/${state.circle}/places.json"
             def result = null
 
-            httpGet(uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
-               result = response
+            try {
+                httpGet(uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> result = response }
             }
-                        
+            catch (e) {
+               def status = e.getResponse().status
+               log.error "Life360+: listCircles, error: http:$status, $e"
+               getCredentialsErrorPage("Error logging into Life360!")
+               return
+            }
             def places = result.data.places
             state.places = places
 
@@ -292,8 +313,9 @@ def listCircles() {
                 
                 input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             }
-            displayFooter()
         }
+
+        displayFooter()
     }
 }
 
