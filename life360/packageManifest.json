@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "3.0.16",
+  "version": "3.0.17",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "handle http:401 response from life360 and clear token; allowing re-login",
+  "releaseNotes": "merge PR by imnotbob - https://github.com/jpage4500/hubitat-drivers/pull/16",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
