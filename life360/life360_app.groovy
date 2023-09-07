@@ -91,6 +91,7 @@
 //file:noinspection SpellCheckingInspection
 //file:noinspection unused
 //file:noinspection GroovySillyAssignment
+//file:noinspection GrPackage
 
 import groovy.transform.CompileStatic
 import groovy.transform.Field
@@ -238,8 +239,8 @@ Boolean initializeLife360Connection() {
 def listCircles() {
     Boolean le = getSettingB('logEnable')
     if (le) logTrace "listCircles"
-    Boolean uninstallOption; uninstallOption = false
-    if (app.installationState == "COMPLETE") uninstallOption = true
+    Boolean uninstallOption
+    uninstallOption = (app.installationState == "COMPLETE")
     dynamicPage(name: "listCirclesPage", title: sBLK, install: true, uninstall: true) {
         displayHeader()
 
@@ -287,7 +288,7 @@ def listCircles() {
 
         if(getSettingStr('circle')) {
             if (le) logTrace "listPlaces"
-            if (app.installationState == "COMPLETE") uninstallOption = true
+            uninstallOption = (app.installationState == "COMPLETE")
 
             if (checkApi()){
             if (le) logTrace "listUsers"
@@ -332,8 +333,6 @@ def listCircles() {
         }
 
         if(getSettingStr('place') && getSettingStr('circle')) {
-            if (app.installationState == "COMPLETE") uninstallOption = true
-
             if (checkApi()){
 
                 String url = "https://api.life360.com/v3/circles/${state.circle}/members.json"
@@ -395,7 +394,7 @@ void logsOff() {
     if (getSettingB('logEnable')) {
         // Log this information regardless of user setting.
         logInfo 'debug logging disabled...'
-        app.updateSetting 'logEnable', [value: 'false', type: 'bool']
+        app.updateSetting ('logEnable', [value: 'false', type: 'bool'])
     }
 }
 
