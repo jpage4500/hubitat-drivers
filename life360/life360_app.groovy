@@ -704,7 +704,7 @@ void updateMembers(Boolean lazy = true){
             if(getSettingStr('pollFreq') != 'auto' && lastAttempt < 10) runIn(30, 'schedUpdateMembers')
             return //membersMapFLD[myId]
         }
-        debug 'Getting Members'
+        if(getSettingB('logEnable')) debug 'Getting Members'
         Map requestParams = [ uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}"], timeout: 20 ]
         updTsVal('lastMembersAttemptUpdDt')
         asynchttpGet("cmdHandler", requestParams)
