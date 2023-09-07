@@ -97,7 +97,7 @@ import groovy.transform.Field
 import java.text.SimpleDateFormat
 import com.hubitat.app.ChildDeviceWrapper
 
-@Field static final String appVersion = '3.0.20'  // public version
+@Field static final String appVersion = '3.0.18'  // public version
 @Field static final String sNL = (String)null
 @Field static final String sBLK = ''
 @Field static final String sCACHE = ' CACHE'
@@ -106,7 +106,7 @@ import com.hubitat.app.ChildDeviceWrapper
 @Field static final Integer i1 = 1
 
 @CompileStatic
-static Boolean devdbg() { return true }
+static Boolean devdbg() { return false }
 static Boolean devdbg1() { return false }
 
 definition(
@@ -152,23 +152,22 @@ def getCredentialsPage() {
     if(state.life360AccessToken) {
         listCircles()
     } else {
-        dynamicPage(name: "Credentials", title: "Enter Life360 Credentials", nextPage: "listCirclesPage", uninstall: true, install:false){
-            section(getFormat("header-green", "${getImage("Blank")}"+" Life360 Credentials")) {
-                input "username", "text", title: "Life360 Username?", multiple: false, required: true
-                input "password", "password", title: "Life360 Password?", multiple: false, required: true, autoCorrect: false
-            }
-        }
+        passwordPage(true)
     }
 }
 
 def getCredentialsErrorPage(String message, Boolean uninstallOption) {
     if (getSettingB('logEnable')) debug "getCredentialsErrorPage:"
-    dynamicPage(name: "Credentials", title: "Enter Life360 Credentials", nextPage: "listCirclesPage", uninstall: uninstallOption, install:false) {
-        section(getFormat("header-green", "${getImage("Blank")}"+" Life360 Credentials")) {
-        input "username", "text", title: "Life360 Username?", multiple: false, required: true
-        input "password", "password", title: "Life360 Password?", multiple: false, required: true, autoCorrect: false
-        paragraph "${message}"
-      }
+    passwordPage(uninstallOption, message)
+}
+
+def passwordPage(Boolean uninstallOpt, String msg = sNL){
+    dynamicPage(name: "Credentials", title: "Enter Life360 Credentials", nextPage: "listCirclesPage", uninstall: uninstallOpt, install:false){
+        section(getFormat("header-green", getImage("Blank")+" Life360 Credentials")) {
+            input "username", "text", title: "Life360 Username?", multiple: false, required: true
+            input "password", "password", title: "Life360 Password?", multiple: false, required: true, autoCorrect: false
+            if(msg) paragraph msg
+        }
     }
 }
 
@@ -233,6 +232,9 @@ Boolean initializeLife360Connection() {
     }
 }
 
+/**
+ * display ListCirclesPage
+ */
 def listCircles() {
     Boolean le = getSettingB('logEnable')
     if (le) logTrace "listCircles"
@@ -273,7 +275,7 @@ def listCircles() {
 
         List<Map> circles = resultCircles.data.circles
 
-        section(getFormat("header-green", "${getImage("Blank")}"+" Select Life360 Circle")) {
+        section(getFormat("header-green", getImage("Blank")+" Select Life360 Circle")) {
           input 'circle', "enum", multiple: false, required:true, title:"Life360 Circle", options: circles.collectEntries{[it.id, it.name]}, submitOnChange: true
         }
 
@@ -309,7 +311,7 @@ def listCircles() {
                 List<Map> places = result.data.places
                 state.places = places
 
-                section(getFormat("header-green", "${getImage("Blank")}"+" Select Life360 Place to Match Current Location")) {
+                section(getFormat("header-green", getImage("Blank")+" Select Life360 Place to Match Current Location")) {
                     paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
                     Map<String,Object> thePlaces = places.collectEntries{[it.id, it.name]}
                     Map sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
@@ -318,14 +320,8 @@ def listCircles() {
                     input "exportPlaces", "bool", title: "Export all Life360 Places to file<br><small>* Switch will turn off when finished</small>", defaultValue:false, submitOnChange:true
                     if(exportPlaces) {
                         Map life360PlacesExportMap = [:]
-                        for(rec in places) {
-                            String jsonName = rec.name
-                            String jsonLat = rec.latitude
-                            String jsonLon = rec.longitude
-                            String jsonRadius = rec.radius
-                            String stuff = "${jsonLat};${jsonLon};${jsonRadius}"
-                            //logTrace "$jsonName - $stuff"
-                            life360PlacesExportMap.put(jsonName, stuff)
+                        for(Map rec in places) {
+                            life360PlacesExportMap.put((String)rec.name, "${rec.latitude};${rec.longitude};${rec.radius}".toString())
                         }
                         Boolean finished = saveLif360PlacesHandler(life360PlacesExportMap)
                         app.updateSetting("exportPlaces",[value:"false",type:"bool"])
@@ -353,13 +349,13 @@ def listCircles() {
                 List<Map> members = result.data.members
                 state.members = members
 
-                section(getFormat("header-green", "${getImage("Blank")}"+" Select Life360 Members to Import into Hubitat")) {
+                section(getFormat("header-green", getImage("Blank")+" Select Life360 Members to Import into Hubitat")) {
                     Map theMembers = members.collectEntries{[it.id, it.firstName+sSPACE+it.lastName]}
                     Map sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
                     input "users", "enum", multiple: true, required:false, title:"Life360 Members: ", options: sortedMembers, submitOnChange: true
                 }
 
-                section(getFormat("header-green", "${getImage("Blank")}"+" Other Options")) {
+                section(getFormat("header-green", getImage("Blank")+" Other Options")) {
                     input (name: 'pollFreq', type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute', '600':'10 minutes', '1800':'30 minutes'])
 
                     input(name: 'logEnable', type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
@@ -386,6 +382,7 @@ def installed() {
 
 def updated() {
     if (getSettingB('logEnable')) logTrace "updated"
+    state.remove('lastUpdateMs')
     unschedule()
     unsubscribe()
     initialize()
@@ -397,9 +394,9 @@ void initialize(){
     initializeSub()
     Boolean le = getSettingB('logEnable')
 
-    ((List<String>)settings.users).each {memberId->
-        String externalId = "${app.id}.${memberId}"
-        ChildDeviceWrapper deviceWrapper = getChildDevice("${externalId}")
+    ((List<String>)settings.users).each {String memberId->
+        String externalId = "${app.id}.${memberId}".toString()
+        ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
 
         if (!deviceWrapper) { // device isn't there - so we need to create
             Map member = ((List<Map>)state.members).find{it.id==memberId}
@@ -410,7 +407,7 @@ void initialize(){
             } else {
                 if (le) logInfo "Creating Life360 Device: " + member
                 try{
-                    addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
+                    addChildDevice("jpage4500", "Life360+ Driver", externalId, ["name": "Life360 - ${member.firstName}", isComponent: false])
                     if (le) logInfo "Child Device Successfully Created"
                 } catch (e) {
                     logError "Child device creation failed with error ", e
@@ -427,7 +424,7 @@ void initialize(){
         //def (childAppName, childMemberId) = childDevice.deviceNetworkId.split("\\.")
         if (!((List<String>)settings.users).find{it==childMemberId}) {
             deleteChildDevice((String)childDevice.deviceNetworkId)
-            Map member = ((List<Map>)state.members).find {it.id==memberId}
+            Map member = ((List<Map>)state.members).find {it.id==childMemberId}
             if (member) ((List<Map>)state.members).remove(member)
         }
     }
@@ -487,9 +484,9 @@ void createCircleSubscription(Boolean reset = false) {
             }
         }
         if(accessToken){
-            String hookUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/placecallback?access_token=${accessToken}"
-            String url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
-            String postBody =  "url=${hookUrl}"
+            String hookUrl = (String)getApiServerUrl()+"/${hubUID}/apps/${app.id}/placecallback?access_token=${accessToken}".toString()
+            String url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json".toString()
+            String postBody =  "url=${hookUrl}".toString()
             result = null
             status = null
             try {
@@ -545,8 +542,8 @@ def placeEventHandler() {
     //def placeId = params?.placeId
     //def timestamp = params?.timestamp
 
-    String externalId = "${app.id}.${memberId}"
-    ChildDeviceWrapper deviceWrapper = getChildDevice("${externalId}")
+    String externalId = "${app.id}.${memberId}".toString()
+    ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
     if(!deviceWrapper){
         if (le) logTrace "placeEventHandler: child device not found..."
         return
@@ -558,7 +555,7 @@ def placeEventHandler() {
         // post request against the member for which the push event was received
 
         if (le) logTrace "placeEventHandler: about to post request update..."
-        String postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
+        String postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json".toString()
         try {
 
             addHttpR(postUrl + ' async')
@@ -569,24 +566,6 @@ def placeEventHandler() {
                     body: ["type": "location"]
             ]
             asynchttpPost("ackHandler", requestParams, [:])
-
-            /*
-			addHttpR(postUrl)
-			def requestResult; requestResult = null
-			Integer rc
-			httpPost(uri: postUrl, body: ["type": "location"], headers: ["Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
-				rc = response.getStatus()
-				requestResult = response
-			}
-			def requestId = requestResult.data?.requestId
-			Boolean isPollable = requestResult.data?.isPollable
-			if (getSettingB('logEnable')) {
-				debug "PlaceHandler Post rc: $rc response.data = ${requestResult?.data}"
-				debug "PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
-			}
-			remTsVal('lastMembersDataUpdDt')
-			runIn(2, 'schedUpdateMembers')
-			*/
 
         } catch (e) {
             logError "request post / get, error: ", e
@@ -725,33 +704,6 @@ void updateMembers(Boolean lazy = true){
     }
 }
 
-/*
-void updateMembers(){
-
-    // prevent calling API too frequently
-    // - I noticed calling schedule() can cause it to fire immediately sometimes
-    Long currentTimeMs = wnow()
-    Long lastUpdateMs = state.lastUpdateMs != null ? state.lastUpdateMs : 0L
-    Long diff = currentTimeMs - lastUpdateMs
-    if (diff < 2000L) {
-        if (getSettingB('logEnable')) logTrace "updateMembers: already up-to-date; ${diff}ms"
-        return
-    }
-    state.lastUpdateMs = currentTimeMs
-    if (getSettingB('logEnable')) logTrace "updateMembers: last:${diff}ms"
-
-    if (checkApi()){
-        String url = "https://api.life360.com/v3/circles/${state.circle}/members.json"
-        sendCmd(url)
-    }
-}
-
-void sendCmd(String url){
-    Map requestParams = [ uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}"], timeout: 10 ]
-    asynchttpGet("cmdHandler", requestParams)
-    addHttpR(url)
-} */
-
 void cmdHandler(resp, data) {
     Integer rc = resp.getStatus()
     if(rc == 200 || rc == 207) {
@@ -760,7 +712,6 @@ void cmdHandler(resp, data) {
         state.members = members
         String myId = gtAid()
         membersMapFLD[myId]=members
-        state.lastUpdateMs = wnow()
         updTsVal('lastMembersDataUpdDt')
 
         Boolean le = getSettingB('logEnable')
@@ -771,18 +722,18 @@ void cmdHandler(resp, data) {
         Map home = ((List<Map>)state.places).find{it.id==getSettingStr('place')}
 
         Map placesMap = [:]
-        for (rec in thePlaces) {
-            placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
+        for (Map rec in thePlaces) {
+            placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}".toString())
         }
 
         // Iterate through each member and trigger an update from payload
         Boolean isAnyChanged; isAnyChanged = false
-        ((List<String>)settings.users).each {memberId ->
-            String externalId = "${app.id}.${memberId}"
+        ((List<String>)settings.users).each {String memberId ->
+            String externalId = "${app.id}.${memberId}".toString()
             Map member = ((List<Map>)state.members).find{ it.id==memberId }
             try {
                 // find the appropriate child device based on app id and the device network id
-                ChildDeviceWrapper deviceWrapper = getChildDevice("${externalId}")
+                ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
 
                 // send circle places and home to individual children
                 // driver lets us know if location changed enough that we should auto adjust polling
@@ -924,16 +875,16 @@ private void removeChildDevices(delete) {
 
 static String getImage(String type) {                    // Modified from @Stephack Code
     String loc = "<img src=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/images/"
-    if(type == "Blank") return "${loc}blank.png height=40 width=5}>"
-    if(type == "optionsRed") return "${loc}options-red.png height=30 width=30>"
+    if(type == "Blank") return "${loc}blank.png height=40 width=5}>".toString()
+    if(type == "optionsRed") return "${loc}options-red.png height=30 width=30>".toString()
     return sBLK
 }
 
 static String getFormat(String type, String myText=null, String page=null) {            // Modified code from @Stephack
-    if(type == "header-green") return "<div style='color:#ffffff;font-weight: bold;background-color:#81BC00;border: 1px solid #000000;box-shadow: 2px 3px #8B8F8F;border-radius: 10px'>${myText}</div>"
-    if(type == "line") return "<hr style='background-color:#1A77C9; height: 1px; border: 0;' />"
-    if(type == "title") return "<h2 style='color:#1A77C9;font-weight: bold'>${myText}</h2>"
-    if(type == "button-blue") return "<a style='color:white;text-align:center;font-size:20px;font-weight:bold;background-color:#03FDE5;border:1px solid #000000;box-shadow:3px 4px #8B8F8F;border-radius:10px' href='${page}'>${myText}</a>"
+    if(type == "header-green") return "<div style='color:#ffffff;font-weight: bold;background-color:#81BC00;border: 1px solid #000000;box-shadow: 2px 3px #8B8F8F;border-radius: 10px'>${myText}</div>".toString()
+    if(type == "line") return "<hr style='background-color:#1A77C9; height: 1px; border: 0;' />".toString()
+    if(type == "title") return "<h2 style='color:#1A77C9;font-weight: bold'>${myText}</h2>".toString()
+    if(type == "button-blue") return "<a style='color:white;text-align:center;font-size:20px;font-weight:bold;background-color:#03FDE5;border:1px solid #000000;box-shadow:3px 4px #8B8F8F;border-radius:10px' href='${page}'>${myText}</a>".toString()
     return sBLK
 }
 
@@ -941,23 +892,23 @@ def displayHeader() {
     String theName; theName = (String)null
     if(app.label) {
         if(app.label.contains("(Paused)")) {
-            theName = app.label - " <span style='color:red'>(Paused)</span>"
+            theName = app.label - " <span style='color:red'>(Paused)</span>".toString()
         } else {
             theName = app.label
         }
     }
     //if(!theName) theName = "New Child App"
-    String headerName = theName ?: "Life360+"
+    String headerName = theName ?: 'Life360+'
     section(headerName) {
     }
 }
 
 def displayFooter() {
     section() {
-        if(state.appType == "parent") { href "removePage", title:"${getImage("optionsRed")} <b>Remove App and all child apps</b>", description:sBLK }
+        if(state.appType == "parent") { href "removePage", title: getImage("optionsRed")+" <b>Remove App and all child apps</b>", description:sBLK }
         paragraph getFormat("line")
-        String bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>Life360+</div>"
-        paragraph "${bMes}"
+        String bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>Life360+</div>".toString()
+        paragraph bMes
     }
 }
 
