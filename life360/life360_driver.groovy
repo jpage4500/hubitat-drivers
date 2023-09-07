@@ -91,7 +91,7 @@ import java.text.SimpleDateFormat
 @Field static final String appVersion = '3.0.18'  // public version
 
 metadata {
-  definition (name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
+    definition (name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
         capability "Actuator"
         capability "Presence Sensor"
         capability "Sensor"
@@ -116,7 +116,6 @@ metadata {
         attribute "since", "number"
 
         // device data
-        attribute "battery", "number"
         attribute "charge", "enum", ["true","false"]
         attribute "status", "string"
         attribute "wifiState", "enum", ["true","false"]
@@ -134,6 +133,7 @@ metadata {
         attribute "savedPlaces", "string"
 
         // hubitat device states
+        attribute "battery", "number"
         attribute "contact", "string"
         attribute "acceleration", "string"
         attribute "switch", "string"
