@@ -386,6 +386,17 @@ def updated() {
     unschedule()
     unsubscribe()
     initialize()
+    if (getSettingB('logEnable') && !devdbg()){
+       runIn(1800L, 'logsOff')
+    }
+}
+
+void logsOff() {
+    if (getSettingB('logEnable')) {
+        // Log this information regardless of user setting.
+        logInfo 'debug logging disabled...'
+        app.updateSetting 'logEnable', [value: 'false', type: 'bool']
+    }
 }
 
 void initialize(){
