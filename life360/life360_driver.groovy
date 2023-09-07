@@ -407,7 +407,7 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
         }
 
         // ** HTML attributes (optional) **
-        if (getSetB('generateHtml')) {
+        if (getSettingB('generateHtml')) {
             // send HTML avatar if generateHTML is enabled
             sendEvent( name: "avatarHtml", value: avatarHtml)
 
