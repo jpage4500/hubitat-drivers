@@ -82,8 +82,12 @@
 
 import groovy.json.JsonBuilder
 import groovy.time.TimeCategory
+import groovy.transform.CompileStatic
+import groovy.transform.Field
 
 import java.text.SimpleDateFormat
+
+@Field static final String appVersion = '3.0.18'  // public version
 
 metadata {
   definition (name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
@@ -171,14 +175,14 @@ def refresh() {
 
 def refreshCirclePush() {
     // Manually ensure that Life360 notifications subscription is current / valid
-    log.info "Life360+ Driver: Attempting to resubscribe to circle notifications"
+    logInfo "Attempting to resubscribe to circle notifications"
     parent.createCircleSubscription()
 }
 
 def installed() {
-    log.info "Life360+ Driver: Location Tracker User Driver Installed"
+    logInfo "Location Tracker User Driver Installed"
 
-    if (logEnable) log.info "Life360+ Driver: Setting attributes to initial values"
+    if (getSettingB('logEnable')) logInfo "Setting attributes to initial values"
 
     String address1prev = "No Data"
     sendEvent ( name: 'address1prev', value: address1prev )
@@ -186,22 +190,32 @@ def installed() {
 }
 
 def updated() {
-    log.info "Life360+ Driver: Location Tracker User Driver has been Updated"
+    logInfo "Location Tracker User Driver has been Updated"
     refresh()
+    if (getSettingB('logEnable')) {
+        runIn(1800L, 'logsOff')
+    }
 }
 
+void logsOff() {
+    if (getSettingB('logEnable')) {
+        // Log this information regardless of user setting.
+        logInfo 'debug logging disabled...'
+        device.updateSetting ('logEnable', [value: 'false', type: 'bool'])
+    }
+}
 
 private Boolean changedLatLongitude(Double v, Double v1){
     Double rounded = Math.round(v*1000.0D)/1000.0D
     Double rounded1 = Math.round(v1*1000.0D)/1000.0D
     Double diff = (rounded - rounded1) * 10000.0D
-    if (logEnable) log.info "Life360+ Driver: diff: $diff diffabs: ${Math.abs(diff)}"
+    if (getSettingB('logEnable')) logInfo "diff: $diff diffabs: ${Math.abs(diff)}"
     return Math.abs(diff) > 10.0D
 }
 
 Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
     if (member.location == null) {
-        // log.info "Life360+ Driver: no location set for $member"
+        // logInfo "no location set for $member"
         return false
     }
 
@@ -223,8 +237,8 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
     Boolean inTransit; inTransit = mloc.inTransit == "1"
     Long since = mloc.since.toLong()
     // -- name --
-    String memberFirstName = (member.firstName) ? member.firstName : ""
-    String memberLastName = (member.lastName) ? member.lastName : ""
+    String memberFirstName = (member.firstName) ? member.firstName : sBLK
+    String memberLastName = (member.lastName) ? member.lastName : sBLK
     String address1; address1 = (mloc.name) ? mloc.name : mloc.address1
 //    String address2; address2 = (mloc.address2) ? mloc.address2 : mloc.shortaddress
     // -- home --
@@ -245,9 +259,9 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
         || (prevAccuracy == null || Math.abs(prevAccuracy - accuracy) > 100))
     if(!isLocationChanged){
         // NOTE: uncomment to see 'no change' updates every <n> seconds
-        //if (logEnable) log.trace "Life360+ Driver: No change: $latitude/$longitude, acc:$accuracy"
+        //if (getSettingB('logEnable')) logTrace "No change: $latitude/$longitude, acc:$accuracy"
     } else {
-        if (logEnable) log.info "Life360+ Driver: <strong>change</strong>: $latitude/$longitude, acc:$accuracy"
+        if (getSettingB('logEnable')) logInfo "<strong>change</strong>: $latitude/$longitude, acc:$accuracy"
     }
 
     state.remove('force')
@@ -260,9 +274,9 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
         || (prevWifiState == null || prevWifiState.toBoolean() != wifiState))
     if(!isBatteryWifiChanged){
         // NOTE: uncomment to see 'no change' updates every <n> seconds
-        //if (logEnable) log.trace "Life360+ Driver: No change: b:$battery%, wifi:$wifiState, speed:$speed"
+        //if (getSettingB('logEnable')) logTrace "No change: b:$battery%, wifi:$wifiState, speed:$speed"
     } else {
-        if (logEnable) log.info "Life360+ Driver: <strong>change</strong>: b:$battery%, wifi:$wifiState"
+        if (getSettingB('logEnable')) logInfo "<strong>change</strong>: b:$battery%, wifi:$wifiState"
     }
 
     Date lastUpdated = new Date()
@@ -300,8 +314,8 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
 
         // Where we think we are now is either at a named place or at address1
         // or perhaps we are on the free version of Life360 (address1  = null)
-        if (address1 == null || address1 == "") address1 = "No Data"
-//      if (address2 == null || address2 == "") address2 = "No Data"
+        if (address1 == null || address1 == sBLK) address1 = "No Data"
+//      if (address2 == null || address2 == sBLK) address2 = "No Data"
 
         // *** Address ***
         // If we are present then we are Home...
@@ -309,7 +323,7 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
 
         String prevAddress = device.currentValue('address1')
         if (address1 != prevAddress) {
-            if (logEnable) log.info "Life360+ Driver: address1:$address1, prevAddress = $prevAddress"
+            if (getSettingB('logEnable')) logInfo "address1:$address1, prevAddress = $prevAddress"
             // Update old and current address information and trigger events
             sendEvent( name: "address1prev", value: prevAddress)
             sendEvent( name: "address1", value: address1 )
@@ -327,7 +341,7 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
         sendEvent( name: "latitude", value: latitude )
         sendEvent( name: "accuracy", value: accuracy )
 
-        Boolean isMiles = (Boolean)settings.isMiles
+        Boolean isMiles = getSettingB('isMiles')
 
         // Update status attribute with appropriate distance units
         // and update appropriate speed units
@@ -346,9 +360,9 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
 
         String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
 
-        if (logEnable && (isDriving || inTransit)) {
+        if (getSettingB('logEnable') && (isDriving || inTransit)) {
             // *** On the move ***
-            log.debug "Life360+ Driver: $sStatus, speedUnits:$speedUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
+            logDebug "$sStatus, speedUnits:$speedUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
         }
 
         sendEvent( name: "status", value: sStatus )
@@ -393,14 +407,14 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
         }
 
         // ** HTML attributes (optional) **
-        if (generateHtml) {
+        if (getSetB('generateHtml')) {
             // send HTML avatar if generateHTML is enabled
             sendEvent( name: "avatarHtml", value: avatarHtml)
 
             String transitDesc
-            if (isDriving) transitDesc = "Driving"
-            else if (inTransit) transitDesc = "Moving"
-            else transitDesc = "Not Moving"
+            if (isDriving) transitDesc = 'Driving'
+            else if (inTransit) transitDesc = 'Moving'
+            else transitDesc = 'Not Moving'
 
             Integer sEpoch = device.currentValue('since')
             Date theDate
@@ -424,8 +438,8 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
             tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
             tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" :address1}</a><br>"
             tileMap += "Since: ${dateSince}<br>"
-            tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
-            tileMap += "${transitDesc}"
+            tileMap += (sStatus == "At Home") ? sBLK : sStatus+"<br>"
+            tileMap += transitDesc
             if(address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
                 tileMap += " @ ${sprintf("%.1f", speed)} "
                 tileMap += isMiles ? "MPH":"KPH"
@@ -436,7 +450,7 @@ Boolean generatePresenceEvent(Map member, Map thePlaces, Map home) {
             tileMap += "</table></div>"
 
             int tileDevice1Count = tileMap.length()
-            if (tileDevice1Count > 1024) log.warn "Life360+ Driver: In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
+            if (tileDevice1Count > 1024) logWarn "Too many characters to display on Dashboard tile (${tileDevice1Count})"
             sendEvent(name: "html", value: tileMap, displayed: true)
 
         } else {
@@ -471,3 +485,65 @@ static Double haversine(Double ilat1, Double lon1, Double ilat2, Double lon2) {
     return(d)
 }
 
+
+
+private Boolean getSettingB(String nm) { return (Boolean) settings[nm] }
+
+
+/*------------------ Logging helpers ------------------*/
+
+@Field static final String PURPLE = 'purple'
+@Field static final String BLUE = '#0299b1'
+@Field static final String GRAY = 'gray'
+@Field static final String ORANGE = 'orange'
+@Field static final String RED = 'red'
+
+@Field static final String sLTH = '<'
+@Field static final String sGTH = '>'
+
+@Field static final String sNL = (String)null
+@Field static final String sBLK = ''
+
+@CompileStatic
+private static String logPrefix(String msg, String color = null) {
+    String myMsg = msg.replaceAll(sLTH, '&lt;').replaceAll(sGTH, '&gt;')
+    StringBuilder sb = new StringBuilder('<span ')
+            .append("style='color:").append(GRAY).append(";'>")
+            .append('[Life360+ driver v').append(appVersion).append('] ')
+            .append('</span>')
+            .append("<span style='color:").append(color).append(";'>")
+            .append(myMsg)
+            .append('</span>')
+    return sb.toString()
+}
+
+private void logTrace(String msg) {
+    log.trace logPrefix(msg, GRAY)
+}
+
+void debug (String msg) { logDebug (msg) }
+private void logDebug(String msg) {
+    log.debug logPrefix(msg, PURPLE)
+}
+
+private void logInfo(String msg) {
+    log.info logPrefix(msg, BLUE)
+}
+
+private void logWarn(String msg) {
+    log.warn logPrefix(msg, ORANGE)
+}
+
+private void logError(String msg, Exception ex = null) {
+    log.error logPrefix(msg, RED)
+    String a,b; a = sNL; b = sNL
+    try {
+        if (ex) {
+            a = getExceptionMessageWithLine(ex)
+            if (devdbg()) b = getStackTrace(ex)
+        }
+    } catch (ignored) {}
+    if (a || b) {
+        log.error logPrefix(a+' \n'+b, RED)
+    }
+}
