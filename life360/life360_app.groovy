@@ -92,6 +92,7 @@
 //file:noinspection unused
 //file:noinspection GroovySillyAssignment
 //file:noinspection GrPackage
+//file:noinspection GroovyDoubleNegation
 
 import groovy.transform.CompileStatic
 import groovy.transform.Field
@@ -101,10 +102,25 @@ import com.hubitat.app.ChildDeviceWrapper
 @Field static final String appVersion = '3.0.18'  // public version
 @Field static final String sNL = (String)null
 @Field static final String sBLK = ''
+@Field static final String sBOOL = 'bool'
+@Field static final String sENUM = 'enum'
 @Field static final String sCACHE = ' CACHE'
+@Field static final String sPLACE = 'place'
+@Field static final String sUSERS = 'users'
+@Field static final String sCIRCLE = 'circle'
+@Field static final String sLIFEACCESSTOKEN = 'life360AccessToken'
+@Field static final String sNUMLOCATIONUPDATES = 'numLocationUpdates'
+@Field static final String sPLACES = 'places'
+@Field static final String sMEMBERS = 'members'
+@Field static final String sLSTSCHDUPD = 'lastScheduleUpdDt'
+@Field static final String sLSTREFRESHSECS = 'lastRefreshSecs'
+@Field static final String sPOLLFREQ = 'pollFreq'
+@Field static final String sLOGENABLE = 'logEnable'
+@Field static final String sAUTO = 'auto'
 
 @Field static final Integer iZ = 0
 @Field static final Integer i1 = 1
+@Field static final Integer i2 = 2
 
 @CompileStatic
 static Boolean devdbg() { return false }
@@ -149,8 +165,8 @@ mappings {
 }
 
 def getCredentialsPage() {
-    if (getSettingB('logEnable')) logTrace "getCredentialsPage"
-    if(state.life360AccessToken) {
+    if (isLogEnabled()) logTrace "getCredentialsPage"
+    if(lifeAccessToken) {
         listCircles()
     } else {
         passwordPage(true)
@@ -158,7 +174,7 @@ def getCredentialsPage() {
 }
 
 def getCredentialsErrorPage(String message, Boolean uninstallOption) {
-    if (getSettingB('logEnable')) debug "getCredentialsErrorPage:"
+    if (isLogEnabled()) debug "getCredentialsErrorPage:"
     passwordPage(uninstallOption, message)
 }
 
@@ -173,7 +189,7 @@ def passwordPage(Boolean uninstallOpt, String msg = sNL){
 }
 
 Boolean testLife360Connection() {
-    if(state.life360AccessToken) {
+    if(lifeAccessToken) {
         return true
     } else {
         return initializeLife360Connection()
@@ -181,7 +197,7 @@ Boolean testLife360Connection() {
 }
 
 private Map getLifeToken(){
-    if (getSettingB('logEnable')) debug "getLifeToken"
+    if (isLogEnabled()) debug "getLifeToken"
 
     String username = URLEncoder.encode(getSettingStr('username'),"UTF-8")
     String password = URLEncoder.encode(getSettingStr('password'), "UTF-8")
@@ -197,9 +213,8 @@ private Map getLifeToken(){
             "username=${username}&"+
             "password=${password}"
 
-    def result; result = null
-
     try {
+        def result; result = null
         //httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
         Integer status; status = null
         addHttpR(url)
@@ -208,8 +223,8 @@ private Map getLifeToken(){
             status = response.getStatus()
         }
         if (result.data.access_token) {
-            state.life360AccessToken = result.data.access_token
-            state.connectionInfo = result.data
+            assignSt(sLIFEACCESSTOKEN, result.data.access_token)
+            assignSt('connectionInfo', result.data)
             return [result: true]
         }
         return [result: false, msg: "Data Error: $status"]
@@ -222,7 +237,7 @@ private Map getLifeToken(){
 }
 
 Boolean initializeLife360Connection() {
-    if (getSettingB('logEnable')) debug "initializeLife360Connection"
+    if (isLogEnabled()) debug "initializeLife360Connection"
 
     Map res = getLifeToken()
 
@@ -237,7 +252,7 @@ Boolean initializeLife360Connection() {
  * display ListCirclesPage
  */
 def listCircles() {
-    Boolean le = getSettingB('logEnable')
+    Boolean le = isLogEnabled()
     if (le) logTrace "listCircles"
     Boolean uninstallOption
     uninstallOption = (app.installationState == "COMPLETE")
@@ -254,12 +269,12 @@ def listCircles() {
 
         try {
             addHttpR(urlCircles)
-            httpGet(uri: urlCircles, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
+            httpGet(uri: urlCircles, headers: authHeader, timeout: 30 ) {response ->
                 resultCircles = response
                 status = response.getStatus()
                 // on 401 Unauthorized response, clear access token
                 if (status == 401) {
-                    state.life360AccessToken = null
+                    clearLifeAccessToken()
                 }
             }
         } catch (e) {
@@ -267,7 +282,7 @@ def listCircles() {
            logError "listCircles, error: http:$status ", e
            // on 401 Unauthorized response, clear access token
            if (status == 401) {
-               state.life360AccessToken = null
+               clearLifeAccessToken()
            }
            getCredentialsErrorPage("Error logging into Life360!", uninstallOption)
            displayFooter()
@@ -277,29 +292,29 @@ def listCircles() {
         List<Map> circles = resultCircles.data.circles
 
         section(getFormat("header-green", getImage("Blank")+" Select Life360 Circle")) {
-          input 'circle', "enum", multiple: false, required:true, title:"Life360 Circle", options: circles.collectEntries{[it.id, it.name]}, submitOnChange: true
+          input sCIRCLE, sENUM, multiple: false, required:true, title:"Life360 Circle", options: circles.collectEntries{[it.id, it.name]}, submitOnChange: true
         }
 
         if(circles) {
-            state.circle = getSettingStr('circle')
+            assignSt(sCIRCLE, getSettingStr(sCIRCLE))
         } else {
             getCredentialsErrorPage("Invalid Usernaname or password.", uninstallOption)
         }
 
-        if(getSettingStr('circle')) {
+        if(getSettingStr(sCIRCLE)) {
             if (le) logTrace "listPlaces"
             uninstallOption = (app.installationState == "COMPLETE")
 
             if (checkApi()){
-            if (le) logTrace "listUsers"
+                if (le) logTrace "listUsers"
 
-                String url = "https://api.life360.com/v3/circles/${state.circle}/places.json"
+                String url = "https://api.life360.com/v3/circles/${statCircle}/places.json"
                 def result; result = null
                 status = null
 
                 try {
                     addHttpR(url)
-                    httpGet(uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) { response ->
+                    httpGet(uri: url, headers: authHeader, timeout: 30 ) { response ->
                         result = response
                         status = response.getStatus()
                     }
@@ -310,54 +325,54 @@ def listCircles() {
                     return
                 }
                 List<Map> places = result.data.places
-                state.places = places
+                assignSt(sPLACES, places)
 
                 section(getFormat("header-green", getImage("Blank")+" Select Life360 Place to Match Current Location")) {
                     paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
                     Map<String,Object> thePlaces = places.collectEntries{[it.id, it.name]}
                     Map sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
-                    input 'place', "enum", multiple: false, required:true, title:"Life360 Places: ", options: sortedPlaces, submitOnChange: true
+                    input sPLACE, sENUM, multiple: false, required:true, title:"Life360 Places: ", options: sortedPlaces, submitOnChange: true
                     paragraph "<hr>"
-                    input "exportPlaces", "bool", title: "Export all Life360 Places to file<br><small>* Switch will turn off when finished</small>", defaultValue:false, submitOnChange:true
-                    if(exportPlaces) {
+                    input "exportPlaces", sBOOL, title: "Export all Life360 Places to file<br><small>* Switch will turn off when finished</small>", defaultValue:false, submitOnChange:true
+                    if(getSettingB('exportPlaces')) {
                         Map life360PlacesExportMap = [:]
                         for(Map rec in places) {
                             life360PlacesExportMap.put((String)rec.name, "${rec.latitude};${rec.longitude};${rec.radius}".toString())
                         }
                         Boolean finished = saveLif360PlacesHandler(life360PlacesExportMap)
-                        app.updateSetting("exportPlaces",[value:"false",type:"bool"])
+                        app.updateSetting("exportPlaces",[value:"false",type:sBOOL])
                         if(finished) { paragraph "Places have been saved as 'life360Places.txt'" }
                     }
                 }
             }
         }
 
-        if(getSettingStr('place') && getSettingStr('circle')) {
+        if(getSettingStr(sPLACE) && getSettingStr(sCIRCLE)) {
             if (checkApi()){
 
-                String url = "https://api.life360.com/v3/circles/${state.circle}/members.json"
+                String url = "https://api.life360.com/v3/circles/${statCircle}/members.json"
                 def result; result = null
 
                 addHttpR(url + ' ui')
                 Integer rc
-                httpGet(uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) { response ->
+                httpGet(uri: url, headers: authHeader, timeout: 30) { response ->
                     result = response
                     rc = response.getStatus()
                 }
 
                 List<Map> members = result.data.members
-                state.members = members
+                assignSt(sMEMBERS, members)
 
                 section(getFormat("header-green", getImage("Blank")+" Select Life360 Members to Import into Hubitat")) {
                     Map theMembers = members.collectEntries{[it.id, it.firstName+sSPACE+it.lastName]}
                     Map sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
-                    input "users", "enum", multiple: true, required:false, title:"Life360 Members: ", options: sortedMembers, submitOnChange: true
+                    input sUSERS, sENUM, multiple: true, required:false, title:"Life360 Members: ", options: sortedMembers, submitOnChange: true
                 }
 
                 section(getFormat("header-green", getImage("Blank")+" Other Options")) {
-                    input (name: 'pollFreq', type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute', '600':'10 minutes', '1800':'30 minutes'])
+                    input (name: sPOLLFREQ, type: sENUM, title: "Refresh Rate", required: true, defaultValue: sAUTO, options: [sAUTO:'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute', '600':'10 minutes', '1800':'30 minutes'])
 
-                    input(name: 'logEnable', type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+                    input(name: sLOGENABLE, type: sBOOL, defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
                 }
             }
         }
@@ -373,49 +388,49 @@ def listCircles() {
 }
 
 def installed() {
-    if (getSettingB('logEnable')) logTrace "installed"
-    unschedule()
-    unsubscribe()
+    if (isLogEnabled()) logTrace "installed"
+    wunschedule()
+    wunsubscribe()
     initialize()
 }
 
 def updated() {
-    if (getSettingB('logEnable')) logTrace "updated"
+    Boolean le = isLogEnabled()
+    if (le) logTrace "updated"
     state.remove('lastUpdateMs')
-    unschedule()
-    unsubscribe()
+    wunschedule()
+    wunsubscribe()
     initialize()
-    if (getSettingB('logEnable') && !devdbg()){
-       runIn(1800L, 'logsOff')
+    if (le && !devdbg()){
+       wrunIn(1800L, 'logsOff')
     }
 }
 
 void logsOff() {
-    if (getSettingB('logEnable')) {
+    if (isLogEnabled()) {
         // Log this information regardless of user setting.
         logInfo 'debug logging disabled...'
-        app.updateSetting ('logEnable', [value: 'false', type: 'bool'])
+        app.updateSetting (sLOGENABLE, [value: 'false', type: sBOOL])
     }
 }
 
 void initialize(){
-    if (!state.circle) state.circle = getSettingStr('circle')
+    if (!statCircle) assignSt(sCIRCLE, getSettingStr(sCIRCLE))
 
     initializeSub()
-    Boolean le = getSettingB('logEnable')
+    Boolean le = isLogEnabled()
 
-    ((List<String>)settings.users).each {String memberId->
-        String externalId = "${app.id}.${memberId}".toString()
-        ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
+    setUsers.each {String memberId->
 
-        if (!deviceWrapper) { // device isn't there - so we need to create
-            Map member = ((List<Map>)state.members).find{it.id==memberId}
+        if (!childExists(memberId)) { // device isn't there - so we need to create
+            Map member = savedMembers.find{it.id==memberId}
             // Modified from @Stephack
             List<ChildDeviceWrapper> childDevices = childList()
             if(childDevices.find{it.data.vcId == "${member}"}){
                 if (le) logInfo "${member.firstName} already exists...skipping"
             } else {
                 if (le) logInfo "Creating Life360 Device: " + member
+                String externalId = "${aid}.${memberId}".toString()
                 try{
                     addChildDevice("jpage4500", "Life360+ Driver", externalId, ["name": "Life360 - ${member.firstName}", isComponent: false])
                     if (le) logInfo "Child Device Successfully Created"
@@ -432,10 +447,10 @@ void initialize(){
         String[] cN = ((String)childDevice.deviceNetworkId).split("\\.")
         String childMemberId = cN[1]
         //def (childAppName, childMemberId) = childDevice.deviceNetworkId.split("\\.")
-        if (!((List<String>)settings.users).find{it==childMemberId}) {
+        if (!setUsers.find{it==childMemberId}) {
             deleteChildDevice((String)childDevice.deviceNetworkId)
-            Map member = ((List<Map>)state.members).find {it.id==childMemberId}
-            if (member) ((List<Map>)state.members).remove(member)
+            Map member = savedMembers.find {it.id==childMemberId}
+            if (member) ((List<Map>)state[sMEMBERS]).remove(member)
         }
     }
     createCircleSubscription(true)
@@ -445,7 +460,7 @@ void initialize(){
  *  setup webHook for circle changes;  calls updateMembers and scheduleUpdates
  */
 void createCircleSubscription(Boolean reset = false) {
-    Boolean le = getSettingB('logEnable')
+    Boolean le = isLogEnabled()
     if (le) logTrace "createCircleSubscription:"
 
     if (checkApi()){
@@ -458,18 +473,18 @@ void createCircleSubscription(Boolean reset = false) {
         updTsVal('lastCircleSubUpdDt')
 
         if (le) logInfo "Remove any existing Life360 Webhooks for this Circle."
-        String deleteUrl = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
+        String deleteUrl = "https://api.life360.com/v3/circles/${statCircle}/webhook.json"
         def result; result = null
         Integer status; status = null
         try {
             // ignore any errors - there many not be any existing webhooks
             addHttpR(deleteUrl+' delete')
-            httpDelete (uri: deleteUrl, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
+            httpDelete (uri: deleteUrl, headers: authHeader ) { response ->
                 result = response
                 status = response.getStatus()
                 // on 401 Unauthorized response, clear access token
                 if (status == 401) {
-                    state.life360AccessToken = null
+                    clearLifeAccessToken()
                 }
             }
         } catch (e) {
@@ -477,7 +492,7 @@ void createCircleSubscription(Boolean reset = false) {
             debug "deleteURL error $e"
             // on 401 Unauthorized response, clear access token
             if (status == 401) {
-                state.life360AccessToken = null
+                clearLifeAccessToken()
             }
         }
 
@@ -494,19 +509,19 @@ void createCircleSubscription(Boolean reset = false) {
             }
         }
         if(accessToken){
-            String hookUrl = (String)getApiServerUrl()+"/${hubUID}/apps/${app.id}/placecallback?access_token=${accessToken}".toString()
-            String url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json".toString()
+            String hookUrl = (String)getApiServerUrl()+"/${hubUID}/apps/${aid}/placecallback?access_token=${accessToken}".toString()
+            String url = "https://api.life360.com/v3/circles/${statCircle}/webhook.json".toString()
             String postBody =  "url=${hookUrl}".toString()
             result = null
             status = null
             try {
                 addHttpR(url)
-                httpPost(uri: url, body: postBody, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
+                httpPost(uri: url, body: postBody, headers: authHeader) { response ->
                     result = response
                     status = response.getStatus()
                     // on 401 Unauthorized response, clear access token
                     if (status == 401) {
-                        state.life360AccessToken = null
+                        clearLifeAccessToken()
                     }
                 }
             } catch (e) {
@@ -514,7 +529,7 @@ void createCircleSubscription(Boolean reset = false) {
                 debug "webhook setup failed $e"
                 // on 401 Unauthorized response, clear access token
                 if (status == 401) {
-                    state.life360AccessToken = null
+                    clearLifeAccessToken()
                 }
             }
 
@@ -538,24 +553,29 @@ void initializeSub() {
 def syncVersion(evt){
 }
 
+private Boolean childExists(String memberId) {
+    String externalId = "${aid}.${memberId}".toString()
+    ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
+    return (!!deviceWrapper)
+}
+
 /**
  * webHook call back
  * @return
  */
 def placeEventHandler() {
-    Boolean le = getSettingB('logEnable')
-    if (le) debug "placeEventHandler: Received Life360 Push Event - Updating Members Location Status... $params"
-    String circleId = params?.circleId
-    String memberId = params?.userId
-    String direction = params?.direction
+    Boolean le = isLogEnabled()
+    Map p = (Map)params
+    if (le) debug "placeEventHandler: Received Life360 Push Event - Updating Members Location Status... $p"
+    String circleId = p?.circleId
+    String memberId = p?.userId
+    String direction = p?.direction
     if (le) debug "PlaceHandler direction = $direction"
     //def placeId = params?.placeId
     //def timestamp = params?.timestamp
 
-    String externalId = "${app.id}.${memberId}".toString()
-    ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
-    if(!deviceWrapper){
-        if (le) logTrace "placeEventHandler: child device not found..."
+    if(!childExists(memberId)){
+        if (le) logTrace "placeEventHandler: child device not found...$memberId"
         return
     }
 
@@ -572,10 +592,10 @@ def placeEventHandler() {
             Map requestParams = [
                     uri: postUrl,
                     requestContentType: 'application/json',
-                    headers: ["Authorization": "Bearer ${state.life360AccessToken}"],
+                    headers: authHeader,
                     body: ["type": "location"]
             ]
-            asynchttpPost("ackHandler", requestParams, [:])
+            wasynchttpPost("ackHandler", requestParams, [:])
 
         } catch (e) {
             logError "request post / get, error: ", e
@@ -589,14 +609,14 @@ void ackHandler(resp, data) {
 		def result = resp.getJson()
 		def requestId = result?.requestId
 		Boolean isPollable = result?.isPollable
-		if (getSettingB('logEnable')) {
+		if (isLogEnabled()) {
 			debug "PlaceHandler Post response = ${result}"
 			debug "PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
 		}
 	} else {
         // on 401 Unauthorized response, clear access token
         if (rc == 401) {
-            state.life360AccessToken = null
+            clearLifeAccessToken()
         }
 	   logWarn "response failed rc: $rc"
 	}
@@ -604,110 +624,120 @@ void ackHandler(resp, data) {
 	// we got a PUSH EVENT from Life360 - better update everything by pulling a fresh data packet
 	// But first, wait a second to let packet catch-up with push event
 	remTsVal('lastMembersDataUpdDt')
-	runIn(2, 'schedUpdateMembers')
+	wrunIn(2, 'schedUpdateMembers')
 }
 
 def refresh() {
-	if (getSettingB('logEnable')) debug("refresh:")
+    Boolean le = isLogEnabled()
+	if (le) debug("refresh:")
 
 	Integer lastUpd = getLastTsValSecs('lastRefreshUpdDt')
 	if (lastUpd < 20) {
-		if (getSettingB('logEnable')) logInfo "Skipping circle sub update, last done $lastUpd"
+		if (le) logInfo "Skipping circle sub update, last done $lastUpd"
 		return
 	}
 	updTsVal('lastRefreshUpdDt')
 
-	listCircles()
 	createCircleSubscription()
 }
 
+@CompileStatic
 void scheduleUpdates(Boolean reset = false) {
-    Boolean le = getSettingB('logEnable')
+    Boolean le = isLogEnabled()
 
-	Integer lastRefreshSecs = state.lastRefreshSecs
-	Integer refreshSecs; refreshSecs = null
-	if (getSettingStr('pollFreq') == "auto") {
+	Integer lastRefreshSecs = lastRefrshSecs
+	Integer refreshSecs //noinspection GroovyUnusedAssignment
+    refreshSecs = null
+	if (getSettingStr(sPOLLFREQ) == sAUTO) {
 		// adjust refresh rate based on if devices are moving
-		Integer numLocationUpdates = state.numLocationUpdates != null ? (Integer)state.numLocationUpdates : 0
+		Integer numLocationUpdates = numLocUpds
 		// TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
-		if (numLocationUpdates == 0) {
-			// update every 300 (was 30,15,10) seconds
-			refreshSecs = 300
-		} else if (numLocationUpdates == 1) {
-			// update every 120 seconds
-			refreshSecs = 120
-		} else if (numLocationUpdates >= 2) {
-			// update every 60 seconds
-			refreshSecs = 60
-		}
+        Integer max = 240
+        switch(numLocationUpdates){
+            case iZ:
+                refreshSecs = max
+                break
+            case i1:
+                refreshSecs = Math.round(max/2.0D).toInteger()
+                break
+            case i2:
+                refreshSecs = Math.round(max/4.0D).toInteger()
+                break
+            default:
+                refreshSecs = max
+        }
 
-        Integer lastAttempt = getLastTsValSecs('lastScheduleUpdDt')
+        Integer lastAttempt = getLastTsValSecs(sLSTSCHDUPD)
         if (devdbg() && le) {
             logTrace("scheduleUpdates: reset: $reset lastAttempt: $lastAttempt")
             logTrace("scheduleUpdates: refreshSecs:$refreshSecs, lastRefreshSecs: ${lastRefreshSecs}")
         }
 
         // slow down polling updates to longer periods
-        if(!reset && lastAttempt < 240 && lastRefreshSecs <= refreshSecs) {
-            if(refreshSecs == lastRefreshSecs) updTsVal('lastScheduleUpdDt')
-            if (le) debug "scheduleUpdates SKIPPING CHANGE"
+        if(!reset && (lastAttempt < max+60) && lastRefreshSecs <= refreshSecs) {
+            if(refreshSecs == lastRefreshSecs) updTsVal(sLSTSCHDUPD)
+            if (le) debug "scheduleUpdates SKIPPING CHANGE${reset ? ", reset" : sBLK}${lastAttempt < max ? ", too soon" : sBLK}${lastRefreshSecs == refreshSecs ? ", no change to refreshSecs" : sBLK}"
             return
         }
-        updTsVal('lastScheduleUpdDt')
+        updTsVal(sLSTSCHDUPD)
 	} else {
-		refreshSecs = getSettingStr('pollFreq')?.toInteger()
-        remTsVal('lastScheduleUpdDt')
+		refreshSecs = getSettingStr(sPOLLFREQ)?.toInteger()
+        remTsVal(sLSTSCHDUPD)
 	}
+
 	if(!refreshSecs) refreshSecs = 600
 
 	if(reset || lastRefreshSecs != refreshSecs){
-        if (le) debug("scheduleUpdates: CHANGE refreshSecs:$refreshSecs, pollFreq:${getSettingStr('pollFreq')}")
-		state.lastRefreshSecs = refreshSecs
-		unschedule(updateMembers)
+        if (le) debug("scheduleUpdates: CHANGE refreshSecs:$refreshSecs, lastRefreshSecs: $lastRefreshSecs pollFreq:${getSettingStr(sPOLLFREQ)}")
+		assignSt(sLSTREFRESHSECS, refreshSecs)
+		wunschedule('updateMembers')
 		Random rand = new Random(wnow())
 		if (refreshSecs > 5 && refreshSecs < 60) {
 			// seconds
-			Integer ssseconds = rand.nextInt( (refreshSecs/2).toInteger() - 2)
-			schedule("${ssseconds}/${refreshSecs} * * * * ? *", updateMembers)
+			Integer ssseconds = rand.nextInt( (refreshSecs/i2).toInteger() - i2)
+			wschedule("${ssseconds}/${refreshSecs} * * * * ? *", 'updateMembers')
 		} else {
 			// mins
 			Integer ssseconds = rand.nextInt(28)
-			schedule("${ssseconds} */${refreshSecs/60} * * * ? *", updateMembers)
+			wschedule("${ssseconds} */${refreshSecs/60} * * * ? *", 'updateMembers')
         }
     } else {
-        if (le) debug "scheduleUpdates SKIPPING CHANGE"
+        if (le) debug "scheduleUpdates SKIPPING CHANGE${reset ? ", reset" : sBLK}${lastRefreshSecs == refreshSecs ? ", no change to refreshSecs" : sBLK}"
     }
 }
 
+@CompileStatic
 Boolean checkApi(){
-    if (!state.life360AccessToken) {
+    if (!lifeAccessToken) {
         Map a = getLifeToken()
     }
-    if (!state.circle) state.circle = getSettingStr('circle')
-    return (state.life360AccessToken && state.circle)
+    if (!statCircle) assignSt(sCIRCLE, getSettingStr(sCIRCLE))
+    return (lifeAccessToken && statCircle)
 }
 
 @Field volatile static Map<String, List<Map>> membersMapFLD = [:]
 
 void schedUpdateMembers(){ updateMembers(false) }
 
+@CompileStatic
 void updateMembers(Boolean lazy = true){
+    Boolean le = isLogEnabled()
     if (checkApi()){
         Integer lastAttempt = getLastTsValSecs('lastMembersAttemptUpdDt')
         Integer lastUpd = getLastTsValSecs('lastMembersDataUpdDt')
-        String myId = gtAid()
+        String myId = aid
 
-        String url = "https://api.life360.com/v3/circles/${state.circle}/members.json"
+        String url = "https://api.life360.com/v3/circles/${statCircle}/members.json"
         if (membersMapFLD[myId] && ((!lazy && lastUpd < 10) || (lazy && lastUpd <= 30) || lastAttempt < 10)) {
             addHttpR(url + sCACHE)
-            if(getSettingB('logEnable')) debug "SKIPPING update Members lastUpd: $lastUpd, lastAttempt: $lastAttempt ${ devdbg1() ? membersMapFLD[myId] : sBLK}"
-            if(getSettingStr('pollFreq') != 'auto' && lastAttempt < 10) runIn(30, 'schedUpdateMembers')
+            if(le) debug "SKIPPING update Members lastUpd: $lastUpd, lastAttempt: $lastAttempt ${ devdbg1() ? membersMapFLD[myId] : sBLK}"
+            if(getSettingStr(sPOLLFREQ) != sAUTO && lastAttempt < 10) wrunIn(30, 'schedUpdateMembers')
             return //membersMapFLD[myId]
         }
-        if(getSettingB('logEnable')) debug 'Getting Members'
-        Map requestParams = [ uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}"], timeout: 20 ]
+        if(le) debug 'Getting Members'
+        Map requestParams = [ uri: url, headers: authHeader, timeout: 20 ]
         updTsVal('lastMembersAttemptUpdDt')
-        asynchttpGet("cmdHandler", requestParams)
+        wasynchttpGet('cmdHandler', requestParams)
         addHttpR(url + ' async')
     } else{
         logError("no access token")
@@ -719,17 +749,17 @@ void cmdHandler(resp, data) {
     if(rc == 200 || rc == 207) {
         def result = resp.getJson()
         List<Map> members = result.members
-        state.members = members
-        String myId = gtAid()
+        assignSt(sMEMBERS, members)
+        String myId = aid
         membersMapFLD[myId]=members
         updTsVal('lastMembersDataUpdDt')
 
-        Boolean le = getSettingB('logEnable')
+        Boolean le = isLogEnabled()
         if (devdbg1() && le) debug("Response data from Life360: $result")
 
         // Get a *** sorted *** list of places for easier navigation
-        List<Map> thePlaces = ((List<Map>)state.places).sort { a, b -> a.name <=> b.name }
-        Map home = ((List<Map>)state.places).find{it.id==getSettingStr('place')}
+        List<Map> thePlaces = savedPlaces.sort { a, b -> a.name <=> b.name }
+        Map home = savedPlaces.find{it.id==getSettingStr(sPLACE)}
 
         Map placesMap = [:]
         for (Map rec in thePlaces) {
@@ -738,9 +768,9 @@ void cmdHandler(resp, data) {
 
         // Iterate through each member and trigger an update from payload
         Boolean isAnyChanged; isAnyChanged = false
-        ((List<String>)settings.users).each {String memberId ->
-            String externalId = "${app.id}.${memberId}".toString()
-            Map member = ((List<Map>)state.members).find{ it.id==memberId }
+        setUsers.each {String memberId ->
+            String externalId = "${aid}.${memberId}".toString()
+            Map member = savedMembers.find{ it.id==memberId }
             try {
                 // find the appropriate child device based on app id and the device network id
                 ChildDeviceWrapper deviceWrapper = getChildDevice(externalId)
@@ -750,25 +780,24 @@ void cmdHandler(resp, data) {
                 Boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
                 if (isChanged) {
                     isAnyChanged = true
-                    if (devdbg() && le) logDebug "cmdHandler: member: ${member} isChanged:$isChanged"
+                    if (le) logDebug "cmdHandler: member moving: ${member.firstName} isChanged:$isChanged"
                 }
             } catch(e) {
                 logError "cmdHandler: Exception: member: ${member}", e
             }
         }
 
-        if (getSettingStr('pollFreq') == "auto") {
+        if (getSettingStr(sPOLLFREQ) == sAUTO) {
             // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
             // - if user(s) are moving, update more frequently; if not, update less frequently
-            Integer prevLocationUpdates = state.numLocationUpdates != null ? (Integer)state.numLocationUpdates : 0
+            Integer prevLocationUpdates = numLocUpds
             Integer numLocationUpdates; numLocationUpdates = prevLocationUpdates
-            numLocationUpdates += isAnyChanged ? 1 : -1
+            numLocationUpdates += isAnyChanged ? i1 : -1
             // max out at 3 to prevent a long drive from not slowing down API calls for a while after
-            if (numLocationUpdates < 0) numLocationUpdates = 0
-            else if (numLocationUpdates > 2) numLocationUpdates = 2
-            state.numLocationUpdates = numLocationUpdates
+            numLocationUpdates = Math.max(Math.min(numLocationUpdates,i2),iZ)
+            assignSt(sNUMLOCATIONUPDATES, numLocationUpdates)
 
-            if (devdbg() && le) logDebug "cmdHandler: members: ${((List)settings.users).size()}, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
+            if (devdbg() && le) logDebug "cmdHandler: members: ${setUsers.size()}, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
 
             scheduleUpdates()
         }
@@ -777,21 +806,21 @@ void cmdHandler(resp, data) {
         logError("cmdHandler: rc: $rc resp:$resp")
         // on 401 Unauthorized response, clear access token
         if (rc == 401) {
-            state.life360AccessToken = null
+            clearLifeAccessToken()
         }
     }
 }
 
 List<ChildDeviceWrapper> childList() {
     List<ChildDeviceWrapper> children = getChildDevices()
-    //if (getSettingB('logEnable')) logDebug "childList: children: ${children}"
+    //if (isLogEnabled()) logDebug "childList: children: ${children}"
     return children
 }
 
 Boolean saveLif360PlacesHandler(data) {
     Boolean finished
     if(data) {
-        if (getSettingB('logEnable')) logDebug "saveLif360PlacesHandler: writting to file: life360Places.txt"
+        if (isLogEnabled()) logDebug "saveLif360PlacesHandler: writting to file: life360Places.txt"
         writeFile("life360Places.txt", data)
         finished = true
     } else {
@@ -802,7 +831,7 @@ Boolean saveLif360PlacesHandler(data) {
 }
 
 Boolean writeFile(fName, fData) {
-    //if (getSettingB('logEnable')) logDebug "Writing to file - ${fName} - ${fData}"
+    //if (isLogEnabled()) logDebug "Writing to file - ${fName} - ${fData}"
     login()
     try {
         def params = [
@@ -839,8 +868,8 @@ Content-Disposition: form-data; name="folder"
 }
 
 def login() {        // Modified from code by @dman2306
-    if (getSettingB('logEnable')) logDebug "login: Checking Hub Security"
-    state.cookie = sBLK
+    if (isLogEnabled()) logDebug "login: Checking Hub Security"
+    assignSt('cookie', sBLK)
     if(hubSecurity) {
         try{
             httpPost(
@@ -866,7 +895,7 @@ def login() {        // Modified from code by @dman2306
                     logWarn "Quick Chart Data Collector - username/password is incorrect."
                 } else {
                     String[] t = ((String)resp?.headers?.'Set-Cookie')?.split(';')
-                    state.cookie = t[0]
+                    assignSt('cookie', t[0])
                 }
             }
         } catch (e) {
@@ -883,6 +912,7 @@ private void removeChildDevices(delete) {
     delete.each {deleteChildDevice(it.deviceNetworkId)}
 }
 
+@CompileStatic
 static String getImage(String type) {                    // Modified from @Stephack Code
     String loc = "<img src=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/images/"
     if(type == "Blank") return "${loc}blank.png height=40 width=5}>".toString()
@@ -890,6 +920,7 @@ static String getImage(String type) {                    // Modified from @Steph
     return sBLK
 }
 
+@CompileStatic
 static String getFormat(String type, String myText=null, String page=null) {            // Modified code from @Stephack
     if(type == "header-green") return "<div style='color:#ffffff;font-weight: bold;background-color:#81BC00;border: 1px solid #000000;box-shadow: 2px 3px #8B8F8F;border-radius: 10px'>${myText}</div>".toString()
     if(type == "line") return "<hr style='background-color:#1A77C9; height: 1px; border: 0;' />".toString()
@@ -925,8 +956,9 @@ def displayFooter() {
 
 @Field volatile static Map<String, Map> httpCntsMapFLD = [:]
 
+@CompileStatic
 private void addHttpR(String path) {
-    String myId = gtAid()
+    String myId = aid
     Map<String,Integer> cnts = httpCntsMapFLD[myId] ?: [:]
     cnts[path] = (cnts[path] ? cnts[path] : iZ) + i1
     httpCntsMapFLD[myId] = cnts
@@ -991,9 +1023,30 @@ private void logError(String msg, Exception ex = null) {
 }
 
 Long wnow(){ return (Long)now() }
-String gtAid() { return app.getId() }
+String getAid() { return app.getId() }
 private String getSettingStr(String nm) { return (String) settings[nm] }
 private Boolean getSettingB(String nm) { return (Boolean) settings[nm] }
+/** assign to state  */
+private void assignSt(String nm,v){ state.put(nm,v) }
+
+private void wasynchttpGet(String cb, Map p, Map d=null){ asynchttpGet(cb, p, d) }
+private void wasynchttpPost(String cb, Map p, Map d=null){ asynchttpPost(cb, p, d) }
+private void wrunIn(Long delay, String method, Map options=null){ runIn(delay, method, options) }
+private void wschedule(String exp, String method, Map options=null){ schedule(exp,method,options) }
+private void wunschedule(String method){ unschedule(method) }
+private void wunschedule(){ unschedule() }
+private void wunsubscribe(){ unsubscribe() }
+
+private Boolean isLogEnabled() { getSettingB(sLOGENABLE) }
+private String getStatCircle() { return (String)state[sCIRCLE] }
+private String getLifeAccessToken() { return (String)state[sLIFEACCESSTOKEN] }
+private void clearLifeAccessToken() { state[sLIFEACCESSTOKEN] = null }
+private Map getAuthHeader(){ return ["Authorization": "Bearer ${lifeAccessToken}"] }
+private Integer getNumLocUpds(){ return state[sNUMLOCATIONUPDATES] != null ? (Integer)state[sNUMLOCATIONUPDATES] : iZ }
+private List<Map> getSavedPlaces() { return (List<Map>)state[sPLACES] }
+private List<Map> getSavedMembers() { return (List<Map>)state[sMEMBERS] }
+private Integer getLastRefrshSecs(){ return state[sLSTREFRESHSECS] != null ? (Integer)state[sLSTREFRESHSECS] : iZ }
+private List<String> getSetUsers(){ return (List<String>)settings[sUSERS] }
 
 
 /*------------------ In-memory timers ------------------*/
@@ -1004,7 +1057,7 @@ private void updTsVal(String key, String dt = sNL) {
     String val = dt ?: getDtNow()
 //  if (key in svdTSValsFLD) { updServerItem(key, val); return }
 
-    String appId = gtAid()
+    String appId = aid
     Map data = tsDtMapFLD[appId] ?: [:]
     if (key) data[key]=val
     tsDtMapFLD[appId] = data
@@ -1014,7 +1067,7 @@ private void updTsVal(String key, String dt = sNL) {
 
 @CompileStatic
 private void remTsVal(key) {
-    String appId = gtAid()
+    String appId = aid
     Map data = tsDtMapFLD[appId] ?: [:]
     if (key) {
         if (key instanceof List) {
@@ -1038,7 +1091,7 @@ private String getTsVal(String key) {
 /*  if (key in svdTSValsFLD) {
     return (String)getServerItem(key)
   }*/
-    String appId = gtAid()
+    String appId = aid
     Map tsMap = tsDtMapFLD[appId]
     if (key && tsMap && tsMap[key]) { return (String) tsMap[key] }
     return sNL
