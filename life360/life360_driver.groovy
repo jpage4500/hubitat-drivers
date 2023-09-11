@@ -90,6 +90,8 @@ import java.text.SimpleDateFormat
 
 @Field static final String appVersion = '3.0.18'  // public version
 
+static Boolean devdbg() { return false }
+
 metadata {
     definition (name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
         capability "Actuator"
