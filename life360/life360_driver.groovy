@@ -135,6 +135,11 @@ metadata {
         command "refresh"
         // Trigger to manually force subscribe to / revalidate webhook to Life360 push notifications
         command "refreshCirclePush"
+
+        // called from Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
+        command "sendHistory", ["string"]
+        command "sendTheMap", ["string"]
+        command "historyClearData"
   }
 }
 
@@ -183,6 +188,11 @@ def updated() {
     refresh()
 }
 
+// called from Life360+ app
+// @param member - Life360 member details (see sample-data.txt)
+// @param thePlaces - all Life360 circles (locations)
+// @param home - Life360 circle which user selected as 'home'
+// @return true if member location changed from last update; false if no change
 Boolean generatePresenceEvent(member, thePlaces, home) {
     if (member.location == null) {
         // log.info "Life360+ Driver: no location set for $member"
@@ -263,6 +273,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     // It is safe to assume that if we are within home radius then we are
     // both present and at home (to address any potential radius jitter)
     def String memberPresence = (distanceAway <= homeRadius) ? "present" : "not present"
+    if (logEnable) log.info "Life360+: present: $memberPresence, distance:$distanceAway, home:$homeLatitude/$homeLongitude/$homeRadius"
 
     // Where we think we are now is either at a named place or at address1
     // or perhaps we are on the free version of Life360 (address1  = null)
@@ -408,7 +419,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "</table></div>"
 
     int tileDevice1Count = tileMap.length()
-    if (tileDevice1Count > 1024) log.warn "Life360+ Driver: In sendStatusTile1 - Too many characters to display on Dashboard (${tileDevice1Count})"
+    if (tileDevice1Count > 1024) log.warn "Life360+ Driver: Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
     return isLocationChanged
 }
@@ -426,3 +437,84 @@ def haversine(lat1, lon1, lat2, lon2) {
     def Double d = R * c
     return(d)
 }
+
+/**
+ * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
+ */
+def sendHistory(msgValue) {
+    if(logEnable) log.trace "In sendHistory - nameValue: ${msgValue}"
+
+    if (msgValue == null || msgValue.contains("No Data")) {
+       if(logEnable) log.trace "In sendHistory - Nothing to report (No Data)"
+    } else {
+        try {
+            if(state.list1 == null) state.list1 = []
+
+            getDateTime()
+            last = "${newDate} - ${msgValue}"
+            state.list1.add(0,last)
+
+            if(state.list1) {
+              listSize1 = state.list1.size()
+            } else {
+              listSize1 = 0
+            }
+
+            int intNumOfLines = 10
+            if (listSize1 > intNumOfLines) state.list1.removeAt(intNumOfLines)
+            String result1 = state.list1.join(";")
+            def lines1 = result1.split(";")
+
+            theData1 = "<div style='overflow:auto;height:90%'><table style='text-align:left;font-size:${fontSize}px'><tr><td>"
+
+            for (i=0;i<intNumOfLines && i<listSize1;i++) {
+              combined = theData1.length() + lines1[i].length()
+              if(combined < 1006) {
+                theData1 += "${lines1[i]}<br>"
+              }
+            }
+
+            theData1 += "</table></div>"
+            if(logEnable) log.debug "theData1 - ${theData1.replace("<","!")}"
+
+            dataCharCount1 = theData1.length()
+            if(dataCharCount1 <= 1024) {
+              if(logEnable) log.debug "What did I Say Attribute - theData1 - ${dataCharCount1} Characters"
+            } else {
+                theData1 = "Too many characters to display on Dashboard (${dataCharCount1})"
+            }
+
+            sendEvent(name: "bpt-history", value: theData1, displayed: true)
+            sendEvent(name: "numOfCharacters", value: dataCharCount1, displayed: true)
+            sendEvent(name: "lastLogMessage", value: msgValue, displayed: true)
+        }
+        catch(e1) {
+            log.error "In sendHistory - Something went wrong<br>${e1}"
+        }
+    }
+}
+
+/**
+ * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
+ */
+def historyClearData() {
+    if(logEnable) log.trace "In historyClearData"
+    msgValue = "-"
+    logCharCount = "0"
+    state.list1 = []
+    if(logEnable) log.info "Clearing the data"
+    historyLog = "Waiting for Data..."
+    sendEvent(name: "bpt-history", value: historyLog, displayed: true)
+    sendEvent(name: "numOfCharacters1", value: logCharCount1, displayed: true)
+    sendEvent(name: "lastLogMessage1", value: msgValue, displayed: true)
+}
+
+/**
+ * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
+ */
+def sendTheMap(theMap) {
+    lastMap = "${theMap}"
+    sendEvent(name: "lastMap", value: lastMap, displayed: true)
+}
+
+
