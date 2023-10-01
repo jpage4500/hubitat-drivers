@@ -353,8 +353,7 @@ def installed() {
 }
 
 def createCircleSubscription() {
-    if (logEnable) log.trace "Life360+: createCircleSubscription:"
-    if (logEnable) log.info "Life360+: Remove any existing Life360 Webhooks for this Circle."
+    if (logEnable) log.debug "Life360+: createCircleSubscription: Remove webhook for circle:${state.circle}"
 
     def deleteUrl = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
     try { 
@@ -367,8 +366,7 @@ def createCircleSubscription() {
     }
 
     // subscribe to the life360 webhook to get push notifications on place events within this circle
-
-    if (logEnable) log.info "Life360+: Create a new Life360 Webhooks for this Circle."
+    if (logEnable) log.debug "Life360+: createCircleSubscription: Create webhooks for circle:${state.circle}"
     createAccessToken() // create our own OAUTH access token to use in webhook url
     def hookUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/placecallback?access_token=${state.accessToken}"
     def url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
@@ -382,12 +380,11 @@ def createCircleSubscription() {
     }
 
     if (result.data?.hookUrl) {
-        log.info "Life360+: Successfully subscribed to Life360 circle push events"
-        if (logEnable) log.debug "Life360+: Confirmation: ${result.data?.hookUrl}"
+        log.info "Life360+: createCircleSubscription: subscribed to Life360 circle push events"
+        if (logEnable) log.debug "Life360+: createCircleSubscription: result: ${result.data}"
         updateMembers()
         scheduleUpdates()
     }
-
 }
 
 def updated() {
@@ -417,10 +414,12 @@ def updated() {
 
             if (childDevice) {
                 if (logEnable) log.info "Child Device Successfully Created"
-                createCircleSubscription()
             }
         }
     }
+
+    // update webhook
+    createCircleSubscription()
 
     def childDevices = childList()
     if (logEnable) log.debug "Life360+: Child Devices: ${childDevices}"
@@ -443,7 +442,7 @@ def initialize() {
 }
 
 def placeEventHandler() {
-    if (logEnable) log.debug "Life360+: placeEventHandler: Received Life360 Push Event - Updating Members Location Status..."
+    if (logEnable) log.debug "Life360+: placeEventHandler: params:${params}"
     def circleId = params?.circleId
     def placeId = params?.placeId
     def memberId = params?.userId
@@ -468,8 +467,7 @@ def placeEventHandler() {
         }
         requestId = requestResult.data?.requestId
         isPollable = requestResult.data?.isPollable
-        if (logEnable) log.debug "Life360+: PlaceHandler Post response = ${requestResult.data}  params direction = $direction"
-        if (logEnable) log.debug "Life360+: PlaceHandler Post requestId = ${requestId} isPollable = $isPollable"
+        if (logEnable) log.debug "Life360+: placeEventHandler: reqId:${requestId}, pollable:$isPollable, response:${requestResult.data}"
     }
     catch (e) {
         log.error "Life360+: request post / get, error: $e"
