@@ -24,6 +24,13 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/packageManifest.json",
       "description": "Orbit Bhyve Integration"
+    },
+    {
+      "id": "5fbc9b5b-d241-49df-bd94-d8729a7909d2",
+      "name": "HD+ Device",
+      "category": "Integrations",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/packageManifest.json",
+      "description": "Companion Hubitat driver for HD+ Android app"
     }
   ]
 }
