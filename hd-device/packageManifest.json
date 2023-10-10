@@ -3,5 +3,14 @@
   "author": "Joe Page",
   "version": "1.0.0",
   "minimumHEVersion": "2.1.9",
-  "dateReleased": "2023-10-10"
+  "dateReleased": "2023-10-10",
+  "drivers": [
+    {
+      "id": "364194d2-f555-47b0-a041-b7c3d12c4135",
+      "name": "HD+ Device",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy",
+      "required": true
+    }
+  ]
 }
