@@ -8,6 +8,9 @@
  * - Send notifications (text or TTS) to any HD+ device
  * - TODO: instant cloud mode (remote) device status updates
  * 
+ *  Changes:
+ *  1.0.1 - 10/13/23 - support SpeechSynthesis for TTS
+ *
  * ------------------------------------------------------------------------------------------------------------------------------
 **/
 
@@ -17,6 +20,8 @@ metadata {
     definition(name: "HD+ Device", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy") {
         capability "Notification"
         capability "AudioNotification"
+        capability "SpeechSynthesis"
+        capability "MusicPlayer"
         capability "PresenceSensor"
 
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
@@ -66,9 +71,28 @@ void playTextAndRestore(text, volumelevel) {
 void playTextAndResume(text, volumelevel) {
     notifyVia("tts", text)
 }
-def playTrack(trackuri, volumelevel) { log.error "playTrack not implemented!" }
-def playTrackAndRestore(trackuri, volumelevel) { log.error "playTrackAndRestore not implemented!" }
-def playTrackAndResume(trackuri, volumelevel) { log.error "playTrackAndResume not implemented!" }
+def playTrack(trackuri, volumelevel) {}
+def playTrackAndRestore(trackuri, volumelevel) {}
+def playTrackAndResume(trackuri, volumelevel) {}
+
+// -- SpeechSynthesis commands --
+def speak(text, volume, voice) {
+    notifyVia("tts", text)
+}
+
+// -- MusicPlayer commands --
+def mute() {}
+def nextTrack() {}
+def pause() {}
+def play() {}
+def playTrack(trackuri) {}
+def previousTrack() {}
+def restoreTrack(trackuri) {}
+def resumeTrack(trackuri) {}
+def setLevel(volumelevel) {}
+def setTrack(trackuri) {}
+def stop() {}
+def unmute() {}
 
 // -- presence sensor commands --
 def arrived () {
