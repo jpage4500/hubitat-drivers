@@ -15,6 +15,8 @@
 * on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
 * for the specific language governing permissions and limitations under the License.
 *
+*  Changes:
+*  3.0.1 - 10/13/23 - fix NullPointerException with timezone
 */
 import groovy.time.*
 import java.text.SimpleDateFormat
@@ -477,7 +479,7 @@ def OrbitGet(command, device_id=null, mesh_id=null) {
         def bridgeCount = respdata.type.count { it == "bridge" }
         def bridgeMsg = (bridgeCount==0)?'in your Orbit b•hyve™ account':"and ${bridgeCount} network bridge device(s)"
         state.devices = "Found ${respdata.type.count { it== "sprinkler_timer" }} sprinkler timer(s) ${bridgeMsg}."
-        state.timezone = respdata[0].timezone.timezone_id
+        state.timezone = respdata[0].timezone != null ? respdata[0].timezone.timezone_id : "America/New_York"
     }
     return respdata
 }

@@ -1,11 +1,11 @@
 {
   "packageName": "Orbit Bhyve+",
   "author": "Joe Page",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-24",
   "communityLink": "https://community.hubitat.com/t/release-orbit-bhyve/119349",
-  "releaseNotes": "initial version",
+  "releaseNotes": "fix NullPointerException with timezone",
   "apps": [
     {
       "id": "a2f2b1a3-98db-4eb6-906a-ab213182cf32",
