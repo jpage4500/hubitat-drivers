@@ -9,15 +9,21 @@
  * - TODO: instant cloud mode (remote) device status updates
  * 
  *  Changes:
+ *  1.0.2 - 10/13/23 - add FCM server key
  *  1.0.1 - 10/13/23 - support SpeechSynthesis for TTS
  *
  * ------------------------------------------------------------------------------------------------------------------------------
 **/
 
 import groovy.json.*
+import groovy.transform.Field
+
+@Field static String FCM_URL = "https://fcm.googleapis.com/fcm/send"
+@Field static String FCM_KEY = "AAAACi2wNEU:APA91bHcM8KAcNmzKbb3yF93PhIE9h1sEnOfOq9T0kFmuIAqYxN1081UZ8SU2dPDagnGldIak02-0UIJIffalesJj9Jj-aZct-O2sEJmvaNbJeqIMsuaYJQ8iSpJJOMa7wfD0CzbwkG8"
 
 metadata {
     definition(name: "HD+ Device", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy") {
+        capability "Initialize"
         capability "Notification"
         capability "AudioNotification"
         capability "SpeechSynthesis"
@@ -25,7 +31,10 @@ metadata {
         capability "PresenceSensor"
 
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
-        command('setServerKey', [[name: 'Set Server FCM key', type: 'STRING', description: 'HD+ will automatically set the server FCM key']])
+        command('setServerKey', [[name: 'Set Server FCM key', type: 'STRING', description: 'NOTE: don\'t update this unless you want to use your own FCM server key']])
+        
+        //command('startMonitoring', [[name: 'Monitor Device Changes', type: 'STRING', description: 'HD+ will automatically call this']])
+        //command('stopMonitoring', [[name: 'Stop Monitoring', type: 'STRING', description: 'HD+ will automatically call this']])
 
         // -- presence sensor commands --
         command "arrived"
@@ -43,6 +52,26 @@ metadata {
     attribute "notificationText", "string"
 }
 
+def initialize() {
+    serverKey = device.currentValue('serverKey')
+    if (isLogging) log.debug "initialize: ${serverKey}"
+    setServerKey(serverKey)
+}
+
+def updated() {
+    if (isLogging) log.debug "updated:"
+    initialize()
+}
+
+def installed() {
+    if (isLogging) log.debug "installed:"
+    initialize()
+}
+
+def uninstalled() {
+    if (isLogging) log.debug "uninstalled:"
+}
+
 def setClientKey (key) {
     if (isLogging) log.debug "setClientKey: ${key}"
     sendEvent( name: "clientKey", value: key )
@@ -50,7 +79,23 @@ def setClientKey (key) {
 
 def setServerKey (key) {
     if (isLogging) log.debug "setServerKey: ${key}"
+    if (key == null || key.length() == 0) {
+        // set default FCM KEY
+        if (isLogging) log.debug "setServerKey: USING DEFAULT KEY"
+        key = FCM_KEY
+    }
     sendEvent( name: "serverKey", value: key )
+}
+
+/**
+ * start monitoring multiple devices for state changes; when changes occur, update will be sent using FCM push
+ */
+def startMonitoring (devices) {
+    if (isLogging) log.debug "startMonitoring: ${devices}"
+    //def json = new JsonSlurper().parseText(devices)
+}
+
+def stopMonitoring () {
 }
 
 // -- notification commands --
@@ -121,7 +166,7 @@ void notifyVia(msgType, text) {
     }
 
     def params = [
-        uri: "https://fcm.googleapis.com/fcm/send",
+        uri: FCM_URL,
         headers: [
             'Authorization': "key=${serverKey}"
         ],
