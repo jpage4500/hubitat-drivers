@@ -9,6 +9,7 @@
  * - TODO: instant cloud mode (remote) device status updates
  * 
  *  Changes:
+ *  1.0.3 - 10/14/23 - add more speak() methods
  *  1.0.2 - 10/13/23 - add FCM server key
  *  1.0.1 - 10/13/23 - support SpeechSynthesis for TTS
  *
@@ -18,8 +19,8 @@
 import groovy.json.*
 import groovy.transform.Field
 
-@Field static String FCM_URL = "https://fcm.googleapis.com/fcm/send"
-@Field static String FCM_KEY = "AAAACi2wNEU:APA91bHcM8KAcNmzKbb3yF93PhIE9h1sEnOfOq9T0kFmuIAqYxN1081UZ8SU2dPDagnGldIak02-0UIJIffalesJj9Jj-aZct-O2sEJmvaNbJeqIMsuaYJQ8iSpJJOMa7wfD0CzbwkG8"
+@Field static String GURL = "https://fcm.googleapis.com/fcm/send"
+@Field static String GKEY = "QUFBQUNpMndORVU6QVBBOTFiSGNNOEtBY05tektiYjN5RjkzUGhJRTloMXNFbk9mT3E5VDBrRm11SUFxWXhOMTA4MVVaOFNVMmRQRGFnbkdsZElhazAyLTBVSUpJZmZhbGVzSmo5SmotYVpjdC1PMnNFSm12YU5iSmVxSU1zdWFZSlE4aVNwSkpPTWE3d2ZEMEN6YndrRzg="
 
 metadata {
     definition(name: "HD+ Device", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy") {
@@ -80,9 +81,10 @@ def setClientKey (key) {
 def setServerKey (key) {
     if (isLogging) log.debug "setServerKey: ${key}"
     if (key == null || key.length() == 0) {
-        // set default FCM KEY
+        // use default
+        byte[] decoded = GKEY.decodeBase64()
+        key = new String(decoded)
         if (isLogging) log.debug "setServerKey: USING DEFAULT KEY"
-        key = FCM_KEY
     }
     sendEvent( name: "serverKey", value: key )
 }
@@ -121,6 +123,12 @@ def playTrackAndRestore(trackuri, volumelevel) {}
 def playTrackAndResume(trackuri, volumelevel) {}
 
 // -- SpeechSynthesis commands --
+def speak(text) {
+    notifyVia("tts", text)
+}
+def speak(text, volume) {
+    notifyVia("tts", text)
+}
 def speak(text, volume, voice) {
     notifyVia("tts", text)
 }
@@ -166,7 +174,7 @@ void notifyVia(msgType, text) {
     }
 
     def params = [
-        uri: FCM_URL,
+        uri: GURL,
         headers: [
             'Authorization': "key=${serverKey}"
         ],

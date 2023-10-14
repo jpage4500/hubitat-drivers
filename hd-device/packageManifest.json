@@ -1,11 +1,11 @@
 {
   "packageName": "HD+ Device",
   "author": "Joe Page",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-10",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "add FCM server key",
+  "releaseNotes": "add more speak() methods",
   "drivers": [
     {
       "id": "364194d2-f555-47b0-a041-b7c3d12c4135",
