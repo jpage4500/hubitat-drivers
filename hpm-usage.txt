@@ -17,6 +17,17 @@ hpm manifest-add-driver packageManifest.json --location=https://raw.githubuserco
 hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/packageManifest.json --name="HD+ Device" --category="Integrations" --description="Companion Hubitat driver for HD+ Android app"
 
 -------------------------------------------------------------------------------
+-- HD+ Tile --
+-------------------------------------------------------------------------------
+
+# create package for app and driver(s)
+hpm manifest-create packageManifest.json --name="HD+ Tile" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2023-10-24
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/hd-tile.groovy --required=true
+
+# add package to repository
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/packageManifest.json --name="HD+ Tile" --category="Integrations" --description="Quick way to create virtual HD+ Tiles (ie: image/video/calendar)"
+
+-------------------------------------------------------------------------------
 -- Life360+ --
 -------------------------------------------------------------------------------
 

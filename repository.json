@@ -36,6 +36,13 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/packageManifest.json",
       "description": "Companion Hubitat driver for HD+ Android app"
+    },
+    {
+      "id": "369f7089-5cb4-4502-aaaf-e8a68ce1d632",
+      "name": "HD+ Tile",
+      "category": "Integrations",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/packageManifest.json",
+      "description": "Quick way to create virtual HD+ Tiles (ie: image/video/calendar)"
     }
   ]
 }
