@@ -1,0 +1,16 @@
+{
+  "packageName": "HD+ Tile",
+  "author": "Joe Page",
+  "version": "1.0.0",
+  "minimumHEVersion": "2.1.9",
+  "dateReleased": "2023-10-24",
+  "drivers": [
+    {
+      "id": "332d87f1-a671-4024-add8-99206881395f",
+      "name": "HD+ Tile",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/hd-tile.groovy",
+      "required": true
+    }
+  ]
+}
