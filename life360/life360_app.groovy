@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.20 - 10/24/23 - add arrived/departed commands to driver; better error logging
  *  3.0.19 - 10/01/23 - add sendHistory, sendTheMap, historyClearData commands for supporting Life360 Tracker app
  *  3.0.18 - 09/07/23 - reverting previous PR -- it drastically slowed down refresh logic which is a user preference
  *  3.0.17 - 08/06/23 - merge PR by imnotbob - https://github.com/jpage4500/hubitat-drivers/pull/16
@@ -544,7 +545,8 @@ def sendCmd(url, result){
 }
 
 def cmdHandler(resp, data) {
-    if(resp.getStatus() == 200 || resp.getStatus() == 207) {
+    def status = resp.getStatus()
+    if (status == 200 || status == 207) {
         result = resp.getJson()
         def members = result.members
         state.members = members
@@ -595,7 +597,7 @@ def cmdHandler(resp, data) {
         }
     } else {
         // connection error
-        log.error("Life360+: cmdHandler: resp:$resp")
+        log.error("Life360+: cmdHandler: status:${status}, resp:${resp.data}")
     }
 }
 

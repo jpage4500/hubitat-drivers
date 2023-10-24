@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.20 - 10/24/23 - add arrived/departed commands to driver; better error logging
  *  3.0.19 - 10/01/23 - add sendHistory, sendTheMap, historyClearData commands for supporting Life360 Tracker app
  *  3.0.18 - 09/07/23 - reverting previous PR -- it drastically slowed down refresh logic which is a user preference
  *  3.0.17 - 08/06/23 - merge PR by imnotbob - https://github.com/jpage4500/hubitat-drivers/pull/16
@@ -136,6 +137,9 @@ metadata {
         command "refresh"
         // Trigger to manually force subscribe to / revalidate webhook to Life360 push notifications
         command "refreshCirclePush"
+        // -- presence sensor commands --
+        command "arrived"
+        command "departed"
 
         // called from Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
         command "sendHistory", ["string"]
@@ -157,13 +161,18 @@ preferences {
     input "logEnable", "bool", title: "Enable logging", required: true, defaultValue: false
 }
 
-def off() {
-  // empty stub needed for switch capability not to throw errors
+// -- presence sensor commands --
+def arrived () {
+    sendEvent(name: "presence", value: "present")
 }
 
-def on() {
-  // empty stub needed for switch capability not to throw errors
+def departed () {
+    sendEvent(name: "presence", value: "not present")
 }
+
+// -- switch commands --
+def off() {}
+def on() {}
 
 def refresh() {
   parent.refresh()
