@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "3.0.19",
+  "version": "3.0.20",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "add sendHistory, sendTheMap, historyClearData commands for supporting Life360 Tracker app",
+  "releaseNotes": "add arrived/departed commands to driver; better error logging",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
