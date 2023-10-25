@@ -263,6 +263,7 @@ def parse(String message) {
         case "device_idle":
         case "clear_low_battery":
         case "device_idle":
+        case "battery_status":
             // Do nothing
             break
         default:
