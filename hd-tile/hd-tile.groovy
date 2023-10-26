@@ -25,6 +25,9 @@ metadata {
         author: "Joe Page",
         importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/hd-tile.groovy"
     ) {
+        // NOTE: capability is needed for driver to show up in MakerAPI list
+        capability "Sensor"
+
         attribute "deviceType", "string"
         attribute "url", "string"
         attribute "refreshInterval", "number"
