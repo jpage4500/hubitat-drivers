@@ -9,6 +9,7 @@
  * - TODO: instant cloud mode (remote) device status updates
  * 
  *  Changes:
+ *  1.0.4 - 10/26/23 - add support for PushableButton which can be defined to run custom commands in HD+
  *  1.0.3 - 10/14/23 - add more speak() methods
  *  1.0.2 - 10/13/23 - add FCM server key
  *  1.0.1 - 10/13/23 - support SpeechSynthesis for TTS
@@ -18,9 +19,14 @@
 
 import groovy.json.*
 import groovy.transform.Field
+import hubitat.helper.InterfaceUtils
 
 @Field static String GURL = "https://fcm.googleapis.com/fcm/send"
 @Field static String GKEY = "QUFBQUNpMndORVU6QVBBOTFiSGNNOEtBY05tektiYjN5RjkzUGhJRTloMXNFbk9mT3E5VDBrRm11SUFxWXhOMTA4MVVaOFNVMmRQRGFnbkdsZElhazAyLTBVSUpJZmZhbGVzSmo5SmotYVpjdC1PMnNFSm12YU5iSmVxSU1zdWFZSlE4aVNwSkpPTWE3d2ZEMEN6YndrRzg="
+
+@Field static String TYPE_TTS = "tts"
+@Field static String TYPE_NOTIFY = "notify"
+@Field static String TYPE_BTN = "btn"
 
 metadata {
     definition(name: "HD+ Device", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy") {
@@ -30,18 +36,20 @@ metadata {
         capability "SpeechSynthesis"
         capability "MusicPlayer"
         capability "PresenceSensor"
+        capability "PushableButton"
 
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
         command('setServerKey', [[name: 'Set Server FCM key', type: 'STRING', description: 'NOTE: don\'t update this unless you want to use your own FCM server key']])
         
         //command('startMonitoring', [[name: 'Monitor Device Changes', type: 'STRING', description: 'HD+ will automatically call this']])
-        //command('stopMonitoring', [[name: 'Stop Monitoring', type: 'STRING', description: 'HD+ will automatically call this']])
+        //command "stopMonitoring"
 
         // -- presence sensor commands --
         command "arrived"
         command "departed"
 
         attribute "presence", "enum", ["present", "not present"]
+        attribute "numberOfButtons", "number"
     }
 
     preferences {
@@ -57,6 +65,7 @@ def initialize() {
     serverKey = device.currentValue('serverKey')
     if (isLogging) log.debug "initialize: ${serverKey}"
     setServerKey(serverKey)
+    sendEvent(name: "numberOfButtons", value: 10)
 }
 
 def updated() {
@@ -93,30 +102,32 @@ def setServerKey (key) {
  * start monitoring multiple devices for state changes; when changes occur, update will be sent using FCM push
  */
 def startMonitoring (devices) {
-    if (isLogging) log.debug "startMonitoring: ${devices}"
-    //def json = new JsonSlurper().parseText(devices)
+    if (isLogging) log.debug "startMonitoring:"
+    interfaces.webSocket.connect("ws://localhost:8080/eventsocket")
 }
 
 def stopMonitoring () {
+    if (isLogging) log.debug "stopMonitoring:"
+    interfaces.webSocket.close()
 }
 
 // -- notification commands --
 def deviceNotification (text) {
-    notifyVia("notify", text)
+    notifyVia(TYPE_NOTIFY, text)
 }
 
 // -- audio notification commands --
 void playText(text) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 void playText(text, volumelevel) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 void playTextAndRestore(text, volumelevel) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 void playTextAndResume(text, volumelevel) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 def playTrack(trackuri, volumelevel) {}
 def playTrackAndRestore(trackuri, volumelevel) {}
@@ -124,13 +135,13 @@ def playTrackAndResume(trackuri, volumelevel) {}
 
 // -- SpeechSynthesis commands --
 def speak(text) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 def speak(text, volume) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 def speak(text, volume, voice) {
-    notifyVia("tts", text)
+    notifyVia(TYPE_TTS, text)
 }
 
 // -- MusicPlayer commands --
@@ -147,6 +158,11 @@ def setTrack(trackuri) {}
 def stop() {}
 def unmute() {}
 
+// -- PushableButton commands --
+def push(buttonNumber) {
+    notifyVia(TYPE_BTN, buttonNumber)
+}
+
 // -- presence sensor commands --
 def arrived () {
     sendEvent(name: "presence", value: "present")
@@ -160,7 +176,9 @@ def departed () {
 // ----------------------------------------------------------------------------
 
 void notifyVia(msgType, text) {
-    sendEvent( name: "notificationText", value: text )
+    if (msgType == TYPE_NOTIFY || msgType == TYPE_TTS) {
+        sendEvent( name: "notificationText", value: text )
+    }
 
     clientKey = device.currentValue('clientKey')
     serverKey = device.currentValue('serverKey')
@@ -201,5 +219,28 @@ def handlePostCommand(resp, data) {
         log.error "handlePostCommand: ERROR: http:${respCode}, body:${resp.getErrorData()}"
     } else {
         // success
+        if (isLogging) log.debug "success:"
     }
+}
+
+// ----------------------------------------------------------------------------
+// eventstream handler
+// ----------------------------------------------------------------------------
+
+def webSocketStatus(String socketStatus) {
+   if (socketStatus.startsWith("status: open")) {
+      if (isLogging) log.debug "webSocketStatus: Connected"
+   } else if (socketStatus.startsWith("status: closing")) {
+      if (isLogging) log.debug "webSocketStatus: Closing"
+   } else if (socketStatus.startsWith("failure:")) {
+      log.error "webSocketStatus: failed: ${socketStatus}"
+   } else {
+      log.error "webSocketStatus: unknown error: ${socketStatus}"
+   }
+}
+
+def parse(String description) {
+   // { "source":"DEVICE","name":"commsError","displayName" : "Garage Lights", "value" : "false", "type" : "null", "unit":"null","deviceId":1041,"hubId":0,"installedAppId":0,"descriptionText" : "null"}
+   def json = new JsonSlurper().parseText(description)
+   if (isLogging) log.debug "GOT: device:${json.displayName}, ${json.name} = ${json.value}"
 }
