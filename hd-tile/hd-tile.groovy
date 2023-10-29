@@ -54,8 +54,6 @@ def updated(){
 }
 
 def initialize(){
-    log.info "${device}: initialize: deviceType:${deviceType}, url:${url}, refreshInterval:${refreshInterval}"
-
     sendEvent(name:"deviceType", value:deviceType)
     sendEvent(name:"url", value:url)
     sendEvent(name:"refreshInterval", value:refreshInterval)
