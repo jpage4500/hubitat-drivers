@@ -9,11 +9,11 @@
  * - TODO: instant cloud mode (remote) device status updates
  * 
  *  Changes:
+ *  1.0.5 - 10/29/23 - reduce logging
  *  1.0.4 - 10/26/23 - add support for PushableButton which can be defined to run custom commands in HD+
  *  1.0.3 - 10/14/23 - add more speak() methods
  *  1.0.2 - 10/13/23 - add FCM server key
  *  1.0.1 - 10/13/23 - support SpeechSynthesis for TTS
- *
  * ------------------------------------------------------------------------------------------------------------------------------
 **/
 
@@ -63,13 +63,11 @@ metadata {
 
 def initialize() {
     serverKey = device.currentValue('serverKey')
-    if (isLogging) log.debug "initialize: ${serverKey}"
     setServerKey(serverKey)
     sendEvent(name: "numberOfButtons", value: 10)
 }
 
 def updated() {
-    if (isLogging) log.debug "updated:"
     initialize()
 }
 
