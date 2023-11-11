@@ -31,30 +31,42 @@ metadata {
         attribute "deviceType", "string"
         attribute "url", "string"
         attribute "refreshInterval", "number"
+        attribute "lastUpdatedMs", "number"
     }
 }
 
 preferences {
     input("deviceType", "enum", title: "Device Type", required: true,
-        options: ["imageUrl": "Image URL", "videoUrl" : "Video URL", "webUrl" : "Web URL", "calendar" : "Calendar (ical URL)", "pollen" : "Pollen Count"])
+        options: [
+            "imageUrl": "Image URL", 
+            "videoUrl" : "Video URL", 
+            "webUrl" : "Web URL", 
+            "calendar" : "Calendar (ical URL)", 
+            "pollen" : "Pollen Count (Zip Code)", 
+            "radar" : "Radar (LAT,LNG)", 
+            "stock" : "Stock (Symbol)", 
+            "dadjokes" : "Dad Jokes"
+        ])
 
-    input("url", "string", title: "URL", required: true)
+    input("url", "string", title: "URL | Zip Code | Stock Symbol", description: "", required: true)
 
     input('refreshInterval', 'enum', title: 'Refresh Rate', required: true,
         defaultValue: '15 Minutes',
         options: ["0": "Never", "15": "15 Seconds", "30": "30 Seconds", "120": "2 Minutes", "300": "5 Minutes", "600": "10 Minutes", "900": "15 Minutes", "1800": "30 Minutes", "3600": "1 Hour", "10800": "3 Hours", "18000": "5 Hours"])
+
+    input name: "isLogging", type: "bool", title: "Enable Logging", description: "", required: true
 }
 
 def installed() {
-    initialize()
 }
 
-def updated(){
-    initialize()
-}
-
-def initialize(){
+def updated() {
+    if (isLogging) log.debug "updated: ${deviceType}, ${url}, ${refreshInterval}"
     sendEvent(name:"deviceType", value:deviceType)
     sendEvent(name:"url", value:url)
     sendEvent(name:"refreshInterval", value:refreshInterval)
+    sendEvent(name:"lastUpdatedMs", value:new Date().getTime())
+}
+
+def initialize(){
 }
