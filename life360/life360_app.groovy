@@ -597,7 +597,7 @@ def cmdHandler(resp, data) {
         }
     } else {
         // connection error
-        log.error("Life360+: cmdHandler: status:${status}, resp:${resp.data}")
+        log.error("Life360+: cmdHandler: status:${status}, resp:${resp}")
     }
 }
 
