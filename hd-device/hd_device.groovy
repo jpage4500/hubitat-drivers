@@ -9,6 +9,7 @@
  * - TODO: instant cloud mode (remote) device status updates
  * 
  *  Changes:
+ *  1.0.6 - 11/16/23 - use a more direct method for displaying notifications
  *  1.0.5 - 10/29/23 - reduce logging
  *  1.0.4 - 10/26/23 - add support for PushableButton which can be defined to run custom commands in HD+
  *  1.0.3 - 10/14/23 - add more speak() methods
@@ -195,15 +196,24 @@ void notifyVia(msgType, text) {
             'Authorization': "key=${serverKey}"
         ],
         body: [
-            to: "${clientKey}",
-            data: [
-                type: "${msgType}",
-                deviceId: "${device.getId()}",
-                msg: "${text}"
-            ]
+            to: "${clientKey}"
         ],
         contentType: "application/json"
     ]
+
+    if (msgType == TYPE_NOTIFY) {
+        // use notification payload to display system notification (bypass HD+)
+        params["body"]["notification"] = [
+            "body" : "${text}"
+        ]
+    } else {
+        // use data payload to allow HD+ to handle message first
+        params["body"]["data"] = [
+            "type" : "${msgType}",
+            "deviceId" : "${device.getId()}",
+            "msg" : "${text}"
+        ]
+    }
 
     if (isLogging) log.debug "notifyVia: ${msgType}: text: \"${text}\""
 
