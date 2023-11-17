@@ -225,9 +225,6 @@ def handlePostCommand(resp, data) {
     if (resp.hasError()) {
         // request failed!
         log.error "handlePostCommand: ERROR: http:${respCode}, body:${resp.getErrorData()}"
-    } else {
-        // success
-        if (isLogging) log.debug "success:"
     }
 }
 
