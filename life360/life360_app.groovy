@@ -748,7 +748,7 @@ def displayFooter() {
 
 def circleEventHandler() {
     if (logEnable) log.debug "Life360+: circleEventHandler: params:${params}"
-    def html = "<h2>Life360+</h2>"
+    def html = "<title>Life360+</title><h2>Life360+</h2>"
     //html += "Circle: ${state.circle}</br>"
 
     settings.users.each { memberId->
