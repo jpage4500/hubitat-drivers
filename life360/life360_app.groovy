@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.21 - 12/05/23 - add webpage link which shows users on google map
  *  3.0.20 - 10/24/23 - add arrived/departed commands to driver; better error logging
  *  3.0.19 - 10/01/23 - add sendHistory, sendTheMap, historyClearData commands for supporting Life360 Tracker app
  *  3.0.18 - 09/07/23 - reverting previous PR -- it drastically slowed down refresh logic which is a user preference
@@ -131,6 +132,12 @@ mappings {
     action: [
             POST: "receiveToken",
             GET: "receiveToken"
+    ]
+  }
+
+  path("/circle") {
+    action: [
+              GET: "circleEventHandler"
     ]
   }
 }
@@ -316,6 +323,9 @@ def listCircles() {
             section(getFormat("header-green", "${getImage("Blank")}"+" Other Options")) {
                 input (name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute'])
                 
+                paragraph "View members on map: [<a href=\"${getLocalUri()}\">LOCAL</a>] [<a href=\"${getCloudUri()}\">REMOTE</a>]"
+                paragraph "<hr>"
+
                 input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             }
         }
@@ -734,4 +744,33 @@ def displayFooter() {
         bMes = "<div style='color:#1A77C9;text-align:center;font-size:20px;font-weight:bold'>Life360+</div>"
         paragraph "${bMes}"
     }
+}
+
+def circleEventHandler() {
+    if (logEnable) log.debug "Life360+: circleEventHandler: params:${params}"
+    def html = "<h2>Life360+</h2>"
+    //html += "Circle: ${state.circle}</br>"
+
+    settings.users.each { memberId->
+        def externalId = "${app.id}.${memberId}"
+        def member = state.members.find{it.id==memberId}
+        def name = member.firstName + " " + member.lastName
+        html += "<h2>Member: ${name}</h2>"
+        def lat = member.location.latitude
+        def lng = member.location.longitude
+        html += "<div style=\"width: 100%\"><iframe width=\"100%\" height=\"600\" frameborder=\"0\" scrolling=\"no\" marginheight=\"0\" marginwidth=\"0\" src=\"https://maps.google.com/maps?width=100%25&amp;height=600&amp;hl=en&amp;q=${lat},${lng}&amp;t=&amp;z=13&amp;ie=UTF8&amp;iwloc=B&amp;output=embed\"></iframe></div>"
+        html += "<hr>"
+        //if (logEnable) log.debug "Life360+: circleEventHandler: lat: ${lat}, lng: ${lng}"
+        //if (logEnable) log.debug "Life360+: circleEventHandler: member: ${member}, id: ${externalId}"
+    }
+
+    render contentType: "text/html", data: html, status: 200
+}
+
+def getLocalUri() {
+    return getFullLocalApiServerUrl() + "/circle?access_token=${state.accessToken}"
+}
+
+def getCloudUri() {
+    return "${getApiServerUrl()}/${hubUID}/apps/${app.id}/circle?access_token=${state.accessToken}"
 }
