@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.22 - 12/06/23 - webpage formatting; option to only show a single user
  *  3.0.21 - 12/05/23 - add webpage link which shows users on google map
  *  3.0.20 - 10/24/23 - add arrived/departed commands to driver; better error logging
  *  3.0.19 - 10/01/23 - add sendHistory, sendTheMap, historyClearData commands for supporting Life360 Tracker app
@@ -323,7 +324,7 @@ def listCircles() {
             section(getFormat("header-green", "${getImage("Blank")}"+" Other Options")) {
                 input (name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto':'Auto Refresh (faster when devices are moving)','30':'30 seconds','60':'1 minute'])
                 
-                paragraph "View members on map: [<a href=\"${getLocalUri()}\">LOCAL</a>] [<a href=\"${getCloudUri()}\">REMOTE</a>]"
+                paragraph "View members on map: [<a href=\"${getLocalUri(None)}\">LOCAL</a>] [<a href=\"${getCloudUri(None)}\">REMOTE</a>]"
                 paragraph "<hr>"
 
                 input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
@@ -747,30 +748,72 @@ def displayFooter() {
 }
 
 def circleEventHandler() {
-    if (logEnable) log.debug "Life360+: circleEventHandler: params:${params}"
-    def html = "<title>Life360+</title><h2>Life360+</h2>"
-    //html += "Circle: ${state.circle}</br>"
+    def user = params?.user
+    if (logEnable) log.debug "Life360+: circleEventHandler: user:${user}"
+    def html = ""
+    def title = "Life360+"
+    if (!user) {
+        title += " - ALL"
+    }
 
     settings.users.each { memberId->
         def externalId = "${app.id}.${memberId}"
-        def member = state.members.find{it.id==memberId}
-        def name = member.firstName + " " + member.lastName
-        html += "<h2>Member: ${name}</h2>"
-        def lat = member.location.latitude
-        def lng = member.location.longitude
+        def device = getChildDevice("${externalId}")
+        if (!device) return
+
+        def id = device.getId()
+
+        // if user param is passed, only show matching user
+        if (user && user != id) return;
+
+        def name = device.currentValue('memberName')
+        def lat = device.currentValue('latitude')
+        def lng = device.currentValue('longitude')
+        def lastUpdated = device.currentValue('lastUpdated')
+        def htmlLink = device.currentValue('html')
+        if (!lat || !lng) return
+        //if (logEnable) log.debug "Life360+: circleEventHandler: ID: ${id}, name: ${name}, lat: ${lat}, lng: ${lng}"
+
+        html += "<h2>${name}</h2>"
+        if (htmlLink) {
+            // NOTE: html has a height defined which we don't want here
+            htmlLink = htmlLink.replace('height:90%', '')
+            html += htmlLink + "</br>"
+        } else {
+            html += "Last Updated: ${lastUpdated}</br>"
+        }
+        html += "[<a href=\"" + getLocalUri(id) + "\">LOCAL</a>] [<a href=\"" + getCloudUri(id) + "\">REMOTE</a>]</br>"
+        // add Google Map
         html += "<div style=\"width: 100%\"><iframe width=\"100%\" height=\"600\" frameborder=\"0\" scrolling=\"no\" marginheight=\"0\" marginwidth=\"0\" src=\"https://maps.google.com/maps?width=100%25&amp;height=600&amp;hl=en&amp;q=${lat},${lng}&amp;t=&amp;z=13&amp;ie=UTF8&amp;iwloc=B&amp;output=embed\"></iframe></div>"
         html += "<hr>"
-        //if (logEnable) log.debug "Life360+: circleEventHandler: lat: ${lat}, lng: ${lng}"
-        //if (logEnable) log.debug "Life360+: circleEventHandler: member: ${member}, id: ${externalId}"
+
+        if (user) {
+            // set title
+            title += " - " + name
+        }
     }
 
+    // add link to all users
+    html += "<hr>"
+    html += "<b>ALL</b> "
+    html += "[<a href=\"" + getLocalUri(None) + "\">LOCAL</a>] [<a href=\"" + getCloudUri(None) + "\">REMOTE</a>]</br>"
+
+    html = "<title>" + title + "</title>" + html
     render contentType: "text/html", data: html, status: 200
 }
 
-def getLocalUri() {
-    return getFullLocalApiServerUrl() + "/circle?access_token=${state.accessToken}"
+def getLocalUri(String user) {
+    def url = getFullLocalApiServerUrl() + "/circle?access_token=${state.accessToken}"
+    if (user != None) {
+        url += "&user=${user}"
+    }
+    return url
 }
 
-def getCloudUri() {
-    return "${getApiServerUrl()}/${hubUID}/apps/${app.id}/circle?access_token=${state.accessToken}"
+def getCloudUri(String user) {
+    def url = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/circle?access_token=${state.accessToken}"
+    if (user != None) {
+        url += "&user=${user}"
+    }
+    return url
 }
