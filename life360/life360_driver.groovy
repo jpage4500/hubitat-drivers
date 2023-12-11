@@ -44,6 +44,7 @@
  *  Special thanks to namespace: "tmleafs", author: "tmleafs" for his work on the Life360 ST driver
  *
  *  Changes:
+ *  3.0.23 - 12/11/23 - fix bug in sendHistory method
  *  3.0.20 - 10/24/23 - add arrived/departed commands to driver; better error logging
  *  3.0.19 - 10/01/23 - add sendHistory, sendTheMap, historyClearData commands for supporting Life360 Tracker app
  *  3.0.18 - 09/07/23 - reverting previous PR -- it drastically slowed down refresh logic which is a user preference
@@ -460,7 +461,9 @@ def sendHistory(msgValue) {
         try {
             if(state.list1 == null) state.list1 = []
 
-            getDateTime()
+            def date = new Date()
+            newDate=date.format("E HH:mm")
+
             last = "${newDate} - ${msgValue}"
             state.list1.add(0,last)
 
