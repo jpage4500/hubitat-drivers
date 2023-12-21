@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.24 - 12/21/23 - fix Life360 - unable to login
  *  3.0.22 - 12/06/23 - webpage formatting; option to only show a single user
  *  3.0.21 - 12/05/23 - add webpage link which shows users on google map
  *  3.0.20 - 10/24/23 - add arrived/departed commands to driver; better error logging
@@ -176,7 +177,7 @@ def testLife360Connection() {
     }
 }
 
- def initializeLife360Connection() {
+def initializeLife360Connection() {
     if (logEnable) log.debug "Life360+: initializeLife360Connection"
 
     initialize()
@@ -184,8 +185,9 @@ def testLife360Connection() {
     def username = settings.username.encodeURL()
     def password = settings.password.encodeURL()
 
-    //def url = "https://api.life360.com/v3/oauth2/token.json"
-    def url = "https://api-cloudfront.life360.com:443/v3/oauth2/token.json"
+
+    // for reference see https://github.com/pnbruckner/life360/blob/master/life360/api.py
+    def url = "https://api-cloudfront.life360.com/v3/oauth2/token"
 
     def postBody =  "grant_type=password&" +
         "username=${username}&"+
@@ -224,7 +226,7 @@ def listCircles() {
             return
         }
 
-        def urlCircles = "https://api.life360.com/v3/circles.json"
+        def urlCircles = "https://api-cloudfront.life360.com/v4/circles.json"
         def resultCircles = null
 
         try {
