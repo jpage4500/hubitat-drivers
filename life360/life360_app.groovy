@@ -197,7 +197,7 @@ def initializeLife360Connection() {
 
     try {
         //httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
-        httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic Y2F0aGFwYWNyQVBoZUtVc3RlOGV2ZXZldnVjSGFmZVRydVl1ZnJhYzpkOEM5ZVlVdkE2dUZ1YnJ1SmVnZXRyZVZ1dFJlQ1JVWQ==" ]) {response ->
+        httpPost(uri: url, body: postBody, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Basic Y2F0aGFwYWNyQVBoZUtVc3RlOGV2ZXZldnVjSGFmZVRydVl1ZnJhYzpkOEM5ZVlVdkE2dUZ1YnJ1SmVnZXRyZVZ1dFJlQ1JVWQ==" ]) {response ->
              result = response
         }
         if (result.data.access_token) {
@@ -230,7 +230,7 @@ def listCircles() {
         def resultCircles = null
 
         try {
-            httpGet(uri: urlCircles, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> resultCircles = response }
+            httpGet(uri: urlCircles, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> resultCircles = response }
         }
         catch (e) {
            def status = e.getResponse().status
@@ -262,11 +262,11 @@ def listCircles() {
 
             if (!state?.circle) state.circle = settings.circle
 
-            def url = "https://api.life360.com/v3/circles/${state.circle}/places.json"
+            def url = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/places.json"
             def result = null
 
             try {
-                httpGet(uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> result = response }
+                httpGet(uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> result = response }
             }
             catch (e) {
                def status = e.getResponse().status
@@ -307,10 +307,10 @@ def listCircles() {
             if (app.installationState == "COMPLETE") uninstallOption = true
             if (!state?.circle) state.circle = settings.circle
 
-            def url = "https://api.life360.com/v3/circles/${state.circle}/members.json"
+            def url = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/members.json"
             def result = null
 
-            httpGet(uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
+            httpGet(uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
                result = response
             }
 
@@ -370,10 +370,10 @@ def installed() {
 def createCircleSubscription() {
     if (logEnable) log.debug "Life360+: createCircleSubscription: Remove webhook for circle:${state.circle}"
 
-    def deleteUrl = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
+    def deleteUrl = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/webhook.json"
     try { 
         // ignore any errors - there many not be any existing webhooks
-        httpDelete (uri: deleteUrl, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
+        httpDelete (uri: deleteUrl, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     }
     catch (e) {
@@ -383,12 +383,12 @@ def createCircleSubscription() {
     // subscribe to the life360 webhook to get push notifications on place events within this circle
     if (logEnable) log.debug "Life360+: createCircleSubscription: Create webhooks for circle:${state.circle}"
     createAccessToken() // create our own OAUTH access token to use in webhook url
-    def hookUrl = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/placecallback?access_token=${state.accessToken}"
-    def url = "https://api.life360.com/v3/circles/${state.circle}/webhook.json"
+    def hookUrl = "${getFullApiServerUrl()}/placecallback?access_token=${state.accessToken}"
+    def url = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/webhook.json"
     def postBody =  "url=${hookUrl}"
     def result = null
     try {
-        httpPost(uri: url, body: postBody, headers: ["Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
+        httpPost(uri: url, body: postBody, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     } catch (e) {
         log.debug(e)
@@ -471,13 +471,13 @@ def placeEventHandler() {
     def deviceWrapper = getChildDevice("${externalId}")
   
     if (logEnable) log.trace "Life360+: placeEventHandler: about to post request update..."
-    def postUrl = "https://api.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
+    def postUrl = "https://api-cloudfront.life360.com/v3/circles/${circleId}/members/${memberId}/request.json"
     requestResult = null
   
     // once a push event is received, we can force a real-time update of location data via issuing the following
     // post request against the member for which the push event was received
     try {
-        httpPost(uri: postUrl, body: ["type": "location"], headers: ["Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
+        httpPost(uri: postUrl, body: ["type": "location"], headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
             requestResult = response
         }
         requestId = requestResult.data?.requestId
@@ -547,13 +547,13 @@ def updateMembers(){
 
     if (!state?.circle) state.circle = settings.circle
 
-    url = "https://api.life360.com/v3/circles/${state.circle}/members.json"
+    url = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/members.json"
     def result = null
     sendCmd(url, result)
 }
 
 def sendCmd(url, result){
-    def requestParams = [ uri: url, headers: ["Authorization": "Bearer ${state.life360AccessToken}"], timeout: 10 ]
+    def requestParams = [ uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}"], timeout: 10 ]
     asynchttpGet("cmdHandler", requestParams)
 }
 
