@@ -197,7 +197,7 @@ def initializeLife360Connection() {
 
     try {
         //httpPost(uri: url, body: postBody, headers: ["Authorization": "Basic cFJFcXVnYWJSZXRyZTRFc3RldGhlcnVmcmVQdW1hbUV4dWNyRUh1YzptM2ZydXBSZXRSZXN3ZXJFQ2hBUHJFOTZxYWtFZHI0Vg==" ]) {response ->
-        httpPost(uri: url, body: postBody, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Basic Y2F0aGFwYWNyQVBoZUtVc3RlOGV2ZXZldnVjSGFmZVRydVl1ZnJhYzpkOEM5ZVlVdkE2dUZ1YnJ1SmVnZXRyZVZ1dFJlQ1JVWQ==" ]) {response ->
+        httpPost(uri: url, body: postBody, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Basic Y2F0aGFwYWNyQVBoZUtVc3RlOGV2ZXZldnVjSGFmZVRydVl1ZnJhYzpkOEM5ZVlVdkE2dUZ1YnJ1SmVnZXRyZVZ1dFJlQ1JVWQ==" ]) {response ->
              result = response
         }
         if (result.data.access_token) {
@@ -230,7 +230,7 @@ def listCircles() {
         def resultCircles = null
 
         try {
-            httpGet(uri: urlCircles, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> resultCircles = response }
+            httpGet(uri: urlCircles, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> resultCircles = response }
         }
         catch (e) {
            def status = e.getResponse().status
@@ -266,7 +266,7 @@ def listCircles() {
             def result = null
 
             try {
-                httpGet(uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> result = response }
+                httpGet(uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response -> result = response }
             }
             catch (e) {
                def status = e.getResponse().status
@@ -310,7 +310,7 @@ def listCircles() {
             def url = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/members.json"
             def result = null
 
-            httpGet(uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
+            httpGet(uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}", timeout: 30 ]) {response ->
                result = response
             }
 
@@ -373,7 +373,7 @@ def createCircleSubscription() {
     def deleteUrl = "https://api-cloudfront.life360.com/v3/circles/${state.circle}/webhook.json"
     try { 
         // ignore any errors - there many not be any existing webhooks
-        httpDelete (uri: deleteUrl, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
+        httpDelete (uri: deleteUrl, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     }
     catch (e) {
@@ -388,7 +388,7 @@ def createCircleSubscription() {
     def postBody =  "url=${hookUrl}"
     def result = null
     try {
-        httpPost(uri: url, body: postBody, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
+        httpPost(uri: url, body: postBody, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}" ]) {response ->
             result = response}
     } catch (e) {
         log.debug(e)
@@ -477,7 +477,7 @@ def placeEventHandler() {
     // once a push event is received, we can force a real-time update of location data via issuing the following
     // post request against the member for which the push event was received
     try {
-        httpPost(uri: postUrl, body: ["type": "location"], headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
+        httpPost(uri: postUrl, body: ["type": "location"], headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}"]) {response ->
             requestResult = response
         }
         requestId = requestResult.data?.requestId
@@ -553,7 +553,7 @@ def updateMembers(){
 }
 
 def sendCmd(url, result){
-    def requestParams = [ uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.49.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}"], timeout: 10 ]
+    def requestParams = [ uri: url, headers: ["Accept": "application/json", "cache-control": "no-cache", "user-agent": "com.life360.android.safetymapd/KOKO/23.50.0 android/13", "Authorization": "Bearer ${state.life360AccessToken}"], timeout: 10 ]
     asynchttpGet("cmdHandler", requestParams)
 }
 
