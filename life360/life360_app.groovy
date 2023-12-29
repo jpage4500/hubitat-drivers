@@ -51,6 +51,7 @@
  *  This would not be possible without his work.
  *
  *  Changes:
+ *  3.0.25 - 12/29/23 - a few more API changes to try and help some login again
  *  3.0.24 - 12/21/23 - fix Life360 - unable to login
  *  3.0.22 - 12/06/23 - webpage formatting; option to only show a single user
  *  3.0.21 - 12/05/23 - add webpage link which shows users on google map
