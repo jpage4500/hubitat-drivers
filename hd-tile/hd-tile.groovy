@@ -30,6 +30,8 @@ metadata {
 
         attribute "deviceType", "string"
         attribute "url", "string"
+        attribute "url2", "string"
+        attribute "url3", "string"
         attribute "refreshInterval", "number"
         attribute "lastUpdatedMs", "number"
     }
@@ -50,6 +52,10 @@ preferences {
 
     input("url", "string", title: "URL | Zip Code | Stock Symbol", description: "", required: true)
 
+    input("url2", "string", title: "URL #2 (used for tiles that support multiple URL's)", description: "", required: false)
+
+    input("url3", "string", title: "URL #3 (used for tiles that support multiple URL's)", description: "", required: false)
+
     input('refreshInterval', 'enum', title: 'Refresh Rate', required: true,
         defaultValue: '15 Minutes',
         options: ["0": "Never", "15": "15 Seconds", "30": "30 Seconds", "120": "2 Minutes", "300": "5 Minutes", "600": "10 Minutes", "900": "15 Minutes", "1800": "30 Minutes", "3600": "1 Hour", "10800": "3 Hours", "18000": "5 Hours"])
@@ -64,6 +70,8 @@ def updated() {
     if (isLogging) log.debug "updated: ${deviceType}, ${url}, ${refreshInterval}"
     sendEvent(name:"deviceType", value:deviceType)
     sendEvent(name:"url", value:url)
+    sendEvent(name:"url2", value:url2)
+    sendEvent(name:"url3", value:url3)
     sendEvent(name:"refreshInterval", value:refreshInterval)
     sendEvent(name:"lastUpdatedMs", value:new Date().getTime())
 }
