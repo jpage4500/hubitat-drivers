@@ -262,9 +262,11 @@ def parse(String message) {
         case "program_changed":
         case "device_idle":
         case "clear_low_battery":
-        case "device_idle":
         case "battery_status":
             // Do nothing
+            break
+        case "fault":
+            logInfo("fault: ${message}")
             break
         default:
             log.warn "Unknown message: ${message}"
@@ -296,7 +298,7 @@ def webSocketStatus(String message) {
     }
     else if (message == "status: closing") {
         synchronized (socketStatusLock) {
-            log.error "Lost connection to Web Socket: ${message}, will reconnect."
+            logInfo("Lost connection to Web Socket: ${message}, will reconnect.")
             setWebSocketStatus(false)
         }
     }
@@ -360,6 +362,10 @@ def isWebSocketOpen() {
 }
 
 def logDebug(msg) {
-    if (parent.isDebugLogEnabled())
-        log.debug msg
+    if (parent.isDebugLogEnabled()) log.debug msg
 }
+
+def logInfo(String msg) {
+    if (parent.isInfoLogEnabled()) log.info msg
+}
+

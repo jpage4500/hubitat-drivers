@@ -693,6 +693,10 @@ def isDebugLogEnabled() {
     return logDebugMsgs
 }
 
+def isInfoLogEnabled() {
+    return logInfoMsgs
+}
+
 // Constant Declarations
 String DTHDNI(id)                   {(id.startsWith('bhyve'))?id:"bhyve-${app.id}-${id}"}
 String DTHName(type)            { return "Orbit Bhyve ${type}" }
