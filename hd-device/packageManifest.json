@@ -1,7 +1,7 @@
 {
-  "packageName": "HD+ Device",
+  "packageName": "HD+ Companion App",
   "author": "Joe Page",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-10",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
@@ -13,6 +13,17 @@
       "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy",
       "required": true
+    }
+  ],
+  "apps": [
+    {
+      "id": "21757883-2689-48b6-9bb7-1e34d4baea5c",
+      "name": "",
+      "namespace": "",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_app.groovy",
+      "required": true,
+      "oauth": true,
+      "primary": false
     }
   ]
 }

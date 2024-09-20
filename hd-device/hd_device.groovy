@@ -1,14 +1,21 @@
+// hubitat start
+// hub: 192.168.0.200
+// type: device
+// id: 1270
+// hubitat end
+
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** HD+ Device **
- * 
- * Companion Hubitat driver for HD+ Android app: https://community.hubitat.com/t/release-hd-android-dashboard/41674/
+ *
+ * Companion Hubitat app/driver for HD+ Android app: https://community.hubitat.com/t/release-hd-android-dashboard/41674/
  * 
  * - Use as presence for HD+ device (geofence)
  * - Send notifications (text or TTS) to any HD+ device
  * - TODO: instant cloud mode (remote) device status updates
  * 
  *  Changes:
+ *  1.0.7 - 09/17/24 - added Hubitat app and OAUTH support (old version stopped working)
  *  1.0.6 - 11/16/23 - use a more direct method for displaying notifications
  *  1.0.5 - 10/29/23 - reduce logging
  *  1.0.4 - 10/26/23 - add support for PushableButton which can be defined to run custom commands in HD+
@@ -21,9 +28,6 @@
 import groovy.json.*
 import groovy.transform.Field
 import hubitat.helper.InterfaceUtils
-
-@Field static String GURL = "https://fcm.googleapis.com/fcm/send"
-@Field static String GKEY = "QUFBQUNpMndORVU6QVBBOTFiSGNNOEtBY05tektiYjN5RjkzUGhJRTloMXNFbk9mT3E5VDBrRm11SUFxWXhOMTA4MVVaOFNVMmRQRGFnbkdsZElhazAyLTBVSUpJZmZhbGVzSmo5SmotYVpjdC1PMnNFSm12YU5iSmVxSU1zdWFZSlE4aVNwSkpPTWE3d2ZEMEN6YndrRzg="
 
 @Field static String TYPE_TTS = "tts"
 @Field static String TYPE_NOTIFY = "notify"
@@ -40,14 +44,16 @@ metadata {
         capability "PushableButton"
 
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
-        command('setServerKey', [[name: 'Set Server FCM key', type: 'STRING', description: 'NOTE: don\'t update this unless you want to use your own FCM server key']])
-        
+
         //command('startMonitoring', [[name: 'Monitor Device Changes', type: 'STRING', description: 'HD+ will automatically call this']])
         //command "stopMonitoring"
 
         // -- presence sensor commands --
         command "arrived"
         command "departed"
+
+        // debugging
+        command('logTokens')
 
         attribute "presence", "enum", ["present", "not present"]
         attribute "numberOfButtons", "number"
@@ -57,18 +63,41 @@ metadata {
         input name: "isLogging", type: "bool", title: "Enable Logging", description: "", required: true
     }
 
+    // needed by Android client to generate a clientKey
+    attribute "projectId", "string"
+    attribute "appId", "string"
+    attribute "apiKey", "string"
+    // set by Android client (FCM)
     attribute "clientKey", "string"
-    attribute "serverKey", "string"
+
     attribute "notificationText", "string"
 }
 
+def logTokens() {
+    updateTokens()
+}
+
+def updateTokens() {
+    if (parent) {
+        def projectId = parent.getProjectId()
+        sendEvent(name: "projectId", value: projectId)
+        def apiKey = parent.getApiKey()
+        sendEvent(name: "apiKey", value: apiKey)
+        def appId = parent.appId
+        sendEvent(name: "appId", value: appId)
+        if (isLogging) log.debug "updateTokens: proj:$projectId, token:$accessToken, appId:$appId"
+    } else {
+        if (isLogging) log.debug "logTokens: no parent device!"
+    }
+}
+
 def initialize() {
-    serverKey = device.currentValue('serverKey')
-    setServerKey(serverKey)
+    updateTokens()
     sendEvent(name: "numberOfButtons", value: 10)
 }
 
 def updated() {
+    if (isLogging) log.debug "updated:"
     initialize()
 }
 
@@ -81,20 +110,12 @@ def uninstalled() {
     if (isLogging) log.debug "uninstalled:"
 }
 
-def setClientKey (key) {
+/**
+ * NOTE: called by HD+ client to set it's client key -- needed to reach device via FCM
+ */
+def setClientKey(key) {
     if (isLogging) log.debug "setClientKey: ${key}"
     sendEvent( name: "clientKey", value: key )
-}
-
-def setServerKey (key) {
-    if (isLogging) log.debug "setServerKey: ${key}"
-    if (key == null || key.length() == 0) {
-        // use default
-        byte[] decoded = GKEY.decodeBase64()
-        key = new String(decoded)
-        if (isLogging) log.debug "setServerKey: USING DEFAULT KEY"
-    }
-    sendEvent( name: "serverKey", value: key )
 }
 
 /**
@@ -179,43 +200,68 @@ void notifyVia(msgType, text) {
         sendEvent( name: "notificationText", value: text )
     }
 
-    clientKey = device.currentValue('clientKey')
-    serverKey = device.currentValue('serverKey')
+    def projectId = parent?.getProjectId()
+    def oauthToken = parent?.getGoogleAccessToken()
+    def clientKey = device.currentValue('clientKey')
 
-    if (clientKey == null || clientKey.length() == 0) {
+    if (isEmpty(clientKey)) {
         log.error "notifyVia: clientKey not set, text: ${text}"
         return
-    } else if (serverKey == null || serverKey.length() == 0) {
-        log.error "notifyVia: serverKey not set, text: ${text}"
+    } else if (isEmpty(projectId)) {
+        log.error "notifyVia: projectId not set, text: ${text}"
+        return
+    } else if (isEmpty(oauthToken)) {
+        log.error "notifyVia: oauthToken not set, text: ${text}"
         return
     }
 
+    def url = "https://fcm.googleapis.com/v1/projects/${projectId}/messages:send"
+
+//   "message": {
+//    "data": {
+//      "keysandvalues": "{\"key1\": \"value1\", \"key2\": 123}"
+//    }
+//  }
+
     def params = [
-        uri: GURL,
+        uri: "${url}",
         headers: [
-            'Authorization': "key=${serverKey}"
+            "Authorization: Bearer ${oauthToken}",
+            "Content-Type: application/json",
         ],
         body: [
-            to: "${clientKey}"
+            "message": [
+                "token": "${clientKey}",
+                "notification": [
+                    "title": "testing",
+                    "body": "${text}",
+                ],
+                data: [
+                    "type" : "${msgType}",
+                    "deviceId" : "${device.getId()}",
+                    "msg" : "${text}"
+                ]
+            ],
         ],
         contentType: "application/json"
     ]
 
-    if (msgType == TYPE_NOTIFY) {
-        // use notification payload to display system notification (bypass HD+)
-        params["body"]["notification"] = [
-            "body" : "${text}"
-        ]
-    } else {
-        // use data payload to allow HD+ to handle message first
-        params["body"]["data"] = [
-            "type" : "${msgType}",
-            "deviceId" : "${device.getId()}",
-            "msg" : "${text}"
-        ]
-    }
+//    if (msgType == TYPE_NOTIFY) {
+//        // use notification payload to display system notification (bypass HD+)
+//        params["body"]["notification"] = [
+//            "body" : "${text}"
+//        ]
+//    } else {
+//        // use data payload to allow HD+ to handle message first
+//        params["body"]["data"] = [
+//            "type" : "${msgType}",
+//            "deviceId" : "${device.getId()}",
+//            "msg" : "${text}"
+//        ]
+//    }
 
     if (isLogging) log.debug "notifyVia: ${msgType}: text: \"${text}\""
+    if (isLogging) log.debug "notifyVia: ${params}"
 
     asynchttpPost(handlePostCommand, params, params.body)
 }
@@ -224,8 +270,12 @@ def handlePostCommand(resp, data) {
     def respCode = resp.getStatus()
     if (resp.hasError()) {
         // request failed!
-        log.error "handlePostCommand: ERROR: http:${respCode}, body:${resp.getErrorData()}"
+        log.error "handlePostCommand: ERROR: http:${respCode}, err:${resp.getErrorData()}, body:${data}"
     }
+}
+
+static def isEmpty(str) {
+    return (str == null || str.length() == 0)
 }
 
 // ----------------------------------------------------------------------------
