@@ -64,15 +64,20 @@ private logDebug(msg) {
 def mainPage() {
     dynamicPage(name: "mainPage", title: "Setup", install: true, uninstall: true) {
         section {
-            input 'credentials', 'text', title: 'Google credentials.json', required: true, defaultValue: '', submitOnChange: false
+            href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/", title: "Step-by-step instructions", style: "external"
+        }
+        section {
+            input 'credentials', 'text', title: 'Google credentials.json', required: true, defaultValue: '', submitOnChange: true
+            input 'apiKey', 'text', title: 'Android API Key', required: true, defaultValue: '', submitOnChange: true
+            input 'appId', 'text', title: 'App ID', required: true, defaultValue: '', submitOnChange: true
         }
         getAuthLink()
+        showAuthorizedText()
 
         section {
             input name: "debugOutput", type: "bool", title: "Enable Debug Logging?", defaultValue: false, submitOnChange: true
         }
 
-        getPhotosButton()
         getDebugLink()
     }
 }
@@ -93,47 +98,50 @@ def debugPage() {
 }
 
 def getAuthLink() {
-    if (credentials && state?.accessToken) {
-        def creds = getCredentials()
+    def creds = getCredentials()
+    if (creds) {
+        // create access token if one doesn't exist
+        if (state?.accessToken == null) {
+            createAccessToken()
+            log.info("getAuthLink: accessToken:${state?.accessToken}")
+        }
         section {
             href(
                     name       : 'authHref',
-                    title      : 'Auth Link',
+                    title      : 'Authorize App',
                     url        : 'https://accounts.google.com/o/oauth2/v2/auth?' +
                             'redirect_uri=https://cloud.hubitat.com/oauth/stateredirect' +
                             '&state=' + getHubUID() + '/apps/' + app.id + '/handleAuth?access_token=' + state.accessToken +
                             '&access_type=offline&prompt=consent&client_id=' + creds?.client_id +
                             '&response_type=code&scope=https://www.googleapis.com/auth/firebase.messaging',
-                    description: 'Click this link to authorize'
+                    description: 'Click to authorize app with Google'
             )
-        }
-    } else {
-        section {
-            paragraph "Authorization link is hidden until the required credentials.json input is provided, and App installation is saved by clicking 'Done'"
         }
     }
 }
 
-def getPhotosButton() {
+def showAuthorizedText() {
     if (state?.googleAccessToken != null) {
         section {
             paragraph "Authorized!"
         }
     } else {
         section {
-            paragraph "Not authorized - see https://github.com/dkilgore90/google-photos?tab=readme-ov-file"
+            paragraph "Not Authorized - fill in google credentials.json -> Save -> Authorize app with Google"
         }
     }
 }
 
 def getDebugLink() {
-    section{
-        href(
-                name       : 'debugHref',
-                title      : 'Debug buttons',
-                page       : 'debugPage',
-                description: 'Access debug buttons (log current googleAccessToken, force googleAccessToken refresh)'
-        )
+    if (state?.googleRefreshToken) {
+        section {
+            href(
+                    name: 'debugHref',
+                    title: 'Debug buttons',
+                    page: 'debugPage',
+                    description: 'Access debug buttons (log current googleAccessToken, force googleAccessToken refresh)'
+            )
+        }
     }
 }
 
@@ -144,6 +152,25 @@ def getCredentials() {
     } catch (Throwable e) {
         //ignore -- this is thrown when the App first loads, before credentials can be entered
     }
+}
+
+// called by HD+ Device child
+// returns JSON project_id
+def getProjectId() {
+    def creds = getCredentials()
+    return creds?.project_id
+}
+
+// called by HD+ Device child
+// returns Android API Key
+def getApiKey() {
+    return apiKey
+}
+
+// called by HD+ Device child
+// returns OAUTH access token
+def getGoogleAccessToken() {
+    return state?.googleAccessToken
 }
 
 def handleAuthRedirect() {
@@ -175,14 +202,14 @@ def mainPageLink() {
 def updated() {
     log.info "updating"
     rescheduleLogin()
-    resume()
+
+    def childDevice = getChildDevice(state.deviceId)
+    childDevice?.initialize()
 }
 
 def installed() {
     log.info "installed"
-    createAccessToken()
     subscribe(location, 'systemStart', initialize)
-    resume()
     state.deviceId = UUID.randomUUID().toString()
     addChildDevice('jpage4500', "HD+ Device", state.deviceId)
 }
@@ -200,10 +227,12 @@ def initialize(evt) {
 }
 
 def recover() {
+    log.info("recover")
     rescheduleLogin()
 }
 
 def rescheduleLogin() {
+    log.info("rescheduleLogin")
     unschedule(refreshLogin)
     if (state?.googleRefreshToken) {
         refreshLogin()
@@ -267,10 +296,6 @@ def appButtonHandler(btn) {
             refreshLogin()
             break
     }
-}
-
-def resume() {
-    logDebug("resume")
 }
 
 def logToken() {

@@ -6,11 +6,12 @@ https://hubitatpackagemanager.hubitatcommunity.com/devs1.html
 hpm repository-create repository.json --author="Joe Page" --githuburl=https://github.com/jpage4500/hubitat-drivers --paypalurl="https://www.paypal.com/donate/?hosted_button_id=VGPRVU8CSKSR2"
 
 -------------------------------------------------------------------------------
--- HD+ Device --
+-- HD+ Companion App --
 -------------------------------------------------------------------------------
 
 # create package for app and driver(s)
-hpm manifest-create packageManifest.json --name="HD+ Device" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2023-10-10
+hpm manifest-create packageManifest.json --name="HD+ Companion App" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2023-10-10
+hpm manifest-add-app packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_app.groovy --required=true --oauth=true
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy --required=true
 
 # add package to repository
