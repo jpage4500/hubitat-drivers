@@ -217,53 +217,42 @@ void notifyVia(msgType, text) {
 
     def url = "https://fcm.googleapis.com/v1/projects/${projectId}/messages:send"
 
-//   "message": {
-//    "data": {
-//      "keysandvalues": "{\"key1\": \"value1\", \"key2\": 123}"
-//    }
-//  }
+    def headers = [
+        "Authorization": "Bearer ${oauthToken}",
+        "Content-Type": "application/json"
+    ]
+
+    def body = [
+        "message": [
+            "token": "${clientKey}",
+        ],
+    ]
+
+    if (msgType == TYPE_NOTIFY) {
+        // use notification payload to display system notification (no need to start HD+ to display message)
+        body["message"]["notification"] = [
+            "body": "${text}",
+        ]
+    } else {
+        // use data payload to allow HD+ to intercept message (don't show notification)
+        body["message"]["data"] = [
+            "type" : "${msgType}",
+            "deviceId" : "${device.getId()}",
+            "msg" : "${text}"
+        ]
+    }
 
     def params = [
-        uri: "${url}",
-        headers: [
-            "Authorization: Bearer ${oauthToken}",
-            "Content-Type: application/json",
-        ],
-        body: [
-            "message": [
-                "token": "${clientKey}",
-                "notification": [
-                    "title": "testing",
-                    "body": "${text}",
-                ],
-                data: [
-                    "type" : "${msgType}",
-                    "deviceId" : "${device.getId()}",
-                    "msg" : "${text}"
-                ]
-            ],
-        ],
+        uri: url,
+        headers: headers,
+        body: body,
         contentType: "application/json"
     ]
 
-//    if (msgType == TYPE_NOTIFY) {
-//        // use notification payload to display system notification (bypass HD+)
-//        params["body"]["notification"] = [
-//            "body" : "${text}"
-//        ]
-//    } else {
-//        // use data payload to allow HD+ to handle message first
-//        params["body"]["data"] = [
-//            "type" : "${msgType}",
-//            "deviceId" : "${device.getId()}",
-//            "msg" : "${text}"
-//        ]
-//    }
-
     if (isLogging) log.debug "notifyVia: ${msgType}: text: \"${text}\""
-    if (isLogging) log.debug "notifyVia: ${params}"
+    //if (isLogging) log.debug "notifyVia: ${JsonOutput.toJson(body)}"
 
-    asynchttpPost(handlePostCommand, params, params.body)
+    asynchttpPost(handlePostCommand, params, body)
 }
 
 def handlePostCommand(resp, data) {
