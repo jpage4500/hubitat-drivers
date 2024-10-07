@@ -1,3 +1,9 @@
+// hubitat start
+// hub: 192.168.0.200
+// type: device
+// id: 1246
+// hubitat end
+
 /*
 *  Name:    Orbit B•Hyve™ Sprinler Timer
 *  Author:  Kurt Sanders & Dominick Meglio
@@ -93,24 +99,27 @@ def uninstalled() {
 }
 
 def on() {
-open()
+    open()
 }
 
 def off() {
-close()
+    close()
 }
 
 def open() {
     def runTime = presetRunTime ?: device.latestValue('preset_runtime') ?: 10
+    logDebug "open for ${runTime}"
     parent.sendRequest('open', parent.getOrbitDeviceIdFromDNI(device.deviceNetworkId), device.latestValue('station'), runTime)
 }
 
 def open(duration) {
+    logDebug "open for ${duration}"
     parent.sendRequest('open', parent.getOrbitDeviceIdFromDNI(device.deviceNetworkId), device.latestValue('station'), duration)
 }
 
 def close() {
     def runTime = presetRunTime ?: device.latestValue('preset_runtime') ?: 10
+    logDebug "close for ${runTime}"
     parent.sendRequest('close', parent.getOrbitDeviceIdFromDNI(device.deviceNetworkId), device.latestValue('station'), runTime)
 }
 
@@ -133,7 +142,7 @@ def safeWSSend(obj, retry) {
                 interfaces.webSocket.close()
             }
             catch (e) {
-
+                log.warn "safeWSSend: close Exception: ${obj}, ${e}"
             }
             if (state.nextRetry == 0 || now() >= state.nextRetry) {
                 logDebug "Reconnecting to Web Socket"
@@ -152,8 +161,11 @@ def safeWSSend(obj, retry) {
         }
         else
             state.retryCount = 0
-        
-        interfaces.webSocket.sendMessage(new JsonOutput().toJson(obj))
+
+        def json = new JsonOutput().toJson(obj)
+        // parent.debugVerbose "safeWSSend: ${json}"
+
+        interfaces.webSocket.sendMessage(json)
     }
 }
 
