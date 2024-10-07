@@ -15,6 +15,7 @@
  * - TODO: instant cloud mode (remote) device status updates
  *
  *  Changes:
+ *  1.0.8 - 10/07/24 - set FCM messages to high priority (faster delivery)
  *  1.0.7 - 09/17/24 - added Hubitat app and OAUTH support (old version stopped working)
  *  1.0.6 - 11/16/23 - use a more direct method for displaying notifications
  *  1.0.5 - 10/29/23 - reduce logging
@@ -250,7 +251,10 @@ void notifyVia(msgType, text) {
     def body = [
         "message": [
             "token": "${clientKey}",
-        ],
+            "android": [
+                "priority": "high"
+            ]
+        ]
     ]
 
     if (msgType == TYPE_NOTIFY) {

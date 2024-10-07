@@ -460,7 +460,7 @@ void componentOff(DeviceWrapper dw) {
 
     if (code != null) {
         if (txtEnable) {
-            LOG.info "Turning ${dw} off"
+            LOG.info "componentOff: sending ${code} to ${dw}"
         }
         tuyaSendDeviceCommandsAsync(dw.getDataValue('id'), ['code': code, 'value': false])
     } else {
