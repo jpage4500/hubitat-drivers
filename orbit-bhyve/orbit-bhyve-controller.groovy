@@ -1,3 +1,9 @@
+// hubitat start
+// hub: 192.168.0.200
+// type: app
+// id: 686
+// hubitat end
+
 /*
 * Orbit™ B•Hyve™ Controller
 * 2019 (c) SanderSoft™
@@ -148,7 +154,12 @@ def sendRainDelay(device_id, hours) {
 
 def sendRequest(valveState, device_id, zone, run_time) {
     def bhyveHub = findMasterDevice()
-    bhyveHub?.sendWSMessage(valveState, device_id, zone, run_time)
+    if (bhyveHub != null) {
+        bhyveHub?.sendWSMessage(valveState, device_id, zone, run_time)
+    } else {
+        log.error "sendRequest: hub is null! device_id:${device_id}, rum_time:${run_time}"
+    }
+
     runIn(10, "main")
 }
 
