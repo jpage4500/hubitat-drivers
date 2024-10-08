@@ -1,11 +1,11 @@
 {
   "packageName": "HD+ Companion App",
   "author": "Joe Page",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-10",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "set FCM messages to high priority (faster delivery)",
+  "releaseNotes": "fix HPM settings",
   "drivers": [
     {
       "id": "364194d2-f555-47b0-a041-b7c3d12c4135",
@@ -18,8 +18,8 @@
   "apps": [
     {
       "id": "21757883-2689-48b6-9bb7-1e34d4baea5c",
-      "name": "",
-      "namespace": "",
+      "name": "HD+ Companion App",
+      "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_app.groovy",
       "required": true,
       "oauth": true,
