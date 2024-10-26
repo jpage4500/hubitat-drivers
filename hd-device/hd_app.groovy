@@ -250,7 +250,7 @@ def login(String authCode) {
         log.info('login: clientId/clientSecret not set!')
         return;
     }
-    logDebug('Getting access_token from Google')
+    logDebug('login: getting access token..')
     def uri = 'https://www.googleapis.com/oauth2/v4/token'
     def query = [
         client_id    : clientId,
@@ -263,7 +263,9 @@ def login(String authCode) {
     try {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
-        log.error("Login failed -- ${e.getLocalizedMessage()}: ${e.response.data}")
+        log.error("login: ${e.getLocalizedMessage()}: ${e.response.data}")
+    } catch (e) {
+        log.error("login:ERROR: ${e}")
     }
 }
 
@@ -272,7 +274,7 @@ def refreshLogin() {
         log.info('refreshLogin: clientId/clientSecret not set!')
         return;
     }
-    logDebug('Refreshing access_token from Google')
+    logDebug('refreshLogin: refreshing access token..')
     def uri = 'https://www.googleapis.com/oauth2/v4/token'
     def query = [
         client_id    : clientId,
@@ -284,7 +286,10 @@ def refreshLogin() {
     try {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
-        log.error("Login refresh failed -- ${e.getLocalizedMessage()}: ${e.response.data}")
+        log.error("refreshLogin:HttpResponseException: ${e.getLocalizedMessage()}: ${e.response.data}")
+    } catch (e) {
+        // java.net.UnknownHostException: www.googleapis.com: Temporary failure in name resolution on line 285 (method initialize)
+        log.error("refreshLogin:ERROR: ${e}")
     }
 }
 
