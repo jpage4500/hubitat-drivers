@@ -227,12 +227,7 @@ def uninstalled() {
 }
 
 def initialize(evt) {
-    log.debug(evt)
-    recover()
-}
-
-def recover() {
-    logDebug("recover")
+    log.debug("initialize: ${evt.device} ${evt.value} ${evt.name}")
     rescheduleLogin()
 }
 
@@ -287,16 +282,25 @@ def refreshLogin() {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
         log.error("refreshLogin:HttpResponseException: ${e.getLocalizedMessage()}: ${e.response.data}")
+        state.error = "Refresh Error: ${e.getLocalizedMessage()}: ${e.response.data}"
     } catch (e) {
         // java.net.UnknownHostException: www.googleapis.com: Temporary failure in name resolution on line 285 (method initialize)
         log.error("refreshLogin:ERROR: ${e}")
+        state.error = "Refresh Error: ${e}"
     }
 }
 
 def handleLoginResponse(resp) {
+    state.error = null
     def respCode = resp.getStatus()
     def respJson = resp.getData()
-    logDebug("Authorized scopes: ${respJson.scope}")
+    logDebug("handleLoginResponse: ${respCode}, ${respJson}")
+    if (respCode == 200) {
+        state.lastSuccess = new Date()
+    } else {
+        state.error = "Refresh Error: ${respCode}, ${respJson}"
+    }
+    // refresh token not always returned (no change)
     if (respJson.refresh_token) {
         state.googleRefreshToken = respJson.refresh_token
     }
