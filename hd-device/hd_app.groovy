@@ -294,11 +294,12 @@ def handleLoginResponse(resp) {
     state.error = null
     def respCode = resp.getStatus()
     def respJson = resp.getData()
-    logDebug("handleLoginResponse: ${respCode}, ${respJson}")
     if (respCode == 200) {
         state.lastSuccess = new Date()
+        logDebug("handleLoginResponse: ${respCode}")
     } else {
         state.error = "Refresh Error: ${respCode}, ${respJson}"
+        log.error("handleLoginResponse: ERROR: ${respCode}, ${respJson}")
     }
     // refresh token not always returned (no change)
     if (respJson.refresh_token) {
