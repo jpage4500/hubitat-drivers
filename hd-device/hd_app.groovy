@@ -178,6 +178,12 @@ def getGoogleAccessToken() {
     return state?.googleAccessToken
 }
 
+// called by HD+ Device child
+// returns error state
+def getError() {
+    return state?.error
+}
+
 def handleAuthRedirect() {
     log.info('successful redirect from google')
     unschedule(refreshLogin)
