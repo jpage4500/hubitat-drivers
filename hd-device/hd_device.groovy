@@ -15,6 +15,7 @@
  * - TODO: instant cloud mode (remote) device status updates
  *
  *  Changes:
+ *  1.0.10 - 10/28/24 - added error handling and a status variable
  *  1.0.8 - 10/07/24 - set FCM messages to high priority (faster delivery)
  *  1.0.7 - 09/17/24 - added Hubitat app and OAUTH support (old version stopped working)
  *  1.0.6 - 11/16/23 - use a more direct method for displaying notifications
@@ -76,6 +77,8 @@ metadata {
     attribute "apiKey", "string"
     // set by Android client (FCM)
     attribute "clientKey", "string"
+    // driver status: not configured, ready, error
+    attribute "status", "string"
 
     attribute "notificationText", "string"
 }
@@ -86,6 +89,7 @@ def logTokens() {
 
 def updateTokens() {
     if (parent) {
+        // client side values required by HD+ to create a FCM token
         def projectId = parent.getProjectId()
         sendEvent(name: "projectId", value: projectId)
         def apiKey = parent.getApiKey()
@@ -96,6 +100,7 @@ def updateTokens() {
     } else {
         if (isLogging) log.debug "logTokens: no parent device!"
     }
+    updateStatus()
 }
 
 def initialize() {
@@ -123,6 +128,42 @@ def uninstalled() {
 def setClientKey(key) {
     if (isLogging) log.debug "setClientKey: ${key}"
     sendEvent(name: "clientKey", value: key)
+    updateStatus()
+}
+
+/**
+ * check if any config values are missing and set 'status' value
+ */
+def updateStatus() {
+    if (!parent) {
+        sendEvent(name: "status", value: "ERROR: parent app not found")
+        return
+    }
+    def projectId = parent.getProjectId()
+    def oauthToken = parent.getGoogleAccessToken()
+
+    if (isEmpty(projectId)) {
+        sendEvent(name: "status", value: "ERROR: missing projectId")
+        return
+    } else if (isEmpty(oauthToken)) {
+        sendEvent(name: "status", value: "ERROR: missing oauthToken")
+        return
+    }
+
+    // clientKey is set by device -- this is the LAST piece needed
+    def clientKey = device.currentValue('clientKey')
+    if (isEmpty(clientKey)) {
+        sendEvent(name: "status", value: "ERROR: client not configured")
+        return
+    }
+
+    def error = parent.getError()
+    if (isEmpty(error)) {
+        sendEvent(name: "status", value: "READY")
+    } else {
+        sendEvent(name: "status", value: "ERROR: ${error}")
+    }
+
 }
 
 /**
@@ -229,6 +270,7 @@ void notifyVia(msgType, text) {
     def projectId = parent?.getProjectId()
     def oauthToken = parent?.getGoogleAccessToken()
     def clientKey = device.currentValue('clientKey')
+    updateStatus()
 
     if (isEmpty(clientKey)) {
         log.error "notifyVia: clientKey not set, text: ${text}"
