@@ -17,6 +17,7 @@ import groovy.json.JsonSlurper
  * - TODO: instant cloud mode (remote) device status updates
  *
  *  Changes:
+ *  1.0.10 - 10/28/24 - added error handling and a status variable
  *  1.0.7 - 09/17/24 - added Hubitat app and OAUTH support (old version stopped working)
  *  1.0.6 - 11/16/23 - use a more direct method for displaying notifications
  *  1.0.5 - 10/29/23 - reduce logging
@@ -178,6 +179,12 @@ def getGoogleAccessToken() {
     return state?.googleAccessToken
 }
 
+// called by HD+ Device child
+// returns error state
+def getError() {
+    return state?.error
+}
+
 def handleAuthRedirect() {
     log.info('successful redirect from google')
     unschedule(refreshLogin)
@@ -227,12 +234,7 @@ def uninstalled() {
 }
 
 def initialize(evt) {
-    log.debug(evt)
-    recover()
-}
-
-def recover() {
-    logDebug("recover")
+    log.debug("initialize: ${evt.device} ${evt.value} ${evt.name}")
     rescheduleLogin()
 }
 
@@ -250,7 +252,7 @@ def login(String authCode) {
         log.info('login: clientId/clientSecret not set!')
         return;
     }
-    logDebug('Getting access_token from Google')
+    logDebug('login: getting access token..')
     def uri = 'https://www.googleapis.com/oauth2/v4/token'
     def query = [
         client_id    : clientId,
@@ -263,7 +265,9 @@ def login(String authCode) {
     try {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
-        log.error("Login failed -- ${e.getLocalizedMessage()}: ${e.response.data}")
+        log.error("login: ${e.getLocalizedMessage()}: ${e.response.data}")
+    } catch (e) {
+        log.error("login:ERROR: ${e}")
     }
 }
 
@@ -272,7 +276,7 @@ def refreshLogin() {
         log.info('refreshLogin: clientId/clientSecret not set!')
         return;
     }
-    logDebug('Refreshing access_token from Google')
+    logDebug('refreshLogin: refreshing access token..')
     def uri = 'https://www.googleapis.com/oauth2/v4/token'
     def query = [
         client_id    : clientId,
@@ -284,14 +288,27 @@ def refreshLogin() {
     try {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
-        log.error("Login refresh failed -- ${e.getLocalizedMessage()}: ${e.response.data}")
+        log.error("refreshLogin:HttpResponseException: ${e.getLocalizedMessage()}: ${e.response.data}")
+        state.error = "Refresh Error: ${e.getLocalizedMessage()}: ${e.response.data}"
+    } catch (e) {
+        // java.net.UnknownHostException: www.googleapis.com: Temporary failure in name resolution on line 285 (method initialize)
+        log.error("refreshLogin:ERROR: ${e}")
+        state.error = "Refresh Error: ${e}"
     }
 }
 
 def handleLoginResponse(resp) {
+    state.error = null
     def respCode = resp.getStatus()
     def respJson = resp.getData()
-    logDebug("Authorized scopes: ${respJson.scope}")
+    if (respCode == 200) {
+        state.lastSuccess = new Date()
+        logDebug("handleLoginResponse: ${respCode}")
+    } else {
+        state.error = "Refresh Error: ${respCode}, ${respJson}"
+        log.error("handleLoginResponse: ERROR: ${respCode}, ${respJson}")
+    }
+    // refresh token not always returned (no change)
     if (respJson.refresh_token) {
         state.googleRefreshToken = respJson.refresh_token
     }
