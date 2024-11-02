@@ -1,11 +1,11 @@
 {
   "packageName": "HD+ Companion App",
   "author": "Joe Page",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-10",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "added error handling and a status variable",
+  "releaseNotes": "allow adding child devices",
   "drivers": [
     {
       "id": "364194d2-f555-47b0-a041-b7c3d12c4135",
