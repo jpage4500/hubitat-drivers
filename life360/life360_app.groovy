@@ -132,8 +132,10 @@ def fetchCircles() {
                 if (response.status == 200) {
                     state.circles = response.data.circles
                     if (logEnable) log.debug("fetchCircles: DONE")
+                    state.message = null
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
+                    state.message = "fetchCircles: bad response:${response.status}, ${response.data}"
                 }
         }
     } catch (e) {
@@ -159,8 +161,10 @@ def fetchPlaces() {
                 if (response.status == 200) {
                     state.places = response.data.places
                     if (logEnable) log.debug("fetchPlaces: DONE")
+                    state.message = null
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
+                    state.message = "fetchPlaces: bad response:${response.status}, ${response.data}"
                 }
         }
     } catch (e) {
@@ -187,8 +191,10 @@ def fetchMembers() {
                     state.members = response.data.members
                     // update child devices
                     notifyChildDevices()
+                    state.message = null
                 } else {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
+                    state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
                 }
         }
     } catch (e) {
@@ -199,7 +205,7 @@ def fetchMembers() {
 def handleException(String tag, Exception e) {
     if (e instanceof HttpTimeoutException) {
         log.error("${tag}: EXCEPTION: ${e}")
-        state.message = "EXCEPTION: ${tag}: ${e}"
+        state.message = "TIMEOUT: ${tag}: ${e}"
         return;
     }
     def status = e.response?.status
