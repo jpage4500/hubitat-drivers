@@ -1,0 +1,583 @@
+/*
+* BlinkChild
+*
+* Description:
+* This Hubitat driver provides a spot to put data from unknown/unidentified Blink devices
+*
+* Instructions for using Tile Template method (originally based on @mircolino's HTML Templates):
+* 1) In "Hubitat -> Devices" select the child/sensor (not the parent) you would like to "templetize"
+* 2) In "Preferences -> Tile Template" enter your template (example below) and click "Save Preferences"
+*   Ex: "[font size='2'][b]Temperature:[/b] ${ temperature }°${ location.getTemperatureScale() }[/br][/font]"
+* 3) In a Hubitat dashboard, add a new tile, and select the child/sensor, in the center select "Attribute", and on the right select the "Tile" attribute
+* 4) Select the Add Tile button and the tile should appear
+* NOTE: Should accept most HTML formatting commands with [] instead of <>
+* 
+* Features List:
+* Ability to trigger a LiveView from Camera/MiniCamera children
+* Ability to enable/disable motion detection from Camera children
+* Ability to arm/disarm system from Network children
+* Ability to receive just state variables without posting events
+* Ability to display temperature, battery, and more...
+* Ability to check a website (mine) to notify user if there is a newer version of the driver available
+* 
+* KNOWN ISSUE(S):
+* MiniCameras (owls) are unable to have their Motion Detection enabled/disabled directly at this time. There must be a way as the
+*   app allows for it but the commands do not seem to be accepted.
+*
+* Licensing:
+* Copyright 2024 David Snell
+* Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+* in compliance with the License. You may obtain a copy of the License at: http://www.apache.org/licenses/LICENSE-2.0
+* Unless required by applicable law or agreed to in writing, software distributed under the License is distributed
+* on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
+* for the specific language governing permissions and limitations under the License.
+*
+* Version Control:
+* 0.2.5 - Correction to remove Driver Status when preferences are saved
+* 0.2.4 - Correction to ProcessEvent function and removal of old driver-specific attributes when Preferences are saved
+* 0.2.3 - Revised for newer thumbnail capture method
+* 0.2.2 - Update to driver version checking method and attributes
+* 0.2.1 - Revisions to update checking, made more generic for devices, and change to Template method
+* 0.2.0 - Added motion sensor capability and additional related attributes to when it is triggered
+* 0.1.13 - Additional field returned by API
+* 0.1.12 - Replacement of all boolean attributes because boolean attributes are not valid
+* 0.1.11 - Fixed copy-paste error that made it so Disarm for Cameras & MiniCameras did not work (it was calling ArmSystem)
+* 0.1.10 - Removed need for network ID to be sent during camera info request and updated how Mini cameras are handled
+* 0.1.9 - Added switch on/off to children, only applies to Network and Cameras at this time
+* 0.1.8 - Altered switch statement for Arming and logging for arm/disarm
+* 0.1.7 - Tweaks to logging in commands, added GetCameraInfo command
+* 0.1.6 - Added a couple more attributes that showed up and made Arm attributes common
+* 0.1.5 - Corrected RTSP and reordered attributes a bit for clarity, added command for GetCameraLiveView
+* 0.1.4 - Added attributes for sync modules and more for camera info
+* 0.1.3 - Added command to enable/disable motion detection from cameras and arm/disarm system from Network
+* 0.1.2 - Additional attributes for cameras
+* 0.1.1 - Additional attribute "Motion Detection Enabled"
+* 0.1.0 - Initial version
+* 
+* Thank you(s):
+* @Cobra for inspiration of how I perform driver version checking
+* @mircolino for Template method for dashboard use
+* https://github.com/MattTW/BlinkMonitorProtocol for providing the basis for much of what is possible with the API
+*/
+
+// Returns the driver name
+def DriverName(){
+    return "BlinkChild"
+}
+
+// Returns the driver version
+def DriverVersion(){
+    return "0.2.5"
+}
+
+// Driver Metadata
+metadata{
+	definition( name: "BlinkChild", namespace: "Snell", author: "David Snell", importUrl: "https://www.drdsnell.com/projects/hubitat/drivers/BlinkChild.groovy" ) {
+        capability "Sensor"
+        capability "Battery"
+        capability "TemperatureMeasurement"
+        capability "Actuator"
+        capability "Switch"
+        capability "MotionSensor"
+        capability "ImageCapture"
+        
+        // Commands
+        command "on", [ [ name: "This will attempt to Enable motion detection for the device" ] ] // 
+        command "off", [ [ name: "This will attempt to Disable motion detection for the device" ] ] // 
+        command "SystemArm", [ [ name: "This will attempt to Arm system the device is part of" ] ] // 
+        command "SystemDisarm", [ [ name: "This will attempt to Disarm system the device is part of" ] ] // 
+        command "MotionDetectionEnable", [ [ name: "This will attempt to Enable motion detection for the device" ] ] // 
+        command "MotionDetectionDisable", [ [ name: "This will attempt to Disable motion detection for the device" ] ] // 
+        command "GetNewVideo", [ [ name: "This will attempt to capture a new video clip for the device" ] ] // 
+        command "GetCameraLiveView", [ [ name: "This will attempt to start a LiveView stream for the device" ] ] // 
+        command "GetCameraInfo", [ [ name: "This will attempt to get general info for the device" ] ] // 
+        command "GetThumbnail", [ [ name: "This will attempt to capture a new thumbnail for the device" ] ] // 
+        //command "GetThumbnail" // 
+        //command "DoSomething" // For testing and development purposes only, it should not be uncommented for normal use
+        
+        // Attributes - Common
+        attribute "ID", "number" // 
+        attribute "Network ID", "number" // 
+        attribute "Created", "string" // 
+        attribute "Updated", "string" // 
+        attribute "Deleted", "string" //
+        attribute "Status", "string" // 
+        attribute "Name", "string" // 
+        attribute "Serial", "string" // 
+        attribute "Firmware Version", "string" // 
+        attribute "WiFi Strength", "number" // 
+        attribute "Local Storage Compatible", "string" // 
+        attribute "Local Storage Enabled", "string" // 
+        attribute "Local Storage Status", "string" // 
+        attribute "Join State", "number" // 
+        attribute "Options", "map" // 
+        attribute "Continue Warning", "number" // 
+        attribute "Submit Logs", "string" //
+        attribute "Join Available", "string" //
+        attribute "New Command", "string" //
+        attribute "Account ID", "number" // 
+        attribute "Last Command ID", "number" // 
+        attribute "Feature Plan ID", "string" // 
+        attribute "WiFi Signal", "number" // 
+        attribute "temperature", "number" // 
+        attribute "LFR Signal", "number" // 
+        attribute "Battery Signal", "number" // 
+        attribute "Armed", "string" // 
+        attribute "Arm String", "string" // 
+        
+        // Attributes - Network Specific
+        attribute "Auto Arm By Geo", "string" // 
+        attribute "Auto Arm By Time", "string" // 
+        attribute "Camera Error", "string" // 
+        attribute "Sync Module Error", "string" // 
+        attribute "Daylight Savings Time", "string" // 
+        attribute "SM Backup Enabled", "string" // 
+        attribute "Storage Total", "number" // 
+        attribute "LiveView Mode", "string" // 
+        attribute "Video Description", "string" // 
+        attribute "Ping Interval", "number" // 
+        attribute "Network Key", "string" // 
+        attribute "Busy", "string" // 
+        attribute "Network Origin", "string" // 
+        attribute "Time Zone", "string" // 
+        attribute "LFR Channel", "number" // 
+        attribute "Encryption Key", "string" // 
+        attribute "Video History Count", "number" // 
+        attribute "Storage Used", "number" // 
+        attribute "LV Save", "string" //
+        attribute "Location ID", "string" // 
+        
+        // Attributes - Sync Module Specific
+        attribute "Sync Module ID", "number" // 
+        attribute "Onboarded", "string" // 
+        attribute "Last HB", "string" // 
+        attribute "Temp Alerts Enabled", "string" // 
+        attribute "Server", "string" // 
+        attribute "Last Backup Started", "string" // 
+        attribute "Table Update Sequence", "number" // 
+        attribute "Last Activity", "string" // 
+        attribute "Wifi Alert Count", "number" // 
+        attribute "Backfill In Progress", "string" // 
+        attribute "Last Backfill Completed", "string" // 
+        attribute "OS Version", "string" // 
+        attribute "LFR Frequency", "string" // 
+        attribute "Last Wifi Alert", "string" // 
+        attribute "Offline Alert Count", "number" // 
+        attribute "Last Backup Completed", "string" // 
+        
+        // Attributes - Camera Specific
+        attribute "Camera ID", "number" // 
+        attribute "Media ID", "string" // 
+        attribute "Type", "string" //
+        attribute "Enabled", "string" // 
+        attribute "Thumbnail", "string" // 
+        attribute "Thumbnail File", "string" // 
+        attribute "Thumbnail Image", "string" // 
+        attribute "Status", "string" // 
+        attribute "Battery Status", "string" // 
+        attribute "Battery Number", "number" // 
+        attribute "Battery Check Time", "string" // 
+        attribute "Battery Voltage", "number" // 
+        attribute "Battery Alert Account", "string" // 
+        attribute "Battery Alert Count", "number" // 
+        attribute "Battery Voltage Hysteresis", "number" // 
+        attribute "Battery Voltage Threshold", "number" // 
+        attribute "Battery Alarm Enable", "string" // 
+        attribute "Battery Alert Status", "string" // 
+        attribute "Battery Voltage Interval", "number" // 
+        attribute "Last Battery Alert", "string" // 
+        attribute "AC Power", "string" // 
+        attribute "Usage Rate", "string" // 
+        attribute "Issues", "string" // 
+        attribute "LFR Strength", "number" // 
+        attribute "temperature", "number" // 
+        attribute "Temperature Alert Count", "number" // 
+        attribute "Temp Adjust", "number" // 
+        attribute "Temp Alarm Enable", "string" // 
+        attribute "Temp Hysteresis", "number" // 
+        attribute "Temp Max", "number" // 
+        attribute "Temp Min", "number" // 
+        attribute "Temp Alert State", "string" // 
+        attribute "Temp Alert Status", "string" // 
+        attribute "Last Temp Alert", "string" // 
+        attribute "Temp Interval", "number" // 
+        attribute "Usage", "number" // 
+        attribute "LiveView Enabled", "string" // 
+        attribute "LiveView Seconds", "number" // 
+        attribute "Liveview Bitrate", "number" // 
+        attribute "LiveView RTSP", "string" // 
+        attribute "LiveView Duration", "number" // 
+        attribute "LiveView Continue Interval", "number" // 
+        attribute "LiveView Rate", "number" // 
+        attribute "Clip Seconds", "number" // 
+        attribute "Motion Sensitivity", "number" // 
+        attribute "Max Resolution", "string" // 
+        attribute "Account", "number" // 
+        attribute "Motion Detection Enabled", "string" // 
+        attribute "Alert Repeat", "string" // 
+        attribute "LFR Alert Count", "number" // 
+        attribute "Video Recording Optional", "string" // 
+        attribute "Alert Tone Enable", "string" // 
+        attribute "Clip Bitrate", "number" // 
+        attribute "Privacy Zones Compatible", "string" // 
+        attribute "WiFi Timeout", "number" // 
+        attribute "Last Snapshot Event", "string" // 
+        attribute "Illuminator Intensity", "number" // 
+        attribute "Illuminator Duration", "number" // 
+        attribute "Illuminator Enable", "number" // 
+        attribute "Alert Interval", "number" // 
+        attribute "Clip Warning Threshold", "number" // 
+        attribute "Clip Rate", "number" // 
+        attribute "Clip Max Length", "number" // 
+        attribute "Snapshot Enabled", "string" // 
+        attribute "Snapshot Compatible", "string" //
+        attribute "Motion Regions Compatible", "string" // 
+        attribute "Motion Regions", "number" // 
+        attribute "Early Notification Compatible", "string" // 
+        attribute "Early Notification", "string" // 
+        attribute "Invert Image", "string" // 
+        attribute "Video Quality", "string" // 
+        attribute "Video Length", "number" // 
+        attribute "Video hz", "number" // 
+        attribute "Video Recording Enable", "string" // 
+        attribute "Flip Video", "string" // 
+        attribute "Flip Video Compatible", "string" // 
+        attribute "MFG Main Type", "string" // 
+        attribute "MFG Main Range", "number" // 
+        attribute "Retry Count", "number" // 
+        attribute "Record Audio Enable", "string" // 
+        attribute "Record Audio", "string" // 
+        attribute "Auto Test", "string" // 
+        attribute "Early Termination", "string" // 
+        attribute "Flip Image", "string" // 
+        attribute "Siren Enable", "string" // 
+        attribute "Siren Volume", "number" // 
+        attribute "Camera Key", "string" // 
+        attribute "Camera Seq", "number" // 
+        attribute "Night Vision Exposure Compatible", "string" // 
+        attribute "Buzzer On", "string" // 
+        attribute "Early PIR Compatible", "string" // 
+        attribute "Alert Tone Volume", "number" // 
+        attribute "Night Vision Exposure", "number" // 
+        attribute "Snapshot Period Minutes Options", "list" // 
+        attribute "Last LFR Alert", "string" // 
+        attribute "LFR Sync Interval", "number" // 
+        attribute "Unit Number", "number" // 
+        attribute "MFG Mez Range", "number" // 
+        attribute "MFG Mez Type", "string" // 
+        attribute "Early Termination Supported", "string" // 
+        attribute "Total 108 Wakeups", "number" // 
+        attribute "LFR TB Wakeups", "number" // 
+        attribute "Total TB Wakeups", "number" // 
+        attribute "LFR 108 Wakeups", "number" // 
+        attribute "Light Sensor Data Valid", "string" // 
+        attribute "FW Git Hash", "string" // 
+        attribute "Light Sensor CH0", "number" // 
+        attribute "Light Sensor CH1", "number" // 
+        attribute "MAC Address", "string" // 
+        attribute "Time DHCP Lease", "number" // 
+        attribute "Time First Video", "number" // 
+        attribute "Time DNS Resolve", "number" // 
+        attribute "Time 108 Boot", "number" // 
+        attribute "Lifetime Duration", "number" // 
+        attribute "WiFi Connect Failure Count", "number" // 
+        attribute "DHCP Failure Count", "number" // 
+        attribute "IPv", "string" //
+        attribute "Light Sensor Data New", "string" // 
+        attribute "Dev 1", "number" // 
+        attribute "Dev 2", "number" // 
+        attribute "Dev 3", "number" // 
+        attribute "Time WLAN Connect", "number" // 
+        attribute "Socket Failure Count", "number" // 
+        attribute "PIR Rejections", "number" // 
+        attribute "Lifetime Count", "number" // 
+        attribute "Error Codes", "number" // 
+        attribute "Snapshot Period Minutes", "number" // 
+        attribute "Thumbnail Image", "image" // 
+        attribute "Ring Device ID", "string" // 
+        attribute "Local Connection Certificate ID", "string" // 
+        attribute "First Boot", "string" // 
+        attribute "Trigger Source", "string" // Source of the video trigger
+        attribute "Trigger ID", "number" // ID number of the video trigger
+        attribute "Trigger Time", "string" // Date/Time of the video trigger
+
+        // Tile Template attribute
+        attribute "Tile", "string"; // Ex: "[font size='2'][b]Temperature:[/b] ${ temperature }°${ location.getTemperatureScale() }[/br][/font]"
+        attribute "DriverName", "string" // Identifies the driver being used for update purposes
+		attribute "DriverVersion", "string" // Version number of the driver itself
+        attribute "DriverStatus", "string" // Attribute to provide notice to user of driver version changes
+        
+    }
+	preferences{
+		//section{
+            if( ShowAllPreferences ){
+                input( name: "TileTemplate", type: "string", title: "<b>Tile Template</b>", description: "<font size='2'>Ex: [b]Temperature:[/b] \${ state.temperature }&deg;${ location.getTemperatureScale() }[/br]</font>", defaultValue: "");
+    			input( type: "enum", name: "LogType", title: "<b>Enable Logging?</b>", required: false, multiple: false, options: [ "None", "Info", "Debug", "Trace" ], defaultValue: "Info" )
+                input( type: "bool", name: "ShowAllPreferences", title: "<b>Show All Preferences?</b>", defaultValue: true )
+            } else {
+                input( type: "bool", name: "ShowAllPreferences", title: "<b>Show All Preferences?</b>", defaultValue: true )
+            }
+        //}
+	}
+}
+
+// updated
+def updated(){
+    if( LogType == null ){
+        LogType = "Info"
+    }
+
+    // Set the driver name and version before update checking is scheduled
+    if( state."Driver Status" != null ){
+        state.remove( "Driver Name" )
+        state.remove( "Driver Version" )
+        state.remove( "Driver Status" )
+        device.deleteCurrentState( "Driver Status" )
+        device.deleteCurrentState( "Driver Name" )
+        device.deleteCurrentState( "Driver Version" )
+    }
+    ProcessEvent( "DriverName", DriverName() )
+    ProcessEvent( "DriverStatus", null )
+    ProcessEvent( "DriverVersion", DriverVersion() )
+    
+    // Schedule the daily driver version check
+	schedule( new Date(), CheckForUpdate )
+    Logging( "Saved Preferences", 2 )
+}
+
+// DoSomething is for testing and development purposes. It should not be uncommented for normal usage.
+def DoSomething(){
+
+}
+
+// Call the parent device's GetCameraLiveView with this device's ID
+def GetCameraLiveView(){
+    def Temp = device.getDeviceNetworkId()
+    Temp = Temp.split( "-" )
+    Logging( "GetCameraLiveView on Device-${ Temp[ 1 ] }.", 4 )
+    parent.GetCameraLiveView( Temp[ 1 ] )
+}
+
+// Call the parent device's GetNewVideo with this device's ID
+def GetNewVideo(){
+    def Temp = device.getDeviceNetworkId()
+    Temp = Temp.split( "-" )
+    Logging( "GetNewVideo on Device-${ Temp[ 1 ] }.", 4 )
+    parent.GetNewVideo( Temp[ 1 ] )
+}
+
+// Call the parent device's GetCameraInfo with this device's ID
+def GetCameraInfo(){
+    def Temp = device.getDeviceNetworkId()
+    Temp = Temp.split( "-" )
+    if( state."Network ID" != null ){
+        Logging( "GetCameraInfo on Device-${ Temp[ 1 ] }.", 4 )
+        parent.GetCameraInfo( Temp[ 1 ] )
+    } else {
+        Logging( "Device-${ Temp[ 1 ] } does not know Network it belongs to, cannot request info.", 5 )
+    }
+}
+
+// Take is just part of the imageCapture capability
+def take(){
+    GetThumbnail()
+}
+
+// Call the parent device's GetThumbnail with this device's ID
+def GetThumbnail(){
+    def Temp = device.getDeviceNetworkId()
+    Temp = Temp.split( "-" )
+    Logging( "Getting thumbnail on Device-${ Temp[ 1 ] }.", 4 )
+    parent.GetThumbnail( Temp[ 1 ] )
+}
+
+// Call the EnableMotionDetection with this device's ID
+def MotionDetectionEnable(){
+    EnableMotionDetection()
+}
+
+// Call the DisableMotionDetection with this device's ID
+def MotionDetectionDisable(){
+    DisableMotionDetection()
+}
+
+// Call the parent device's EnableMotionDetection with this device's ID
+def EnableMotionDetection(){
+    def Temp = device.getDeviceNetworkId()
+    Temp = Temp.split( "-" )
+    Logging( "Enabling Motion Detection on ${ device.getDeviceNetworkId() }.", 4 )
+    //parent.EnableMotionDetection( Temp[ 1 ] )
+    parent.EnableMotionDetection( state.ID )
+}
+
+// Call the parent device's DisableMotionDetection with this device's ID
+def DisableMotionDetection(){
+    def Temp = device.getDeviceNetworkId()
+    Temp = Temp.split( "-" )
+    Logging( "Disabling Motion Detection on Device-${ Temp[ 1 ] }.", 4 )
+    //parent.DisableMotionDetection( Temp[ 1 ] )
+    parent.DisableMotionDetection( state.ID )
+}
+
+// Call the ArmSystem
+def SystemArm(){
+    ArmSystem()
+}
+
+// Call the DisarmSystem
+def SystemDisarm(){
+    DisarmSystem()
+}
+
+// Call the parent device's ArmSystem with this device's ID
+def ArmSystem(){
+    if( state."Network ID" != null ){
+        parent.ArmSystem( state."Network ID" )
+    } else {
+        Logging( "${ device.getDeviceNetworkId() } does not know Network it belongs to, cannot request info.", 5 )
+    }
+}
+
+// Call the parent device's DisarmSystem with this device's ID
+def DisarmSystem(){
+    if( state."Network ID" != null ){
+        parent.DisarmSystem( state."Network ID" )
+    } else {
+        Logging( "${ device.getDeviceNetworkId() } does not know Network it belongs to, cannot request info.", 5 )
+    }
+}
+
+// on will trigger an EnableMotionDetection command with this device
+def on(){
+    EnableMotionDetection()
+}
+
+// off will trigger an DisableMotionDetection command with this device
+def off(){
+    DisableMotionDetection()
+}
+
+// installed is called when the device is installed, all it really does is run updated
+def installed(){
+	Logging( "Installed", 2 )
+	updated()
+}
+
+// initialize is called when the device is initialized, all it really does is run updated
+def initialize(){
+	Logging( "Initialized", 2 )
+	updated()
+}
+
+// Tile Template method based on @mircolino's HTML Template method
+private void UpdateTile( String val ){
+    if( settings.TileTemplate ){
+        // Create special compound/html tile
+        val = settings.TileTemplate.toString().replaceAll( "\\[", "<" )
+        val = val.replaceAll( "\\]", ">" )
+        val = val.replaceAll( ~/\$\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}/ ) { java.util.ArrayList m -> device.currentValue("${ m [ 1 ] }").toString() }
+        if( device.currentValue( "Tile" ).toString() != val ){
+            sendEvent( name: "Tile", value: val )
+        }
+    }
+}
+
+// Process data to check against current state value and then send an event if it has changed
+def SetDeviceType( Type ){
+    DeviceType = Type
+    Logging( "DeviceType = ${ DeviceType }", 4 )
+}
+
+// Return a state value
+def ReturnState( Variable ){
+    return state."${ Variable }"
+}
+
+// Process data to check against current state value and then send an event if it has changed
+def ProcessEvent( Variable, Value, Unit = null ){
+    if( state."${ Variable }" != Value ){
+        state."${ Variable }" = Value
+        if( Unit != null ){
+            Logging( "Event: ${ Variable } = ${ Value }${ Unit }", 4 )
+            sendEvent( name: "${ Variable }", value: Value, unit: Unit, isStateChange: true )
+        } else {
+            Logging( "Event: ${ Variable } = ${ Value }", 4 )
+            sendEvent( name: "${ Variable }", value: Value, isStateChange: true )
+        }
+        UpdateTile( "${ Value }" )
+    }
+}
+
+// Process data to check against current state value and update if it has changed
+def ProcessState( Variable, Value ){
+    if( state."${ Variable }" != Value ){
+        Logging( "State: ${ Variable } = ${ Value }", 4 )
+        state."${ Variable }" = Value
+        UpdateTile( "${ Value }" )
+    }
+}
+
+// Handles whether logging is enabled and thus what to put there.
+def Logging( LogMessage, LogLevel ){
+	// Add all messages as info logging
+    if( ( LogLevel == 2 ) && ( LogType != "None" ) ){
+        log.info( " ${ device.displayName } - ${ LogMessage }" )
+    } else if( ( LogLevel == 3 ) && ( ( LogType == "Debug" ) || ( LogType == "Trace" ) ) ){
+        log.debug( " ${ device.displayName } - ${ LogMessage }" )
+    } else if( ( LogLevel == 4 ) && ( LogType == "Trace" ) ){
+        log.trace( " ${ device.displayName } - ${ LogMessage }" )
+    } else if( LogLevel == 5 ){
+        log.error( " ${ device.displayName } - ${ LogMessage }" )
+    }
+}
+
+// Checks drdsnell.com for the latest version of the driver
+// Original inspiration from @cobra's version checking
+def CheckForUpdate(){
+    ProcessEvent( "DriverName", DriverName() )
+    ProcessEvent( "DriverVersion", DriverVersion() )
+	httpGet( uri: "https://www.drdsnell.com/projects/hubitat/drivers/versions.json", contentType: "application/json" ){ resp ->
+        switch( resp.status ){
+            case 200:
+                if( resp.data."${ DriverName() }" ){
+                    CurrentVersion = DriverVersion().split( /\./ )
+                    if( resp.data."${ DriverName() }".version == "REPLACED" ){
+                       ProcessEvent( "DriverStatus", "Driver replaced, please use ${ resp.data."${ state.DriverName }".file }" )
+                    } else if( resp.data."${ DriverName() }".version == "REMOVED" ){
+                       ProcessEvent( "DriverStatus", "Driver removed and no longer supported." )
+                    } else {
+                        SiteVersion = resp.data."${ DriverName() }".version.split( /\./ )
+                        if( CurrentVersion == SiteVersion ){
+                            Logging( "Driver version up to date", 3 )
+				            ProcessEvent( "DriverStatus", "Up to date" )
+                        } else if( ( CurrentVersion[ 0 ] as int ) > ( SiteVersion [ 0 ] as int ) ){
+                            Logging( "Major development ${ CurrentVersion[ 0 ] }.${ CurrentVersion[ 1 ] }.${ CurrentVersion[ 2 ] } version", 3 )
+				            ProcessEvent( "DriverStatus", "Major development ${ CurrentVersion[ 0 ] }.${ CurrentVersion[ 1 ] }.${ CurrentVersion[ 2 ] } version" )
+                        } else if( ( CurrentVersion[ 1 ] as int ) > ( SiteVersion [ 1 ] as int ) ){
+                            Logging( "Minor development ${ CurrentVersion[ 0 ] }.${ CurrentVersion[ 1 ] }.${ CurrentVersion[ 2 ] } version", 3 )
+				            ProcessEvent( "DriverStatus", "Minor development ${ CurrentVersion[ 0 ] }.${ CurrentVersion[ 1 ] }.${ CurrentVersion[ 2 ] } version" )
+                        } else if( ( CurrentVersion[ 2 ] as int ) > ( SiteVersion [ 2 ] as int ) ){
+                            Logging( "Patch development ${ CurrentVersion[ 0 ] }.${ CurrentVersion[ 1 ] }.${ CurrentVersion[ 2 ] } version", 3 )
+				            ProcessEvent( "DriverStatus", "Patch development ${ CurrentVersion[ 0 ] }.${ CurrentVersion[ 1 ] }.${ CurrentVersion[ 2 ] } version" )
+                        } else if( ( SiteVersion[ 0 ] as int ) > ( CurrentVersion[ 0 ] as int ) ){
+                            Logging( "New major release ${ SiteVersion[ 0 ] }.${ SiteVersion[ 1 ] }.${ SiteVersion[ 2 ] } available", 2 )
+				            ProcessEvent( "DriverStatus", "New major release ${ SiteVersion[ 0 ] }.${ SiteVersion[ 1 ] }.${ SiteVersion[ 2 ] } available" )
+                        } else if( ( SiteVersion[ 1 ] as int ) > ( CurrentVersion[ 1 ] as int ) ){
+                            Logging( "New minor release ${ SiteVersion[ 0 ] }.${ SiteVersion[ 1 ] }.${ SiteVersion[ 2 ] } available", 2 )
+				            ProcessEvent( "DriverStatus", "New minor release ${ SiteVersion[ 0 ] }.${ SiteVersion[ 1 ] }.${ SiteVersion[ 2 ] } available" )
+                        } else if( ( SiteVersion[ 2 ] as int ) > ( CurrentVersion[ 2 ] as int ) ){
+                            Logging( "New patch ${ SiteVersion[ 0 ] }.${ SiteVersion[ 1 ] }.${ SiteVersion[ 2 ] } available", 2 )
+				            ProcessEvent( "DriverStatus", "New patch ${ SiteVersion[ 0 ] }.${ SiteVersion[ 1 ] }.${ SiteVersion[ 2 ] } available" )
+                        }
+                    }
+                } else {
+                    Logging( "${ DriverName() } is not published on drdsnell.com", 2 )
+                    ProcessEvent( "DriverStatus", "${ DriverName() } is not published on drdsnell.com" )
+                }
+                break
+            default:
+                Logging( "Unable to check drdsnell.com for ${ DriverName() } driver updates.", 2 )
+                break
+        }
+    }
+}
