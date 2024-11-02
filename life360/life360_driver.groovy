@@ -225,7 +225,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     // It is safe to assume that if we are within home radius then we are
     // both present and at home (to address any potential radius jitter)
     String memberPresence = (distanceAway <= homeRadius) ? "present" : "not present"
-    if (logEnable) log.info "Life360+: present: $memberPresence, distance:$distanceAway, home:$homeLatitude/$homeLongitude/$homeRadius"
+    //if (logEnable) log.info "generatePresenceEvent: present: $memberPresence, distance:$distanceAway, home:$homeLatitude/$homeLongitude/$homeRadius"
 
     // Where we think we are now is either at a named place or at address1
     // or perhaps we are on the free version of Life360 (address1  = null)
