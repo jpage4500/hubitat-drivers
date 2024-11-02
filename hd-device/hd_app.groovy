@@ -4,8 +4,6 @@
 // id: 777
 // hubitat end
 
-import groovy.json.JsonSlurper
-
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** HD+ Device **
@@ -17,6 +15,7 @@ import groovy.json.JsonSlurper
  * - TODO: instant cloud mode (remote) device status updates
  *
  *  Changes:
+ *  1.0.11 - 11/02/24 - allow adding child devices
  *  1.0.10 - 10/28/24 - added error handling and a status variable
  *  1.0.7 - 09/17/24 - added Hubitat app and OAUTH support (old version stopped working)
  *  1.0.6 - 11/16/23 - use a more direct method for displaying notifications
@@ -45,7 +44,6 @@ definition(
 
 preferences {
     page(name: 'mainPage')
-    page(name: 'debugPage')
 }
 
 mappings {
@@ -64,97 +62,66 @@ private logDebug(msg) {
 }
 
 def mainPage() {
-    dynamicPage(name: "mainPage", title: "Setup", install: true, uninstall: true) {
+    dynamicPage(name: "mainPage", install: true, uninstall: true) {
         section {
             href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/hd+-companion-app-driver", title: "Step-by-step instructions", style: "external"
         }
-        section {
+        section(header("Hubitat Setup")) {
             input 'clientId', 'text', title: 'Client ID', required: true, defaultValue: '', submitOnChange: true
             input 'clientSecret', 'text', title: 'Client Secret', required: true, defaultValue: '', submitOnChange: true
+            showAuthorizeButton()
+            showAuthorizedText()
+        }
+        section(header("HD+ Setup")) {
             input 'projectId', 'text', title: 'Project ID', required: true, defaultValue: '', submitOnChange: true
             input 'apiKey', 'text', title: 'API Key', required: true, defaultValue: '', submitOnChange: true
             input 'appId', 'text', title: 'App ID', required: true, defaultValue: '', submitOnChange: true
         }
-        getAuthLink()
-        showAuthorizedText()
-
-        // TODO: show child devices so user can add more than 1
-        showChildren()
-
-        section {
+        section(header("Devices")) {
+            showChildren()
+        }
+        section(header("Other")) {
             input name: "debugOutput", type: "bool", title: "Enable Debug Logging?", defaultValue: false, submitOnChange: true
         }
 
-        getDebugLink()
     }
 }
 
 def showChildren() {
-//    def childList = getAllChildDevices()
-//    childList.each {
-//        logDebug("showChildren: ${it.name}")
-//        //input 'device', 'button', title: ${it.name}, submitOnChange: true
-//    }
-}
-
-def debugPage() {
-    dynamicPage(name: "debugPage", title: "Debug", install: false, uninstall: false) {
-        section {
-            paragraph "Debug buttons"
-        }
-        section {
-            input 'getToken', 'button', title: 'Log Access Token', submitOnChange: true
-        }
-        section {
-            input 'refreshToken', 'button', title: 'Force Token Refresh', submitOnChange: true
-        }
-        mainPageLink()
+    def childList = getChildDevices()
+    childList.each {
+        String name = it.getName()
+        String label = it.getLabel()
+        logDebug("showChildren: ${name}, ${label}")
+        paragraph("${name} - ${label}")
     }
+    input("addChildBtn", "button", title: "Add Child Device")
 }
 
-def getAuthLink() {
+def showAuthorizeButton() {
     if (clientId == null || clientSecret == null) return;
     // create access token if one doesn't exist
     if (state?.accessToken == null) {
         createAccessToken()
         log.info("getAuthLink: accessToken:${state?.accessToken}")
     }
-    section {
-        href(
-            name: 'authHref',
-            title: 'Authorize App',
-            url: 'https://accounts.google.com/o/oauth2/v2/auth?' +
-                'redirect_uri=https://cloud.hubitat.com/oauth/stateredirect' +
-                '&state=' + getHubUID() + '/apps/' + app.id + '/handleAuth?access_token=' + state.accessToken +
-                '&access_type=offline&prompt=consent&client_id=' + clientId +
-                '&response_type=code&scope=https://www.googleapis.com/auth/firebase.messaging',
-            description: 'Click to authorize app with Google'
-        )
-    }
+    href(
+        name: 'authHref',
+        title: 'Authorize App',
+        url: 'https://accounts.google.com/o/oauth2/v2/auth?' +
+            'redirect_uri=https://cloud.hubitat.com/oauth/stateredirect' +
+            '&state=' + getHubUID() + '/apps/' + app.id + '/handleAuth?access_token=' + state.accessToken +
+            '&access_type=offline&prompt=consent&client_id=' + clientId +
+            '&response_type=code&scope=https://www.googleapis.com/auth/firebase.messaging',
+        description: 'Click to authorize app with Google'
+    )
 }
 
 def showAuthorizedText() {
     if (state?.googleAccessToken != null) {
-        section {
-            paragraph "Authorized!"
-        }
+        showMessage("Authorized!")
     } else {
-        section {
-            paragraph "Not Authorized - fill in required fields -> Save -> Authorize"
-        }
-    }
-}
-
-def getDebugLink() {
-    if (state?.googleRefreshToken) {
-        section {
-            href(
-                name: 'debugHref',
-                title: 'Debug buttons',
-                page: 'debugPage',
-                description: 'Access debug buttons (log current googleAccessToken, force googleAccessToken refresh)'
-            )
-        }
+        showMessage("Not Authorized - fill in required fields -> Save -> Authorize")
     }
 }
 
@@ -201,18 +168,9 @@ def handleAuthRedirect() {
     render contentType: "text/html", data: html, status: 200
 }
 
-def mainPageLink() {
-    section {
-        href(
-            name: 'Main page',
-            page: 'mainPage',
-            description: 'Back to main page'
-        )
-    }
-}
-
 def updated() {
     logDebug("updating")
+    createChildDevices()
     rescheduleLogin()
 
     def childDevice = getChildDevice(state.deviceId)
@@ -221,8 +179,15 @@ def updated() {
 
 def installed() {
     log.info "installed"
+    createChildDevices()
+    // start app on Hub reboot?
     subscribe(location, 'systemStart', initialize)
-    state.deviceId = UUID.randomUUID().toString()
+}
+
+def createChildDevices() {
+    if (isEmpty(state.deviceId)) {
+        state.deviceId = UUID.randomUUID().toString()
+    }
     addChildDevice('jpage4500', "HD+ Device", state.deviceId)
 }
 
@@ -318,15 +283,27 @@ def handleLoginResponse(resp) {
 def appButtonHandler(btn) {
     logDebug("appButtonHandler: ${btn}")
     switch (btn) {
-        case 'getToken':
-            logToken()
-            break
-        case 'refreshToken':
-            refreshLogin()
-            break
+        case "addChildBtn":
+            logDebug("add child...")
+            String childId = UUID.randomUUID().toString()
+            addChildDevice('jpage4500', "HD+ Device", childId)
+            break;
     }
 }
 
-def logToken() {
-    log.debug("Access Token: ${state.googleAccessToken}")
+// ----------------------------------------------------------------------------
+// Utility functions
+// ----------------------------------------------------------------------------
+static String header(text) {
+    return "<div style='color:#ffffff;font-weight: bold;background-color:#244D76FF;padding-top: 10px;padding-bottom: 10px;border: 1px solid #000000;box-shadow: 2px 3px #8B8F8F;border-radius: 10px'><image style='padding: 0px 10px 0px 10px;' src=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/images/logo.png width='50'> ${text}</div>"
+}
+
+static boolean isEmpty(text) {
+    return text == null || text.isEmpty()
+}
+
+def showMessage(text) {
+    if (!isEmpty(text)) {
+        paragraph("<p style='color:red; font-weight: bold'>${text}</p>")
+    }
 }
