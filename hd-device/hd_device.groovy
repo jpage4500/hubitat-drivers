@@ -15,6 +15,7 @@
  * - TODO: instant cloud mode (remote) device status updates
  *
  *  Changes:
+ *  1.0.11 - 11/02/24 - allow adding child devices
  *  1.0.10 - 10/28/24 - added error handling and a status variable
  *  1.0.8 - 10/07/24 - set FCM messages to high priority (faster delivery)
  *  1.0.7 - 09/17/24 - added Hubitat app and OAUTH support (old version stopped working)
