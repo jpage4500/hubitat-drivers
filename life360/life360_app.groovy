@@ -6,6 +6,8 @@
 
 import groovy.transform.Field
 
+import java.net.http.HttpTimeoutException
+
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** LIFE360+ Hubitat App **
@@ -46,9 +48,9 @@ def mainPage() {
     dynamicPage(name: "mainPage", install: true, uninstall: true) {
         section() {
             href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external"
+            showMessage(state.message)
         }
         section(header("STEP 1: Access Token")) {
-            showMessage(state.message)
             input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true
         }
 
@@ -84,7 +86,7 @@ def mainPage() {
         }
 
         section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute'])
+            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute', '300': '5 minutes'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
         }
 
@@ -123,7 +125,7 @@ def fetchCircles() {
         path   : "/v3/circles.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.debug "fetchCircles: ${params.path}"
+    if (logEnable) log.debug "fetchCircles:"
     try {
         httpGet(params) {
             response ->
@@ -135,10 +137,7 @@ def fetchCircles() {
                 }
         }
     } catch (e) {
-        def status = e.response?.status
-        def err = $ { e.response?.data }
-        log.error("fetchCircles error:  ${status}: ${err}")
-        state.message = "error listing circles: ${status}, ${err}"
+        handleException("fetch circles", e)
     }
 }
 
@@ -153,7 +152,7 @@ def fetchPlaces() {
         path   : "/v3/circles/${circle}/places.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.debug "fetchPlaces: ${params.path}"
+    if (logEnable) log.debug "fetchPlaces:"
     try {
         httpGet(params) {
             response ->
@@ -165,10 +164,7 @@ def fetchPlaces() {
                 }
         }
     } catch (e) {
-        def status = e.response?.status
-        def err = $ { e.response?.data }
-        log.error("fetchPlaces error:  ${status}: ${err}")
-        state.message = "error fetching places: ${status}, ${err}"
+        handleException("fetch places", e)
     }
 }
 
@@ -183,7 +179,7 @@ def fetchMembers() {
         path   : "/v3/circles/${circle}/members.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.trace("fetchMembers: ${params.path}")
+    if (logEnable) log.trace("fetchMembers:")
     try {
         httpGet(params) {
             response ->
@@ -196,11 +192,20 @@ def fetchMembers() {
                 }
         }
     } catch (e) {
-        def status = e.response?.status
-        def err = $ { e.response?.data }
-        log.error("fetchMembers error:  ${status}: ${err}")
-        state.message = "error listing members: ${status}, ${err}"
+        handleException("fetch members", e)
     }
+}
+
+def handleException(String tag, Exception e) {
+    if (e instanceof HttpTimeoutException) {
+        log.error("${tag}: EXCEPTION: ${e}")
+        state.message = "EXCEPTION: ${tag}: ${e}"
+        return;
+    }
+    def status = e.response?.status
+    def err = e.response?.data
+    log.error("handleException: ${tag}: ${status}: ${err}")
+    state.message = "ERROR: ${tag}: ${status}, ${err}"
 }
 
 Map getHttpHeaders() {
@@ -282,12 +287,9 @@ def scheduleUpdates() {
         if (numLocationUpdates == 0) {
             // update every 30 seconds
             refreshSecs = 30
-        } else if (numLocationUpdates == 1) {
+        } else if (numLocationUpdates >= 1) {
             // update every 15 seconds
             refreshSecs = 15
-        } else if (numLocationUpdates >= 2) {
-            // update every 10 seconds
-            refreshSecs = 10
         }
     } else {
         refreshSecs = pollFreq.toInteger()
@@ -375,9 +377,9 @@ def notifyChildDevices() {
             def deviceWrapper = getChildDevice("${externalId}")
             if (deviceWrapper != null) {
                 // send circle places and home to individual children
-                if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
+                //if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
                 boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
-                if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
+                //if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
                 if (isChanged) isAnyChanged = true
             } else {
                 log.error("notifyChildDevices: device not found: ${externalId}")
@@ -388,24 +390,23 @@ def notifyChildDevices() {
         }
     }
 
-//    if (pollFreq == "auto") {
-//        // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
-//        // - if user(s) are moving, update more frequently; if not, update less frequently
-//        def Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
-//        def Integer numLocationUpdates = prevLocationUpdates
-//        numLocationUpdates += isAnyChanged ? 1 : -1
-//        // max out at 3 to prevent a long drive from not slowing down API calls for a while after
-//        if (numLocationUpdates < 0) numLocationUpdates = 0
-//        else if (numLocationUpdates > 2) numLocationUpdates = 2
-//        state.numLocationUpdates = numLocationUpdates
-//        //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
-//
-//        // calling schedule() can result in it firing right away so only do it if anything changes
-//        if (numLocationUpdates != prevLocationUpdates) {
-//            scheduleUpdates()
-//        }
-//    }
+    if (pollFreq == "auto") {
+        // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
+        // - if user(s) are moving, update more frequently; if not, update less frequently
+        Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+        Integer numLocationUpdates = prevLocationUpdates
+        numLocationUpdates += isAnyChanged ? 1 : -1
+        // max out at 3 to prevent a long drive from not slowing down API calls for a while after
+        if (numLocationUpdates < 0) numLocationUpdates = 0
+        else if (numLocationUpdates > 2) numLocationUpdates = 2
+        state.numLocationUpdates = numLocationUpdates
+        //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
 
+        // calling schedule() can result in it firing right away so only do it if anything changes
+        if (numLocationUpdates != prevLocationUpdates) {
+            scheduleUpdates()
+        }
+    }
 }
 
 def childList() {
