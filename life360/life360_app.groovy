@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.2 - 11/03/24 - restore webhook
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
  *  4.0.0 - 02/08/24 - implement new Life360 API
  *
