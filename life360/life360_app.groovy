@@ -153,7 +153,10 @@ def fetchCircles() {
 }
 
 def fetchPlaces() {
-    if (!isReady("fetchPlaces", circle)) return;
+    if (isEmpty(circle)) {
+        log.debug("fetchPlaces: circle not set")
+        return;
+    }
 
     // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
     def params = [
@@ -161,6 +164,7 @@ def fetchPlaces() {
         path   : "/v3/circles/${circle}/places.json",
         headers: getHttpHeaders()
     ]
+    log.debug("fetchPlaces:")
     try {
         httpGet(params) {
             response ->
@@ -221,15 +225,6 @@ def fetchMembers() {
     } catch (e) {
         handleException("fetch members", e)
     }
-}
-
-def isReady(String tag, Object input) {
-    if (isEmpty(input)) {
-        log.error("${tag}: not setup")
-        return false;
-    }
-    if (logEnable) log.debug "${tag}:"
-    return true
 }
 
 def handleException(String tag, Exception e) {
@@ -450,7 +445,10 @@ def notifyChildDevices() {
  * subscribe to the life360 webhook to get push notifications on place events within this circle
  */
 def createCircleSubscription() {
-    if (!isReady("createCircleSubscription", circle)) return;
+    if (isEmpty(circle)) {
+        log.debug("createCircleSubscription: circle not set")
+        return;
+    }
 
     // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
     def params = [
