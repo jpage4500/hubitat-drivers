@@ -250,6 +250,7 @@ static boolean isEmpty(text) {
 def installed() {
     log.debug("installed")
     createChildDevices()
+    // re-schedule updates on reboot; TODO: is this needed?
     subscribe(location, 'systemStart', initialize)
     scheduleUpdates()
 }
@@ -336,15 +337,18 @@ def createChildDevices() {
     if (isEmpty(state.members)) return;
 
     settings.users.each { memberId ->
-        def member = state.members.find { it.id == memberId }
-        if (member) {
+        def externalId = "${app.id}.${memberId}"
+        def deviceWrapper = getChildDevice("${externalId}")
+        if (!deviceWrapper) {
+            def member = state.members.find { it.id == memberId }
+            def memberName = member.firstName
             def childDevice = childList()
             if (childDevice.find { it.data.vcId == "${member}" }) {
-                if (logEnable) log.info "createChildDevices: ${member.firstName} already exists...skipping"
+                if (logEnable) log.info "createChildDevices: ${memberName} already exists...skipping"
             } else {
-                log.info "createChildDevices: Creating Life360 Device: " + member
+                log.info "createChildDevices: Creating Life360 Device: ${memberName}"
                 try {
-                    addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
+                    addChildDevice("jpage4500", "Life360+ Driver", externalId, 1234, ["name": "Life360 - ${memberName}", isComponent: false])
                     log.info "createChildDevices: Child Device Successfully Created"
                 }
                 catch (e) {
