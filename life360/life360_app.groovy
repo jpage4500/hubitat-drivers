@@ -4,8 +4,6 @@
 // id: 684
 // hubitat end
 
-import groovy.transform.Field
-
 import java.net.http.HttpTimeoutException
 
 /**
@@ -144,17 +142,14 @@ def fetchCircles() {
 }
 
 def fetchPlaces() {
-    if (isEmpty(circle)) {
-        log.debug("fetchPlaces: circle not set")
-        return;
-    }
+    if (!isReady("fetchPlaces", circle)) return;
+
     // https://api-cloudfront.life360.com/v3/circles/${state.circle}/places.json
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/places.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.debug "fetchPlaces:"
     try {
         httpGet(params) {
             response ->
@@ -173,17 +168,15 @@ def fetchPlaces() {
 }
 
 def fetchMembers() {
-    if (isEmpty(circle)) {
-        log.debug("fetchMembers: circle not set")
-        return;
-    }
+    if (!isReady("fetchMembers", circle)) return;
+
     // https://api-cloudfront.life360.com/v3/circles/${state.circle}/members.json
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/members.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.trace("fetchMembers:")
+
     try {
         httpGet(params) {
             response ->
@@ -200,6 +193,15 @@ def fetchMembers() {
     } catch (e) {
         handleException("fetch members", e)
     }
+}
+
+def isReady(String tag, Object input) {
+    if (isEmpty(input)) {
+        log.error("${tag}: not setup")
+        return false;
+    }
+    if (logEnable) log.debug "${tag}:"
+    return true
 }
 
 def handleException(String tag, Exception e) {
@@ -449,3 +451,4 @@ def getCloudUri(String user) {
     }
     return url
 }
+
