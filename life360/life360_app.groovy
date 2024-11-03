@@ -4,8 +4,6 @@
 // id: 684
 // hubitat end
 
-import groovy.transform.Field
-
 import java.net.http.HttpTimeoutException
 
 /**
@@ -15,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.2 - 11/03/24 - restore webhook
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
  *  4.0.0 - 02/08/24 - implement new Life360 API
  *
@@ -37,6 +36,17 @@ definition(
 
 preferences {
     page(name: "mainPage")
+}
+
+mappings {
+    // used for Life360 webhook
+    path("/placecallback") {
+        action:
+        [
+            POST: "placeEventHandler",
+            GET : "placeEventHandler"
+        ]
+    }
 }
 
 /**
@@ -89,7 +99,6 @@ def mainPage() {
             input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute', '300': '5 minutes'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
         }
-
     }
 }
 
@@ -148,13 +157,14 @@ def fetchPlaces() {
         log.debug("fetchPlaces: circle not set")
         return;
     }
-    // https://api-cloudfront.life360.com/v3/circles/${state.circle}/places.json
+
+    // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/places.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.debug "fetchPlaces:"
+    log.debug("fetchPlaces:")
     try {
         httpGet(params) {
             response ->
@@ -177,13 +187,28 @@ def fetchMembers() {
         log.debug("fetchMembers: circle not set")
         return;
     }
-    // https://api-cloudfront.life360.com/v3/circles/${state.circle}/members.json
+
+    // prevent calling this API too frequently
+    long diffMs = 0
+    long currentTimeMs = new Date().getTime()
+    if (state.lastUpdateMs != null) {
+        diffMs = currentTimeMs - state.lastUpdateMs
+        if (diffMs < 5000) {
+            if (logEnable) log.trace "fetchMembers: TOO_FREQUENT: last:${diffMs}ms"
+            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${diffMs}ms"
+            return
+        }
+    }
+    state.lastUpdateMs = currentTimeMs
+    if (logEnable) log.trace("fetchMembers: last:${diffMs}ms")
+
+    // https://api-cloudfront.life360.com/v3/circles/${circle}/members.json
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/members.json",
         headers: getHttpHeaders()
     ]
-    if (logEnable) log.trace("fetchMembers:")
+
     try {
         httpGet(params) {
             response ->
@@ -250,6 +275,7 @@ static boolean isEmpty(text) {
 def installed() {
     log.debug("installed")
     createChildDevices()
+    // re-schedule updates on reboot; TODO: is this needed?
     subscribe(location, 'systemStart', initialize)
     scheduleUpdates()
 }
@@ -271,6 +297,11 @@ def initialize(evt) {
 def initialize() {
     log.debug("initialize")
     state.message = null
+}
+
+def uninstalled() {
+    log.debug("uninstalled")
+    removeChildDevices(getChildDevices())
 }
 
 /**
@@ -303,31 +334,17 @@ def scheduleUpdates() {
     if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
-        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
+        schedule("0/${refreshSecs} * * * * ? *", fetchMembers)
     } else {
         // mins
-        schedule("0 */${refreshSecs / 60} * * * ? *", handleTimerFired)
+        schedule("0 */${refreshSecs / 60} * * * ? *", fetchMembers)
     }
 }
 
 /**
- * fetch members
- * NOTE: will rate limit this call to prevent calling API too frequently
+ * TODO: only needed for old version which timer is calling.. can be deleted later
  */
 def handleTimerFired() {
-    // prevent calling API too frequently 
-    // - I noticed calling schedule() can cause it to fire immediately sometimes
-    Long currentTimeMs = new Date().getTime()
-    Long lastUpdateMs = state.lastUpdateMs != null ? state.lastUpdateMs : 0
-    Long diff = currentTimeMs - lastUpdateMs
-    if (diff < 2000) {
-        if (logEnable) log.trace "handleTimerFired: already up-to-date; ${diff}ms"
-        return
-    }
-    state.lastUpdateMs = currentTimeMs
-    if (logEnable) log.trace "handleTimerFired: last:${diff}ms"
-
-    // fetch members and update locations
     fetchMembers()
 }
 
@@ -336,15 +353,18 @@ def createChildDevices() {
     if (isEmpty(state.members)) return;
 
     settings.users.each { memberId ->
-        def member = state.members.find { it.id == memberId }
-        if (member) {
-            def childDevice = childList()
-            if (childDevice.find { it.data.vcId == "${member}" }) {
-                if (logEnable) log.info "createChildDevices: ${member.firstName} already exists...skipping"
+        def externalId = "${app.id}.${memberId}"
+        def deviceWrapper = getChildDevice("${externalId}")
+        if (!deviceWrapper) {
+            def member = state.members.find { it.id == memberId }
+            def memberName = member.firstName
+            def childList = getChildDevices()
+            if (childList.find { it.data.vcId == "${member}" }) {
+                if (logEnable) log.info "createChildDevices: ${memberName} already exists...skipping"
             } else {
-                log.info "createChildDevices: Creating Life360 Device: " + member
+                log.info "createChildDevices: Creating Life360 Device: ${memberName}"
                 try {
-                    addChildDevice("jpage4500", "Life360+ Driver", "${app.id}.${member.id}", 1234, ["name": "Life360 - ${member.firstName}", isComponent: false])
+                    addChildDevice("jpage4500", "Life360+ Driver", externalId, 1234, ["name": "Life360 - ${memberName}", isComponent: false])
                     log.info "createChildDevices: Child Device Successfully Created"
                 }
                 catch (e) {
@@ -353,6 +373,12 @@ def createChildDevices() {
             }
         }
     }
+
+    createCircleSubscription()
+}
+
+private removeChildDevices(delete) {
+    delete.each { deleteChildDevice(it.deviceNetworkId) }
 }
 
 /**
@@ -415,19 +441,73 @@ def notifyChildDevices() {
     }
 }
 
-def childList() {
-    def children = getChildDevices()
-    if (logEnable) log.debug "childList: children: ${children}"
-    return children
+/**
+ * subscribe to the life360 webhook to get push notifications on place events within this circle
+ */
+def createCircleSubscription() {
+    if (isEmpty(circle)) {
+        log.debug("createCircleSubscription: circle not set")
+        return;
+    }
+
+    // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
+    def params = [
+        uri    : "https://api-cloudfront.life360.com",
+        path   : "/v3/circles/${circle}/webhook.json",
+        headers: getHttpHeaders()
+    ]
+    try {
+        httpDelete(params) {
+            response ->
+                if (response.status == 200) {
+                    if (logEnable) log.trace("createCircleSubscription: REMOVE_WEBHOOK: DONE")
+                } else {
+                    log.debug("createCircleSubscription: REMOVE_WEBHOOK: bad response:${response.status}, ${response.data}")
+                }
+        }
+    }
+    catch (e) {
+        // ignore any errors - there many not be any existing webhooks
+        log.debug("createCircleSubscription: REMOVE_WEBHOOK: ${e}")
+    }
+
+    // create our own OAUTH access token to use in webhook url
+    createAccessToken()
+    def hookUrl = "${getFullApiServerUrl()}/placecallback?access_token=${state.accessToken}"
+
+    params["body"] = "url=${hookUrl}"
+
+    try {
+        httpPost(params) {
+            response ->
+                if (response.status == 200) {
+                    log.info("createCircleSubscription: DONE: URL:${response.data?.hookUrl}")
+                } else {
+                    log.error("createCircleSubscription: ERROR: bad response:${response.status}, ${response.data}")
+                }
+        }
+    }
+    catch (e) {
+        // ignore any errors - there many not be any existing webhooks
+        log.error("createCircleSubscription: EXCEPTION: ${e}")
+    }
 }
 
-def uninstalled() {
-    log.debug("uninstalled")
-    removeChildDevices(getChildDevices())
-}
+/**
+ * called by Life360 webhook on member entering or exiting a defined place
+ */
+def placeEventHandler() {
+    log.info("placeEventHandler: ${params}")
 
-private removeChildDevices(delete) {
-    delete.each { deleteChildDevice(it.deviceNetworkId) }
+    // TODO: we get info about the member/place in the webhook - ideally only update that member's location
+//    def circleId = params?.circleId
+//    def placeId = params?.placeId
+//    def memberId = params?.userId
+//    def direction = params?.direction
+//    def timestamp = params?.timestamp
+
+    // update location of all members
+    fetchMembers()
 }
 
 def getLocalUri(String user) {
@@ -445,3 +525,4 @@ def getCloudUri(String user) {
     }
     return url
 }
+
