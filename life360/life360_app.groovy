@@ -231,9 +231,14 @@ def handleException(String tag, Exception e) {
     if (e instanceof HttpTimeoutException) {
         log.error("${tag}: EXCEPTION: ${e}")
         state.message = "TIMEOUT: ${tag}: ${e}"
-        return;
+        return
     }
     def status = e.response?.status
+    if (status == 403) {
+        log.error("handleException: ${tag}: ${status}")
+        state.message = "ERROR: ${tag}: ${status}"
+        return
+    }
     def err = e.response?.data
     log.error("handleException: ${tag}: ${status}: ${err}")
     state.message = "ERROR: ${tag}: ${status}, ${err}"
@@ -374,7 +379,8 @@ def createChildDevices() {
         }
     }
 
-    createCircleSubscription()
+    // not enabling webhook as it doesn't appear to work anymore
+    // createCircleSubscription()
 }
 
 private removeChildDevices(delete) {
@@ -450,7 +456,7 @@ def createCircleSubscription() {
         return;
     }
 
-    // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
+    // https://api-cloudfront.life360.com/v3/circles/${circle}/webhook.json
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/webhook.json",
@@ -474,6 +480,7 @@ def createCircleSubscription() {
     // create our own OAUTH access token to use in webhook url
     createAccessToken()
     def hookUrl = "${getFullApiServerUrl()}/placecallback?access_token=${state.accessToken}"
+    log.debug("createCircleSubscription: creating webhook url: ${hookUrl}")
 
     params["body"] = "url=${hookUrl}"
 
@@ -481,7 +488,7 @@ def createCircleSubscription() {
         httpPost(params) {
             response ->
                 if (response.status == 200) {
-                    log.info("createCircleSubscription: DONE: URL:${response.data?.hookUrl}")
+                    log.info("createCircleSubscription: DONE: ${response.data}")
                 } else {
                     log.error("createCircleSubscription: ERROR: bad response:${response.status}, ${response.data}")
                 }
