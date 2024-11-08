@@ -79,6 +79,7 @@ def mainPage() {
         }
         section(header("Devices")) {
             showChildren()
+            input "linkedDevices", "capability.presenceSensor", title: "Linked Devices", multiple: true, required: false
         }
         section(header("Other")) {
             input name: "debugOutput", type: "bool", title: "Enable Debug Logging?", defaultValue: false, submitOnChange: true
@@ -175,6 +176,8 @@ def updated() {
 
     def childDevice = getChildDevice(state.deviceId)
     childDevice?.initialize()
+    
+    updateLinkedDevices()
 }
 
 def installed() {
@@ -188,7 +191,9 @@ def createChildDevices() {
     if (isEmpty(state.deviceId)) {
         state.deviceId = UUID.randomUUID().toString()
     }
-    addChildDevice('jpage4500', "HD+ Device", state.deviceId)
+    
+    if (!getChildDevice(state.deviceId))
+        addChildDevice('jpage4500', "HD+ Device", state.deviceId)
 }
 
 def uninstalled() {
@@ -278,6 +283,16 @@ def handleLoginResponse(resp) {
         state.googleRefreshToken = respJson.refresh_token
     }
     state.googleAccessToken = respJson.access_token
+    
+    updateLinkedDevices()
+}
+
+def updateLinkedDevices() {
+    linkedDevices.forEach {d -> 
+        d.setProjectID(getProjectId())
+        d.setApiKey(getApiKey())
+        d.setGoogleAccessToken(getGoogleAccessToken())
+    }
 }
 
 def appButtonHandler(btn) {
