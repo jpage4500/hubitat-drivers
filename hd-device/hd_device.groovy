@@ -52,6 +52,9 @@ metadata {
         capability "PresenceSensor"
         capability "PushableButton"
 
+        command('setProjectID', [[name: 'Set Project ID', type: 'STRING', description: 'HD+ will automatically set the project ID']])
+        command('setApiKey', [[name: 'Set API key', type: 'STRING', description: 'HD+ will automatically set the API key']])
+        command('setGoogleAccessToken', [[name: 'Set Project ID', type: 'STRING', description: 'HD+ will automatically set the access token']])
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
 
         //command('startMonitoring', [[name: 'Monitor Device Changes', type: 'STRING', description: 'HD+ will automatically call this']])
@@ -88,19 +91,48 @@ def logTokens() {
     updateTokens()
 }
 
+def setProjectID(String projectId) {
+    state.projectId = projectId
+}
+
+def setApiKey(String key) {
+    state.apiKey = key
+}
+
+def setGoogleAccessToken(String token) {
+    state.googleAccessToken = token
+}
+
+String getGoogleAccessToken() {
+    if (parent) return parent.getGoogleAccessToken()
+    return state.googleAccessToken
+}
+
+String getProjectID() {
+    if (parent) return parent.getProjectId()
+    return state.projectId
+}
+
+String getApiKey() {
+    if (parent) return parent.getApiKey()
+    return state.apiKey
+}
+
 def updateTokens() {
-    if (parent) {
-        // client side values required by HD+ to create a FCM token
-        def projectId = parent.getProjectId()
-        sendEvent(name: "projectId", value: projectId)
-        def apiKey = parent.getApiKey()
-        sendEvent(name: "apiKey", value: apiKey)
-        def appId = parent.getAppId()
-        sendEvent(name: "appId", value: appId)
-        if (isLogging) log.debug "updateTokens: proj:$projectId, token:$accessToken, appId:$appId"
-    } else {
+    // client side values required by HD+ to create a FCM token
+    def projectId = getProjectID()
+    if (projectId == null) {
         if (isLogging) log.debug "logTokens: no parent device!"
     }
+    else {
+        sendEvent(name: "projectId", value: projectId)
+        def apiKey = getApiKey()
+        sendEvent(name: "apiKey", value: apiKey)
+        def appId = parent?.getAppId()
+        sendEvent(name: "appId", value: appId)
+        if (isLogging) log.debug "updateTokens: proj:$projectId, token:$accessToken, appId:$appId"
+    }
+    
     updateStatus()
 }
 
@@ -136,12 +168,13 @@ def setClientKey(key) {
  * check if any config values are missing and set 'status' value
  */
 def updateStatus() {
-    if (!parent) {
+    def projectId = getProjectID()
+    def oauthToken = getGoogleAccessToken()
+    
+    if (!parent && !projectId) {
         sendEvent(name: "status", value: "ERROR: parent app not found")
         return
     }
-    def projectId = parent.getProjectId()
-    def oauthToken = parent.getGoogleAccessToken()
 
     if (isEmpty(projectId)) {
         sendEvent(name: "status", value: "ERROR: missing projectId")
@@ -158,9 +191,9 @@ def updateStatus() {
         return
     }
 
-    def error = parent.getError()
+    def error = parent?.getError()
     if (isEmpty(error)) {
-        sendEvent(name: "status", value: "READY")
+        sendEvent(name: "status", value: parent ? "READY" : "UNKNOWN")
     } else {
         sendEvent(name: "status", value: "ERROR: ${error}")
     }
@@ -268,8 +301,8 @@ void notifyVia(msgType, text) {
         sendEvent(name: "notificationText", value: text)
     }
 
-    def projectId = parent?.getProjectId()
-    def oauthToken = parent?.getGoogleAccessToken()
+    def projectId = getProjectID()
+    def oauthToken = getGoogleAccessToken()
     def clientKey = device.currentValue('clientKey')
     updateStatus()
 
