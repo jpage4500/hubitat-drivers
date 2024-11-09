@@ -12,6 +12,7 @@
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  *
  *  Changes:
+ *  5.0.4 - 11/09/24 - use newer API
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
@@ -45,7 +46,7 @@ metadata {
         attribute "isDriving", "enum", ["true", "false"]
         attribute "speed", "number"
         attribute "distance", "number"
-        attribute "since", "number"
+        attribute "userActivity", "string"
 
         // device data
         attribute "battery", "number"
@@ -139,39 +140,54 @@ def updated() {
     refresh()
 }
 
+def strToDate(dateStr) {
+    try {
+        // "updated": "2024-11-07T21:42:09.900Z",
+        return Date.parse("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", dateStr)
+    } catch (e) {
+        log.error("dateToMs: bad date: ${dateStr}, ${e}")
+    }
+    return null
+}
 // called from Life360+ app
-// @param member - Life360 member details (see sample-data.txt)
+// @param member - Life360 member object (user details)
+// @param member - Life360 item object (location details)
 // @param thePlaces - all Life360 circles (locations)
 // @param home - Life360 circle which user selected as 'home'
 // @return true if member location changed from last update; false if no change
-Boolean generatePresenceEvent(member, thePlaces, home) {
-    if (member.location == null) {
-        log.info "generatePresenceEvent: no location set"
-        return false
-    }
-    //log.trace("generatePresenceEvent: ${member.location}")
+Boolean generatePresenceEvent(member, item, thePlaces, home) {
+    log.trace("generatePresenceEvent: location:${item}, member:${member}")
 
     // NOTE: only interested in sending updates device when location or battery changes
     // -- location --
-    Double latitude = member.location.latitude.toDouble()
-    Double longitude = member.location.longitude.toDouble()
-    Integer accuracy = member.location.accuracy.toDouble().round(0).toInteger()
-    Integer battery = member.location.battery.toDouble().round(0).toInteger()
-    Boolean wifiState = member.location.wifiState == "1"
-    Boolean charge = member.location.charge == "1"
-    Double speed = member.location.speed.toDouble()
-    Boolean isDriving = member.location.isDriving == "1"
-    Boolean inTransit = member.location.inTransit == "1"
-    Long since = member.location.since.toLong()
+    Double latitude = item.latitude.toDouble()
+    Double longitude = item.longitude.toDouble()
+    Integer accuracy = item.accuracy.toDouble().round(0).toInteger()
+    Integer battery = item.batteryLevel.toDouble().round(0).toInteger()
+    Boolean wifiState = item.wifiConnected
+    Boolean charge = item.batteryCharging
+    Double speed = item.speed.toDouble()
+    Boolean inTransit = item.inTransit
+    Boolean isDriving = isTransit // item.isDriving
+    Date lastUpdated = strToDate(item.updated)
+    // userActivity:[unknown|os_biking|os_running]
+    String userActivity = item.userActivity
+    if (userActivity?.startsWith("os_")) {
+        userActivity = userActivity.substring(2)
+    }
+
     // -- name --
     String memberFirstName = (member.firstName) ? member.firstName : ""
     String memberLastName = (member.lastName) ? member.lastName : ""
-    String address1 = (member.location.name) ? member.location.name : member.location.address1
-    String address2 = (member.location.address2) ? member.location.address2 : member.location.shortaddress
     // -- home --
     Double homeLatitude = home.latitude.toDouble()
     Double homeLongitude = home.longitude.toDouble()
     Double homeRadius = home.radius.toDouble()
+
+    // NOTE: these values aren't passed anymore
+    // - an alternative is to use a reverse geocoding service
+    String address1 = (item.name) ? item.name : item.address1
+    String address2 = (item.address2) ? item.address2 : item.shortaddress
 
     // -- previous values (could be null) --
     Double prevLatitude = device.currentValue('latitude')
@@ -192,12 +208,12 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
         if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
         return false
-    } else {
-        if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
     }
 
-    // location changed, or Accuracy or Battery changed -- fetch any other useful values
-    Date lastUpdated = new Date()
+    // -----------------------------------------------
+    // ** location/accuracy/battery/battery changed **
+    // -----------------------------------------------
+    if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
@@ -243,7 +259,6 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         sendEvent(name: "address1prev", value: prevAddress)
         sendEvent(name: "address1", value: address1)
         sendEvent(name: "lastLocationUpdate", value: lastUpdated)
-        sendEvent(name: "since", value: since)
     }
 
     // *** Presence ***
@@ -289,6 +304,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     sendEvent(name: "isDriving", value: isDriving)
     sendEvent(name: "speed", value: speedUnits)
     sendEvent(name: "distance", value: distanceUnits)
+    sendEvent(name: "userActivity", value: userActivity)
 
     // Set acceleration to active state if we are either moving or if we are anywhere outside home radius
     sendEvent(name: "acceleration", value: (inTransit || isDriving || memberPresence == "not present") ? "active" : "inactive")
@@ -343,18 +359,8 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     else if (inTransit) binTransita = "Moving"
     else binTransita = "Not Moving"
 
-    int sEpoch = device.currentValue('since')
-    if (sEpoch == null) {
-        theDate = use(groovy.time.TimeCategory) {
-            new Date(0)
-        }
-    } else {
-        theDate = use(groovy.time.TimeCategory) {
-            new Date(0) + sEpoch.seconds
-        }
-    }
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
-    String dateSince = DATE_FORMAT.format(theDate)
+    String lastUpdatedDesc = DATE_FORMAT.format(lastUpdated)
 
     String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
 
@@ -362,7 +368,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
     tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" : address1}</a><br>"
-    tileMap += "Since: ${dateSince}<br>"
+    tileMap += "Updated: ${lastUpdatedDesc}<br>"
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
     if (address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
@@ -474,5 +480,3 @@ def sendTheMap(theMap) {
     lastMap = "${theMap}"
     sendEvent(name: "lastMap", value: lastMap, displayed: true)
 }
-
-
