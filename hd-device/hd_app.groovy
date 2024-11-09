@@ -79,7 +79,7 @@ def mainPage() {
         }
         section(header("Devices")) {
             showChildren()
-            input "linkedDevices", "capability.presenceSensor", title: "Linked Devices", multiple: true, required: false
+            input "linkedDevices", "device.HDDevice", title: "Linked Devices", multiple: true, required: false
         }
         section(header("Other")) {
             input name: "debugOutput", type: "bool", title: "Enable Debug Logging?", defaultValue: false, submitOnChange: true
@@ -193,7 +193,7 @@ def createChildDevices() {
     }
     
     if (!getChildDevice(state.deviceId))
-        addChildDevice('jpage4500', "HD+ Device", state.deviceId)
+        addChildDevice('jpage4500', "HD Device", state.deviceId)
 }
 
 def uninstalled() {
