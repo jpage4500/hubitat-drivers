@@ -241,6 +241,11 @@ def login(String authCode) {
     }
 }
 
+def setError(String error) {
+    state.error = error
+    updateLinkedDevices(true)
+}
+
 def refreshLogin() {
     if (clientId == null || clientSecret == null) {
         log.info('refreshLogin: clientId/clientSecret not set!')
@@ -259,23 +264,23 @@ def refreshLogin() {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
         log.error("refreshLogin:HttpResponseException: ${e.getLocalizedMessage()}: ${e.response.data}")
-        state.error = "Refresh Error: ${e.getLocalizedMessage()}: ${e.response.data}"
+        setError("Refresh Error: ${e.getLocalizedMessage()}: ${e.response.data}")
     } catch (e) {
         // java.net.UnknownHostException: www.googleapis.com: Temporary failure in name resolution on line 285 (method initialize)
         log.error("refreshLogin:ERROR: ${e}")
-        state.error = "Refresh Error: ${e}"
+        setError("Refresh Error: ${e}")
     }
 }
 
 def handleLoginResponse(resp) {
-    state.error = null
+    setError(null)
     def respCode = resp.getStatus()
     def respJson = resp.getData()
     if (respCode == 200) {
         state.lastSuccess = new Date()
         logDebug("handleLoginResponse: ${respCode}")
     } else {
-        state.error = "Refresh Error: ${respCode}, ${respJson}"
+        setError("Refresh Error: ${respCode}, ${respJson}")
         log.error("handleLoginResponse: ERROR: ${respCode}, ${respJson}")
     }
     // refresh token not always returned (no change)
@@ -287,11 +292,15 @@ def handleLoginResponse(resp) {
     updateLinkedDevices()
 }
 
-def updateLinkedDevices() {
+def updateLinkedDevices(boolean errorOnly=false) {
     linkedDevices.forEach {d -> 
-        d.setProjectID(getProjectId())
-        d.setApiKey(getApiKey())
-        d.setGoogleAccessToken(getGoogleAccessToken())
+        if (!errorOnly) {
+            d.setProjectID(getProjectId())
+            d.setApiKey(getApiKey())
+            d.setGoogleAccessToken(getGoogleAccessToken())
+        }
+        
+        d.setError(getError())
     }
 }
 
