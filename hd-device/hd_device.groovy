@@ -38,7 +38,7 @@ import hubitat.helper.InterfaceUtils
 
 metadata {
     definition(
-        name: "HD+ Device",
+        name: "HD Device",
         namespace: "jpage4500",
         author: "Joe Page",
         importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-device/hd_device.groovy"
