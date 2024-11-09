@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.4 - 11/09/24 - use newer API
  *  5.0.2 - 11/03/24 - restore webhook
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
  *  4.0.0 - 02/08/24 - implement new Life360 API
@@ -98,6 +99,7 @@ def mainPage() {
         section(header("Other Options")) {
             input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute', '300': '5 minutes'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
     }
 }
@@ -107,7 +109,6 @@ def mainPage() {
  * @param button name
  */
 def appButtonHandler(String button) {
-    if (logEnable) log.debug("appButtonHandler: button:${button}")
     switch (button) {
         case "fetchCirclesBtn":
             fetchCircles()
@@ -118,6 +119,11 @@ def appButtonHandler(String button) {
         case "fetchMembersBtn":
             fetchMembers()
             break
+        case "fetchLocationsBtn":
+            fetchLocations()
+            break
+        default:
+            log.debug("appButtonHandler: unhandled:${button}")
     }
 }
 
@@ -188,34 +194,20 @@ def fetchMembers() {
         return;
     }
 
-    // prevent calling this API too frequently
-    long diffMs = 0
-    long currentTimeMs = new Date().getTime()
-    if (state.lastUpdateMs != null) {
-        diffMs = currentTimeMs - state.lastUpdateMs
-        if (diffMs < 5000) {
-            if (logEnable) log.trace "fetchMembers: TOO_FREQUENT: last:${diffMs}ms"
-            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${diffMs}ms"
-            return
-        }
-    }
-    state.lastUpdateMs = currentTimeMs
-    if (logEnable) log.trace("fetchMembers: last:${diffMs}ms")
-
-    // https://api-cloudfront.life360.com/v3/circles/${circle}/members.json
+    // https://api-cloudfront.life360.com/v4/circles/CIRCLE/members
     def params = [
         uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/members.json",
+        path   : "/v4/circles/${circle}/members",
         headers: getHttpHeaders()
     ]
+
+    log.debug("fetchMembers:")
 
     try {
         httpGet(params) {
             response ->
                 if (response.status == 200) {
-                    state.members = response.data.members
-                    // update child devices
-                    notifyChildDevices()
+                    state.members = response.data?.members
                     state.message = null
                 } else {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
@@ -227,7 +219,58 @@ def fetchMembers() {
     }
 }
 
+def fetchLocations() {
+    if (isEmpty(circle)) {
+        log.debug("fetchLocations: circle not set")
+        return;
+    }
+
+    // prevent calling this API too frequently
+    long lastAttempt = 0, lastSuccess = 0
+    long currentTimeMs = new Date().getTime()
+    if (state.lastUpdateMs != null) {
+        lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
+        if (lastAttempt < 5) {
+            if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
+            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
+            return
+        }
+    }
+    if (state.lastSuccessMs != null) {
+        lastSuccess = Math.round((long) (currentTimeMs - state.lastSuccessMs) / 1000L)
+    }
+    state.lastUpdateMs = currentTimeMs
+    if (logEnable) log.trace("fetchLocations: last: attempt:${lastAttempt}s, success:${lastSuccess}s")
+
+    // https://api-cloudfront.life360.com/v5/circles/devices/locations
+    def params = [
+        uri    : "https://api-cloudfront.life360.com",
+        path   : "/v5/circles/devices/locations",
+        headers: getHttpHeaders()
+    ]
+
+    try {
+        httpGet(params) {
+            response ->
+                if (response.status == 200) {
+                    if (logEnable) log.trace("fetchLocations: ${response.data}")
+                    state.items = response.data?.data?.items
+                    // update child devices
+                    notifyChildDevices()
+                    state.message = null
+                    state.lastSuccessMs = new Date().getTime()
+                } else {
+                    log.error("fetchLocations: bad response:${response.status}, ${response.data}")
+                    state.message = "fetchLocations: bad response:${response.status}, ${response.data}"
+                }
+        }
+    } catch (e) {
+        handleException("fetchLocations", e)
+    }
+}
+
 def handleException(String tag, Exception e) {
+    log.error("handleException: ${e}")
     if (e instanceof HttpTimeoutException) {
         log.error("${tag}: EXCEPTION: ${e}")
         state.message = "TIMEOUT: ${tag}: ${e}"
@@ -245,6 +288,10 @@ def handleException(String tag, Exception e) {
 }
 
 Map getHttpHeaders() {
+    if (isEmpty(state.deviceId)) {
+        state.deviceId = UUID.randomUUID().toString()
+    }
+
     def baseHeaders = [
         "Accept"         : "application/json",
         "Accept-Encoding": "gzip",
@@ -252,8 +299,17 @@ Map getHttpHeaders() {
         "Content-Type"   : "application/json; charset=UTF-8",
         "Connection"     : "Keep-Alive",
         "Host"           : "api-cloudfront.life360.com",
-        "User-Agent"     : "com.life360.android.safetymapd/KOKO/24.5.0 android/13"
+        "User-Agent"     : "com.life360.android.safetymapd/KOKO/24.5.0 android/14",
+        "ce-id"          : UUID.randomUUID().toString(),
+        "ce-source"      : "/ANDROID/14/Google-Pixel-7/${state.deviceId}",
+        "ce-specversion" : "1.0",
+        "ce-time"        : new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+        "ce-type"        : "com.life360.cloud.platform.devices.locations.v1"
     ]
+
+    if (!isEmpty(circle)) {
+        baseHeaders["circleid"] = circle
+    }
 
     if (!isEmpty(access_token)) {
         baseHeaders["Authorization"] = "Bearer " + access_token
@@ -314,7 +370,7 @@ def uninstalled() {
  */
 def refresh() {
     if (logEnable) log.debug("refresh:")
-    fetchMembers()
+    fetchLocations()
     scheduleUpdates()
 }
 
@@ -339,18 +395,18 @@ def scheduleUpdates() {
     if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
-        schedule("0/${refreshSecs} * * * * ? *", fetchMembers)
+        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
     } else {
         // mins
-        schedule("0 */${refreshSecs / 60} * * * ? *", fetchMembers)
+        schedule("0 */${refreshSecs / 60} * * * ? *", handleTimerFired)
     }
 }
 
 /**
- * TODO: only needed for old version which timer is calling.. can be deleted later
+ * called by timer
  */
 def handleTimerFired() {
-    fetchMembers()
+    fetchLocations()
 }
 
 def createChildDevices() {
@@ -393,7 +449,7 @@ private removeChildDevices(delete) {
 def notifyChildDevices() {
     if (isEmpty(settings.users)) return;
     if (isEmpty(settings.place)) return;
-    if (isEmpty(state.members)) return;
+    if (isEmpty(state.items)) return;
     if (isEmpty(state.places)) return;
 
     // Get a *** sorted *** list of places for easier navigation
@@ -410,14 +466,19 @@ def notifyChildDevices() {
     settings.users.each { memberId ->
         def externalId = "${app.id}.${memberId}"
         def member = state.members.find { it.id == memberId }
+        def item = findItem(memberId)
+        if (member == null || item == null) {
+            log.debug("notifyChildDevices: member/item not found; ${member} - ${item}")
+            return
+        }
         try {
             // find the appropriate child device based on app id and the device network id
             def deviceWrapper = getChildDevice("${externalId}")
             if (deviceWrapper != null) {
                 // send circle places and home to individual children
-                //if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
-                boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
-                //if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
+                if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
+                boolean isChanged = deviceWrapper.generatePresenceEvent(member, item, placesMap, home)
+                // if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
                 if (isChanged) isAnyChanged = true
             } else {
                 log.error("notifyChildDevices: device not found: ${externalId}")
@@ -445,6 +506,19 @@ def notifyChildDevices() {
             scheduleUpdates()
         }
     }
+}
+
+def findItem(memberId) {
+    // TODO: there's probably a better way to write this such as:
+    // def item = state.items.find { it.owners?.userId == memberId }
+    for (def item : state.items) {
+        for (def owner : item.owners) {
+            if (owner.userId == memberId) {
+                return item
+            }
+        }
+    }
+    return null
 }
 
 /**
@@ -514,7 +588,7 @@ def placeEventHandler() {
 //    def timestamp = params?.timestamp
 
     // update location of all members
-    fetchMembers()
+    fetchLocations()
 }
 
 def getLocalUri(String user) {
@@ -532,4 +606,3 @@ def getCloudUri(String user) {
     }
     return url
 }
-
