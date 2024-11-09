@@ -55,6 +55,7 @@ metadata {
         command('setProjectID', [[name: 'Set Project ID', type: 'STRING', description: 'HD+ will automatically set the project ID']])
         command('setApiKey', [[name: 'Set API key', type: 'STRING', description: 'HD+ will automatically set the API key']])
         command('setGoogleAccessToken', [[name: 'Set Project ID', type: 'STRING', description: 'HD+ will automatically set the access token']])
+        command('setError', [[name: 'Set Error', type: 'STRING', description: 'HD+ will automatically set the error']])
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
 
         //command('startMonitoring', [[name: 'Monitor Device Changes', type: 'STRING', description: 'HD+ will automatically call this']])
@@ -103,6 +104,10 @@ def setGoogleAccessToken(String token) {
     state.googleAccessToken = token
 }
 
+def setError(String error) {
+    state.error = error
+}
+
 String getGoogleAccessToken() {
     if (parent) return parent.getGoogleAccessToken()
     return state.googleAccessToken
@@ -116,6 +121,11 @@ String getProjectID() {
 String getApiKey() {
     if (parent) return parent.getApiKey()
     return state.apiKey
+}
+
+String getError() {
+    if (parent) return parent.getError()
+    return state.error
 }
 
 def updateTokens() {
@@ -191,7 +201,7 @@ def updateStatus() {
         return
     }
 
-    def error = parent?.getError()
+    def error = getError()
     if (isEmpty(error)) {
         sendEvent(name: "status", value: parent ? "READY" : "UNKNOWN")
     } else {
