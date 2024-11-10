@@ -78,7 +78,6 @@ metadata {
 
     // needed by Android client to generate a clientKey
     attribute "projectId", "string"
-    attribute "appId", "string"
     attribute "apiKey", "string"
     // set by Android client (FCM)
     attribute "clientKey", "string"
@@ -138,9 +137,7 @@ def updateTokens() {
         sendEvent(name: "projectId", value: projectId)
         def apiKey = getApiKey()
         sendEvent(name: "apiKey", value: apiKey)
-        def appId = parent?.getAppId()
-        sendEvent(name: "appId", value: appId)
-        if (isLogging) log.debug "updateTokens: proj:$projectId, token:$accessToken, appId:$appId"
+        if (isLogging) log.debug "updateTokens: proj:${projectId}, token:${accessToken}"
     }
     
     updateStatus()
