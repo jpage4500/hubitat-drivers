@@ -272,6 +272,7 @@ def updateLinkedDevices(boolean errorOnly=false) {
             d.setProjectID(getProjectId())
             d.setApiKey(getApiKey())
             d.setGoogleAccessToken(getGoogleAccessToken())
+            d.setAppID(getAppId())
             d.initialize()
         }
         
