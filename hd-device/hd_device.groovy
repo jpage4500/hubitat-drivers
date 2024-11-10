@@ -54,6 +54,7 @@ metadata {
 
         command('setProjectID', [[name: 'Set Project ID', type: 'STRING', description: 'HD+ will automatically set the project ID']])
         command('setApiKey', [[name: 'Set API key', type: 'STRING', description: 'HD+ will automatically set the API key']])
+        command('setAppID', [[name: 'Set app ID', type: 'STRING', description: 'HD+ will automatically set the app ID']])
         command('setGoogleAccessToken', [[name: 'Set Project ID', type: 'STRING', description: 'HD+ will automatically set the access token']])
         command('setError', [[name: 'Set Error', type: 'STRING', description: 'HD+ will automatically set the error']])
         command('setClientKey', [[name: 'Set Device FCM key', type: 'STRING', description: 'HD+ will automatically set the device FCM key']])
@@ -79,6 +80,7 @@ metadata {
     // needed by Android client to generate a clientKey
     attribute "projectId", "string"
     attribute "apiKey", "string"
+    attribute "appId", "string"
     // set by Android client (FCM)
     attribute "clientKey", "string"
     // driver status: not configured, ready, error
@@ -107,6 +109,10 @@ def setError(String error) {
     state.error = error
 }
 
+def setAppID(String id) {
+    state.appID = id
+}
+
 String getGoogleAccessToken() {
     if (parent) return parent.getGoogleAccessToken()
     return state.googleAccessToken
@@ -127,6 +133,11 @@ String getError() {
     return state.error
 }
 
+String getAppID() {
+    if (parent) return parent.getAppId()
+    return state.appID
+}
+
 def updateTokens() {
     // client side values required by HD+ to create a FCM token
     def projectId = getProjectID()
@@ -137,7 +148,9 @@ def updateTokens() {
         sendEvent(name: "projectId", value: projectId)
         def apiKey = getApiKey()
         sendEvent(name: "apiKey", value: apiKey)
-        if (isLogging) log.debug "updateTokens: proj:${projectId}, token:${accessToken}"
+        def appId = getAppID()
+        sendEvent(name: "appId", value: appId)
+        if (isLogging) log.debug "updateTokens: proj:$projectId, token:$accessToken, appId:$appId"
     }
     
     updateStatus()
@@ -328,7 +341,7 @@ void notifyVia(msgType, text) {
 
     def headers = [
         "Authorization": "Bearer ${oauthToken}",
-        "Content-Type" : "application/json"
+        "Content-Type" : "application/json; UTF-8"
     ]
 
     def body = [
