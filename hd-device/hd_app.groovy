@@ -267,7 +267,7 @@ def handleLoginResponse(resp) {
 }
 
 def updateLinkedDevices(boolean errorOnly=false) {
-    linkedDevices.forEach {d -> 
+    linkedDevices?.forEach {d -> 
         if (!errorOnly) {
             d.setProjectID(getProjectId())
             d.setApiKey(getApiKey())
