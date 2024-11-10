@@ -78,7 +78,6 @@ def mainPage() {
             input 'appId', 'text', title: 'App ID', required: true, defaultValue: '', submitOnChange: true
         }
         section(header("Devices")) {
-            showChildren()
             input "linkedDevices", "device.HDDevice", title: "Linked Devices", multiple: true, required: false
         }
         section(header("Other")) {
@@ -86,17 +85,6 @@ def mainPage() {
         }
 
     }
-}
-
-def showChildren() {
-    def childList = getChildDevices()
-    childList.each {
-        String name = it.getName()
-        String label = it.getLabel()
-        logDebug("showChildren: ${name}, ${label}")
-        paragraph("${name} - ${label}")
-    }
-    input("addChildBtn", "button", title: "Add Child Device")
 }
 
 def showAuthorizeButton() {
@@ -171,29 +159,15 @@ def handleAuthRedirect() {
 
 def updated() {
     logDebug("updating")
-    createChildDevices()
     rescheduleLogin()
 
-    def childDevice = getChildDevice(state.deviceId)
-    childDevice?.initialize()
-    
     updateLinkedDevices()
 }
 
 def installed() {
     log.info "installed"
-    createChildDevices()
     // start app on Hub reboot?
     subscribe(location, 'systemStart', initialize)
-}
-
-def createChildDevices() {
-    if (isEmpty(state.deviceId)) {
-        state.deviceId = UUID.randomUUID().toString()
-    }
-    
-    if (!getChildDevice(state.deviceId))
-        addChildDevice('jpage4500', "HD Device", state.deviceId)
 }
 
 def uninstalled() {
@@ -298,20 +272,10 @@ def updateLinkedDevices(boolean errorOnly=false) {
             d.setProjectID(getProjectId())
             d.setApiKey(getApiKey())
             d.setGoogleAccessToken(getGoogleAccessToken())
+            d.initialize()
         }
         
         d.setError(getError())
-    }
-}
-
-def appButtonHandler(btn) {
-    logDebug("appButtonHandler: ${btn}")
-    switch (btn) {
-        case "addChildBtn":
-            logDebug("add child...")
-            String childId = UUID.randomUUID().toString()
-            addChildDevice('jpage4500', "HD+ Device", childId)
-            break;
     }
 }
 
