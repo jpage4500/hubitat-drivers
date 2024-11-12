@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.5 - 11/12/24 - support eTag for locations call
  *  5.0.4 - 11/09/24 - use newer API
  *  5.0.2 - 11/03/24 - restore webhook
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
@@ -226,7 +227,7 @@ def fetchLocations() {
     }
 
     // prevent calling this API too frequently
-    long lastAttempt = 0, lastSuccess = 0
+    long lastAttempt = 0
     long currentTimeMs = new Date().getTime()
     if (state.lastUpdateMs != null) {
         lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
@@ -236,11 +237,12 @@ def fetchLocations() {
             return
         }
     }
+    String lastSuccess = "n/a"
     if (state.lastSuccessMs != null) {
-        lastSuccess = Math.round((long) (currentTimeMs - state.lastSuccessMs) / 1000L)
+        lastSuccess = new Date(state.lastSuccessMs).toString()
     }
     state.lastUpdateMs = currentTimeMs
-    if (logEnable) log.trace("fetchLocations: last: attempt:${lastAttempt}s, success:${lastSuccess}s")
+    if (logEnable) log.trace("fetchLocations: last: attempt:${lastAttempt}s, success:${lastSuccess}")
 
     // https://api-cloudfront.life360.com/v5/circles/devices/locations
     def params = [
@@ -249,14 +251,28 @@ def fetchLocations() {
         headers: getHttpHeaders()
     ]
 
+    // send l360-etag value
+    if (!isEmpty(state.etag)) {
+        params["headers"]["If-None-Match"] = state.etag
+    }
+
     try {
         httpGet(params) {
             response ->
                 if (response.status == 200) {
-                    if (logEnable) log.trace("fetchLocations: ${response.data}")
+                    //if (logEnable) log.trace("fetchLocations: ${response}")
                     state.items = response.data?.data?.items
                     // update child devices
                     notifyChildDevices()
+                    state.message = null
+                    state.lastSuccessMs = new Date().getTime()
+                    // save l360-etag value for next request
+                    def eTag = response.getFirstHeader("l360-etag")
+                    if (eTag != null) {
+                        state.etag = eTag.value;
+                    }
+                } else if (response.status == 304) {
+                    if (logEnable) log.trace("fetchLocations: 304 - no changes")
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
                 } else {
@@ -270,7 +286,7 @@ def fetchLocations() {
 }
 
 def handleException(String tag, Exception e) {
-    log.error("handleException: ${e}")
+    //log.error("handleException: ${e}")
     if (e instanceof HttpTimeoutException) {
         log.error("${tag}: EXCEPTION: ${e}")
         state.message = "TIMEOUT: ${tag}: ${e}"
@@ -476,7 +492,7 @@ def notifyChildDevices() {
             def deviceWrapper = getChildDevice("${externalId}")
             if (deviceWrapper != null) {
                 // send circle places and home to individual children
-                if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
+                //if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
                 boolean isChanged = deviceWrapper.generatePresenceEvent(member, item, placesMap, home)
                 // if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
                 if (isChanged) isAnyChanged = true
