@@ -170,10 +170,10 @@ Boolean generatePresenceEvent(member, item, thePlaces, home) {
     Boolean inTransit = item.inTransit
     Boolean isDriving = isTransit // item.isDriving
     Date lastUpdated = strToDate(item.updated)
-    // userActivity:[unknown|os_biking|os_running]
+    // userActivity:[unknown|os_biking|os_running|vehicle]
     String userActivity = item.userActivity
     if (userActivity?.startsWith("os_")) {
-        userActivity = userActivity.substring(2)
+        userActivity = userActivity.substring(3)
     }
 
     // -- name --
