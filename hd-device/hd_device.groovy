@@ -213,7 +213,7 @@ def updateStatus() {
 
     def error = getError()
     if (isEmpty(error)) {
-        sendEvent(name: "status", value: parent ? "READY" : "UNKNOWN")
+        sendEvent(name: "status", value: (parent != null || projectId != null) ? "READY" : "UNKNOWN")
     } else {
         sendEvent(name: "status", value: "ERROR: ${error}")
     }
