@@ -162,6 +162,7 @@ metadata {
     'fanSpeed'       : [ 'fan_speed_enum', 'fan_speed' ],
     'fanSwitch'      : [ 'switch_fan', 'switch' ],
     'light'          : [ 'switch_led', 'switch_led_1', 'switch_led_2', 'light' ],
+    'litter'         : [ 'auto_clean' ],
     'humiditySet'    : [ 'dehumidify_set_value' ],                                                                                       /* Inserted by SJB */
     'humiditySpeed'  : [ 'fan_speed_enum' ],
     'humidity'       : [ 'temp_indoor', 'swing', 'shake', 'child_lock', 'lock', 'fan_speed_enum', 'dehumidify_set_value', 'humidity_indoor', 'humidity', 'envhumid', 'switch', 'mode', 'anion', 'pump', 'dry', 'windspeed', 'countdown', 'countdown_left', 'fault' ],
@@ -170,7 +171,7 @@ metadata {
     'pir'            : [ 'pir' ],
     'power'          : [ 'Power', 'power', 'power_go', 'switch', 'switch_1', 'switch_2', 'switch_3', 'switch_4', 'switch_5', 'switch_6', 'switch_usb1', 'switch_usb2', 'switch_usb3', 'switch_usb4', 'switch_usb5', 'switch_usb6', 'alarm_switch', 'start' ],
     'percentControl' : [ 'percent_control', 'fan_speed_percent', 'position' ],
-    'push'           : [ 'manual_feed', 'manual_clean' ],
+    'push'           : [ 'manual_feed' ],
     'sceneSwitch'    : [ 'switch1_value', 'switch2_value', 'switch3_value', 'switch4_value', 'switch_mode2', 'switch_mode3', 'switch_mode4' ],
     'smoke'          : [ 'smoke_sensor_status' ],
     'temperatureSet' : [ 'temp_set' ],
@@ -305,8 +306,9 @@ private static Map mapTuyaCategory(Map d) {
         case 'bh':    // Kettle
             return [ driver: 'Generic Component Switch' ]
         case 'cwwsq': // Pet Feeder (https://developer.tuya.com/en/docs/iot/f?id=K9gf468bl11rj)
-        case 'msp':   // Litter Box (https://developer.tuya.com/en/docs/iot/categorymsp?id=Kakg2t7714ky7)
             return [ driver: 'Generic Component Button Controller' ]
+        case 'msp':   // Litter Box (https://developer.tuya.com/en/docs/iot/categorymsp?id=Kakg2t7714ky7)
+            return [ driver: 'Generic Component Switch' ]
         case 'cz':    // Socket (https://developer.tuya.com/en/docs/iot/s?id=K9gf7o5prgf7s)
         case 'kg':    // Switch
         case 'pc':    // Power Strip (https://developer.tuya.com/en/docs/iot/s?id=K9gf7o5prgf7s)
@@ -414,7 +416,7 @@ void componentLock(DeviceWrapper dw) {
 // Component command to turn on device
 void componentOn(DeviceWrapper dw) {
     Map<String, Map> functions = getFunctions(dw)
-    String code = getFunctionCode(functions, tuyaFunctions.light + tuyaFunctions.power)
+    String code = getFunctionCode(functions, tuyaFunctions.litter + tuyaFunctions.light + tuyaFunctions.power)
 
     if (code != null) {
         if (txtEnable) { LOG.info "Turning ${dw} on" }
@@ -434,7 +436,7 @@ void componentOn(DeviceWrapper dw) {
 // Component command to turn off device
 void componentOff(DeviceWrapper dw) {
     Map<String, Map> functions = getFunctions(dw)
-    String code = getFunctionCode(functions, tuyaFunctions.light + tuyaFunctions.power)
+    String code = getFunctionCode(functions, tuyaFunctions.litter + tuyaFunctions.light + tuyaFunctions.power)
 
     if (code != null) {
         if (txtEnable) { LOG.info "Turning ${dw} off" }
@@ -465,10 +467,7 @@ void componentPush(DeviceWrapper dw, BigDecimal button) {
     Map<String, Map> functions = getFunctions(dw)
     String code = getFunctionCode(functions, tuyaFunctions.push)
 
-    if (code == 'manual_clean') {
-        if (txtEnable) LOG.info "Manual Clean ${dw} (${button})"
-        tuyaSendDeviceCommandsAsync(dw.getDataValue('id'), ['code': code, 'value': true])
-    } else if (code != null) {
+    if (code != null) {
         if (txtEnable) { LOG.info "Pushing ${dw} button ${button}" }
         tuyaSendDeviceCommandsAsync(dw.getDataValue('id'), [ 'code': code, 'value': button ])
     } else {
