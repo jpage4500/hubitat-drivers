@@ -12,6 +12,7 @@
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  *
  *  Changes:
+ *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
  *  5.0.4 - 11/09/24 - use newer API
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
  *
@@ -149,29 +150,30 @@ def strToDate(dateStr) {
     }
     return null
 }
+
 // called from Life360+ app
 // @param member - Life360 member object (user details)
-// @param member - Life360 item object (location details)
 // @param thePlaces - all Life360 circles (locations)
 // @param home - Life360 circle which user selected as 'home'
 // @return true if member location changed from last update; false if no change
-Boolean generatePresenceEvent(member, item, thePlaces, home) {
-    log.trace("generatePresenceEvent: location:${item}, member:${member}")
+Boolean generatePresenceEvent(member, thePlaces, home) {
+    log.trace("generatePresenceEvent: member:${member}")
+    if (member.location == null) return
 
     // NOTE: only interested in sending updates device when location or battery changes
     // -- location --
-    Double latitude = item.latitude.toDouble()
-    Double longitude = item.longitude.toDouble()
-    Integer accuracy = item.accuracy.toDouble().round(0).toInteger()
-    Integer battery = item.batteryLevel.toDouble().round(0).toInteger()
-    Boolean wifiState = item.wifiConnected
-    Boolean charge = item.batteryCharging
-    Double speed = item.speed.toDouble()
-    Boolean inTransit = item.inTransit
-    Boolean isDriving = isTransit // item.isDriving
-    Date lastUpdated = strToDate(item.updated)
+    Double latitude = toDouble(member.location.latitude)
+    Double longitude = toDouble(member.location.longitude)
+    Integer accuracy = toDouble(member.location.accuracy).round(0).toInteger()
+    Integer battery = toDouble(member.location.battery).round(0).toInteger()
+    Boolean wifiState = member.location.wifiState == 1
+    Boolean charge = member.location.charge == 1
+    Double speed = toDouble(member.location.speed)
+    Boolean inTransit = member.location.inTransit == 1
+    Boolean isDriving = member.location.isDriving == 1
+    Date lastUpdated = new Date(member.location.since)
     // userActivity:[unknown|os_biking|os_running|vehicle]
-    String userActivity = item.userActivity
+    String userActivity = member.location.userActivity
     if (userActivity?.startsWith("os_")) {
         userActivity = userActivity.substring(3)
     }
@@ -180,14 +182,12 @@ Boolean generatePresenceEvent(member, item, thePlaces, home) {
     String memberFirstName = (member.firstName) ? member.firstName : ""
     String memberLastName = (member.lastName) ? member.lastName : ""
     // -- home --
-    Double homeLatitude = home.latitude.toDouble()
-    Double homeLongitude = home.longitude.toDouble()
-    Double homeRadius = home.radius.toDouble()
+    Double homeLatitude = toDouble(home.latitude)
+    Double homeLongitude = toDouble(home.longitude)
+    Double homeRadius = toDouble(home.radius)
 
-    // NOTE: these values aren't passed anymore
-    // - an alternative is to use a reverse geocoding service
-    String address1 = (item.name) ? item.name : item.address1
-    String address2 = (item.address2) ? item.address2 : item.shortaddress
+    String address1 = (member.location.name) ? member.location.name : member.location.address1
+    String address2 = (member.location.address2) ? member.location.address2 : member.location.shortaddress
 
     // -- previous values (could be null) --
     Double prevLatitude = device.currentValue('latitude')
@@ -479,4 +479,12 @@ def historyClearData() {
 def sendTheMap(theMap) {
     lastMap = "${theMap}"
     sendEvent(name: "lastMap", value: lastMap, displayed: true)
+}
+
+/**
+ * null-safe toDouble()
+ */
+static double toDouble(Object object) {
+    if (object) return object.toDouble()
+    else return 0
 }
