@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
  *  5.0.5 - 11/12/24 - support eTag for locations call
  *  5.0.4 - 11/09/24 - use newer API
  *  5.0.2 - 11/03/24 - restore webhook
@@ -195,7 +196,10 @@ def fetchMembers() {
         return;
     }
 
+    // -- new API --
     // https://api-cloudfront.life360.com/v4/circles/CIRCLE/members
+    // -- old API --
+    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v4/circles/${circle}/members",
@@ -244,10 +248,16 @@ def fetchLocations() {
     state.lastUpdateMs = currentTimeMs
     if (logEnable) log.trace("fetchLocations: last: attempt:${lastAttempt}s, success:${lastSuccess}")
 
+    // NOTE: current client uses /v5 API but also requires several new http headers (ce_*) and will often return http:403 response
+    // -- NEW API --
     // https://api-cloudfront.life360.com/v5/circles/devices/locations
+    // -- old API --
+    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
     def params = [
         uri    : "https://api-cloudfront.life360.com",
-        path   : "/v5/circles/devices/locations",
+        // -- NEW API --
+        //path   : "/v5/circles/devices/locations",
+        path   : "/v3/circles/${circle}/members",
         headers: getHttpHeaders()
     ]
 
@@ -260,8 +270,8 @@ def fetchLocations() {
         httpGet(params) {
             response ->
                 if (response.status == 200) {
-                    //if (logEnable) log.trace("fetchLocations: ${response}")
-                    state.items = response.data?.data?.items
+                    //if (logEnable) log.trace("fetchLocations: ${response.data}")
+                    state.members = response.data?.members
                     // update child devices
                     notifyChildDevices()
                     state.message = null
@@ -308,21 +318,27 @@ Map getHttpHeaders() {
         state.deviceId = UUID.randomUUID().toString()
     }
 
+    // try to match these headers:
+    // - https://github.com/pnbruckner/life360/blob/master/life360/const.py#L7
+    // - https://github.com/pnbruckner/life360/blob/master/life360/api.py#L46
+    // NOTE: new /v5 API requires several new http headers (ce_*)
     def baseHeaders = [
         "Accept"         : "application/json",
-        "Accept-Encoding": "gzip",
-        "Accept-Language": "en_US",
-        "Content-Type"   : "application/json; charset=UTF-8",
-        "Connection"     : "Keep-Alive",
-        "Host"           : "api-cloudfront.life360.com",
-        "User-Agent"     : "com.life360.android.safetymapd/KOKO/24.5.0 android/14",
-        "ce-id"          : UUID.randomUUID().toString(),
-        "ce-source"      : "/ANDROID/14/Google-Pixel-7/${state.deviceId}",
-        "ce-specversion" : "1.0",
-        "ce-time"        : new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
-        "ce-type"        : "com.life360.cloud.platform.devices.locations.v1"
+        "cache-control"  : "no-cache",
+        "User-Agent"     : "com.life360.android.safetymapd/KOKO/23.50.0 android/13",
+//        "Accept-Encoding": "gzip",
+//        "Accept-Language": "en_US",
+//        "Content-Type"   : "application/json; charset=UTF-8",
+//        "Connection"     : "Keep-Alive",
+//        "Host"           : "api-cloudfront.life360.com",
+//        "ce-id"          : UUID.randomUUID().toString(),
+//        "ce-source"      : "/ANDROID/14/Google-Pixel-7/${state.deviceId}",
+//        "ce-specversion" : "1.0",
+//        "ce-time"        : new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
+//        "ce-type"        : "com.life360.cloud.platform.devices.locations.v1"
     ]
 
+    // TODO: not sure this is necessary for old API
     if (!isEmpty(circle)) {
         baseHeaders["circleid"] = circle
     }
@@ -465,7 +481,8 @@ private removeChildDevices(delete) {
 def notifyChildDevices() {
     if (isEmpty(settings.users)) return;
     if (isEmpty(settings.place)) return;
-    if (isEmpty(state.items)) return;
+    // -- NEW API --
+    //if (isEmpty(state.items)) return;
     if (isEmpty(state.places)) return;
 
     // Get a *** sorted *** list of places for easier navigation
@@ -482,9 +499,8 @@ def notifyChildDevices() {
     settings.users.each { memberId ->
         def externalId = "${app.id}.${memberId}"
         def member = state.members.find { it.id == memberId }
-        def item = findItem(memberId)
-        if (member == null || item == null) {
-            log.debug("notifyChildDevices: member/item not found; ${member} - ${item}")
+        if (member == null) {
+            log.debug("notifyChildDevices: member not found; ${member}")
             return
         }
         try {
@@ -493,7 +509,7 @@ def notifyChildDevices() {
             if (deviceWrapper != null) {
                 // send circle places and home to individual children
                 //if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
-                boolean isChanged = deviceWrapper.generatePresenceEvent(member, item, placesMap, home)
+                boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
                 // if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
                 if (isChanged) isAnyChanged = true
             } else {
