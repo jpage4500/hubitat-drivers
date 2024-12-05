@@ -163,7 +163,8 @@ Boolean generatePresenceEvent(member, item, thePlaces, home) {
     Double latitude = item.latitude.toDouble()
     Double longitude = item.longitude.toDouble()
     Integer accuracy = item.accuracy.toDouble().round(0).toInteger()
-    Integer battery = item.batteryLevel.toDouble().round(0).toInteger()
+    // NOTE: seems like battery level isn't returned for MY device
+    Integer battery = item.batteryLevel ? item.batteryLevel.toDouble().round(0).toInteger() : 0
     Boolean wifiState = item.wifiConnected
     Boolean charge = item.batteryCharging
     Double speed = item.speed.toDouble()
