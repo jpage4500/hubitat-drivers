@@ -224,6 +224,9 @@ def fetchMembers() {
     }
 }
 
+/**
+ * NOTE: this is calling the same API as fetchMembers but future API changes use a different call /items
+ */
 def fetchLocations() {
     if (isEmpty(circle)) {
         log.debug("fetchLocations: circle not set")
@@ -241,12 +244,7 @@ def fetchLocations() {
             return
         }
     }
-    String lastSuccess = "n/a"
-    if (state.lastSuccessMs != null) {
-        lastSuccess = new Date(state.lastSuccessMs).toString()
-    }
     state.lastUpdateMs = currentTimeMs
-    if (logEnable) log.trace("fetchLocations: last: attempt:${lastAttempt}s, success:${lastSuccess}")
 
     // NOTE: current client uses /v5 API but also requires several new http headers (ce_*) and will often return http:403 response
     // -- NEW API --
@@ -270,6 +268,8 @@ def fetchLocations() {
         httpGet(params) {
             response ->
                 if (response.status == 200) {
+                    state.numSuccess = (state.numSuccess ?: 0) + 1
+                    if (logEnable) log.trace("fetchLocations: SUCCESS: last: ${lastAttempt}s")
                     //if (logEnable) log.trace("fetchLocations: ${response.data}")
                     state.members = response.data?.members
                     // update child devices
@@ -282,16 +282,23 @@ def fetchLocations() {
                         state.etag = eTag.value;
                     }
                 } else if (response.status == 304) {
-                    if (logEnable) log.trace("fetchLocations: 304 - no changes")
+                    state.numSuccess = (state.numSuccess ?: 0) + 1
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
+                    if (logEnable) log.trace("fetchLocations: SUCCESS (304), last: ${lastAttempt}s")
+
+                    // no changes - slow down timer (auto mode)
+                    updateTimerFrequency(false)
                 } else {
                     log.error("fetchLocations: bad response:${response.status}, ${response.data}")
                     state.message = "fetchLocations: bad response:${response.status}, ${response.data}"
                 }
         }
     } catch (e) {
-        handleException("fetchLocations", e)
+        state.numFailures = (state.numFailures ?: 0) + 1
+        def numFailures = state.numFailures ?: 0
+        def numSuccess = state.numSuccess ?: 0
+        handleException("fetchLocations: errors:${numFailures} / ${numSuccess+numFailures}, last: ${lastAttempt}s", e)
     }
 }
 
@@ -521,10 +528,14 @@ def notifyChildDevices() {
         }
     }
 
+    updateTimerFrequency(isAnyChanged)
+}
+
+def updateTimerFrequency(boolean isAnyChanged) {
     if (pollFreq == "auto") {
         // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
         // - if user(s) are moving, update more frequently; if not, update less frequently
-        Integer prevLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
+        Integer prevLocationUpdates = state.numLocationUpdates ?: 0
         Integer numLocationUpdates = prevLocationUpdates
         numLocationUpdates += isAnyChanged ? 1 : -1
         // max out at 3 to prevent a long drive from not slowing down API calls for a while after
@@ -638,3 +649,4 @@ def getCloudUri(String user) {
     }
     return url
 }
+
