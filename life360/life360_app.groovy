@@ -435,7 +435,7 @@ def scheduleUpdates() {
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
-    } else {
+    } else if (refreshSecs > 0) {
         // mins
         schedule("0 */${refreshSecs / 60} * * * ? *", handleTimerFired)
     }
