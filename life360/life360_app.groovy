@@ -99,7 +99,7 @@ def mainPage() {
         }
 
         section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute', '300': '5 minutes'])
+            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute', '300': '5 minutes', '0': 'Disabled'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
