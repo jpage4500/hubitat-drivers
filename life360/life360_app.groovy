@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.7 - 12/11/24 - try to match Home Assistant
  *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
  *  5.0.5 - 11/12/24 - support eTag for locations call
  *  5.0.4 - 11/09/24 - use newer API
@@ -99,7 +100,7 @@ def mainPage() {
         }
 
         section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "auto", options: ['auto': 'Auto Refresh (faster when devices are moving)', '30': '30 seconds', '60': '1 minute', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '300': '5 minutes', '0': 'Disabled'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -225,19 +226,21 @@ def fetchMembers() {
 }
 
 /**
- * NOTE: this is calling the same API as fetchMembers but future API changes use a different call /items
+ * fetch location for every member
  */
 def fetchLocations() {
     if (isEmpty(circle)) {
         log.debug("fetchLocations: circle not set")
         return;
+    } else if (isEmpty(settings.users)) {
+        log.debug("fetchLocations: no users selected")
+        return
     }
 
-    // prevent calling this API too frequently
-    long lastAttempt = 0
-    long currentTimeMs = new Date().getTime()
+    // prevent calling this API too frequently (< 5 seconds)
     if (state.lastUpdateMs != null) {
-        lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
+        long currentTimeMs = new Date().getTime()
+        long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
         if (lastAttempt < 5) {
             if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
             state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
@@ -246,59 +249,53 @@ def fetchLocations() {
     }
     state.lastUpdateMs = currentTimeMs
 
-    // NOTE: current client uses /v5 API but also requires several new http headers (ce_*) and will often return http:403 response
-    // -- NEW API --
-    // https://api-cloudfront.life360.com/v5/circles/devices/locations
-    // -- old API --
-    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
+    // iterate over every selected member
+    settings.users.each { memberId ->
+        fetchMemberLocation(memberId)
+    }
+}
+
+def fetchMemberLocation(memberId) {
+    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members/MEMBER
     def params = [
         uri    : "https://api-cloudfront.life360.com",
-        // -- NEW API --
-        //path   : "/v5/circles/devices/locations",
-        path   : "/v3/circles/${circle}/members",
+        path   : "/v3/circles/${circle}/members/${memberId}",
         headers: getHttpHeaders()
     ]
 
-    // send l360-etag value
-    if (!isEmpty(state.etag)) {
-        params["headers"]["If-None-Match"] = state.etag
-    }
+    // set l360-etag value
+    def tag = state["etag-${memberId}"]
+    if (!isEmpty(tag)) params["headers"]["If-None-Match"] = tag
+
+    //if (logEnable) log.trace("fetchMemberLocation: member:${memberId}, tag:${tag}")
 
     try {
         httpGet(params) {
             response ->
                 if (response.status == 200) {
-                    state.numSuccess = (state.numSuccess ?: 0) + 1
-                    if (logEnable) log.trace("fetchLocations: SUCCESS: last: ${lastAttempt}s")
-                    //if (logEnable) log.trace("fetchLocations: ${response.data}")
-                    state.members = response.data?.members
+                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}")
+
                     // update child devices
-                    notifyChildDevices()
+                    notifyChildDevice(memberId, response.data)
+
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
+
                     // save l360-etag value for next request
                     def eTag = response.getFirstHeader("l360-etag")
-                    if (eTag != null) {
-                        state.etag = eTag.value;
-                    }
+                    if (eTag != null) state["etag-${memberId}"] = eTag.value
                 } else if (response.status == 304) {
-                    state.numSuccess = (state.numSuccess ?: 0) + 1
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchLocations: SUCCESS (304), last: ${lastAttempt}s")
-
-                    // no changes - slow down timer (auto mode)
-                    updateTimerFrequency(false)
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}")
                 } else {
-                    log.error("fetchLocations: bad response:${response.status}, ${response.data}")
-                    state.message = "fetchLocations: bad response:${response.status}, ${response.data}"
+                    log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
+                    state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
                 }
         }
     } catch (e) {
-        state.numFailures = (state.numFailures ?: 0) + 1
-        def numFailures = state.numFailures ?: 0
-        def numSuccess = state.numSuccess ?: 0
-        handleException("fetchLocations: errors:${numFailures} / ${numSuccess+numFailures}, last: ${lastAttempt}s", e)
+        handleException("fetchMemberLocation: member:${memberId}", e)
     }
 }
 
@@ -418,16 +415,7 @@ def scheduleUpdates() {
 
     Integer refreshSecs = 30
     if (pollFreq == "auto") {
-        // adjust refresh rate based on if devices are moving
-        Integer numLocationUpdates = state.numLocationUpdates != null ? state.numLocationUpdates : 0
-        // TODO: experiment with these values.. make sure we're not calling the API too frequently but still get timely user updates
-        if (numLocationUpdates == 0) {
-            // update every 30 seconds
-            refreshSecs = 30
-        } else if (numLocationUpdates >= 1) {
-            // update every 15 seconds
-            refreshSecs = 15
-        }
+        // TODO: REMOVE
     } else {
         refreshSecs = pollFreq.toInteger()
     }
@@ -445,7 +433,7 @@ def scheduleUpdates() {
  * called by timer
  */
 def handleTimerFired() {
-    fetchLocations()
+     fetchLocations()
 }
 
 def createChildDevices() {
@@ -482,14 +470,9 @@ private removeChildDevices(delete) {
     delete.each { deleteChildDevice(it.deviceNetworkId) }
 }
 
-/**
- * update all Life360 devices with member location
- */
-def notifyChildDevices() {
+def notifyChildDevice(memberId, memberObj) {
     if (isEmpty(settings.users)) return;
     if (isEmpty(settings.place)) return;
-    // -- NEW API --
-    //if (isEmpty(state.items)) return;
     if (isEmpty(state.places)) return;
 
     // Get a *** sorted *** list of places for easier navigation
@@ -501,152 +484,22 @@ def notifyChildDevices() {
         placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
     }
 
-    // Iterate through each member and trigger an update from payload
-    boolean isAnyChanged = false
-    settings.users.each { memberId ->
-        def externalId = "${app.id}.${memberId}"
-        def member = state.members.find { it.id == memberId }
-        if (member == null) {
-            log.debug("notifyChildDevices: member not found; ${member}")
-            return
-        }
-        try {
-            // find the appropriate child device based on app id and the device network id
-            def deviceWrapper = getChildDevice("${externalId}")
-            if (deviceWrapper != null) {
-                // send circle places and home to individual children
-                //if (logEnable) log.trace("notifyChildDevices: updating: ${member.firstName}")
-                boolean isChanged = deviceWrapper.generatePresenceEvent(member, placesMap, home)
-                // if (logEnable) log.trace("notifyChildDevices: DONE updating: ${member.firstName}, isChanged:${isChanged}")
-                if (isChanged) isAnyChanged = true
-            } else {
-                log.error("notifyChildDevices: device not found: ${externalId}")
-            }
-        } catch (e) {
-            log.error "notifyChildDevices: Exception: member: ${member}"
-            log.error e
-        }
-    }
-
-    updateTimerFrequency(isAnyChanged)
-}
-
-def updateTimerFrequency(boolean isAnyChanged) {
-    if (pollFreq == "auto") {
-        // numLocationUpdates = how many consecutive location changes which can be used to speed up the next location check
-        // - if user(s) are moving, update more frequently; if not, update less frequently
-        Integer prevLocationUpdates = state.numLocationUpdates ?: 0
-        Integer numLocationUpdates = prevLocationUpdates
-        numLocationUpdates += isAnyChanged ? 1 : -1
-        // max out at 3 to prevent a long drive from not slowing down API calls for a while after
-        if (numLocationUpdates < 0) numLocationUpdates = 0
-        else if (numLocationUpdates > 2) numLocationUpdates = 2
-        state.numLocationUpdates = numLocationUpdates
-        //if (logEnable) log.debug "cmdHandler: members:$settings.users.size, isAnyChanged:$isAnyChanged, numLocationUpdates:$numLocationUpdates"
-
-        // calling schedule() can result in it firing right away so only do it if anything changes
-        if (numLocationUpdates != prevLocationUpdates) {
-            scheduleUpdates()
-        }
-    }
-}
-
-def findItem(memberId) {
-    // TODO: there's probably a better way to write this such as:
-    // def item = state.items.find { it.owners?.userId == memberId }
-    for (def item : state.items) {
-        for (def owner : item.owners) {
-            if (owner.userId == memberId) {
-                return item
-            }
-        }
-    }
-    return null
-}
-
-/**
- * subscribe to the life360 webhook to get push notifications on place events within this circle
- */
-def createCircleSubscription() {
-    if (isEmpty(circle)) {
-        log.debug("createCircleSubscription: circle not set")
-        return;
-    }
-
-    // https://api-cloudfront.life360.com/v3/circles/${circle}/webhook.json
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/webhook.json",
-        headers: getHttpHeaders()
-    ]
+    def externalId = "${app.id}.${memberId}"
     try {
-        httpDelete(params) {
-            response ->
-                if (response.status == 200) {
-                    if (logEnable) log.trace("createCircleSubscription: REMOVE_WEBHOOK: DONE")
-                } else {
-                    log.debug("createCircleSubscription: REMOVE_WEBHOOK: bad response:${response.status}, ${response.data}")
-                }
+        // find the appropriate child device based on app id and the device network id
+        def deviceWrapper = getChildDevice("${externalId}")
+        if (deviceWrapper != null) {
+            // send circle places and home to individual children
+            //if (logEnable) log.trace("notifyChildDevice: updating: ${memberObj.firstName}")
+            boolean isChanged = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
+            // if (logEnable) log.trace("notifyChildDevice: DONE updating: ${memberObj.firstName}, isChanged:${isChanged}")
+            if (isChanged) isAnyChanged = true
+        } else {
+            log.error("notifyChildDevice: device not found: ${externalId}")
         }
+    } catch (e) {
+        log.error "notifyChildDevice: Exception: member: ${memberObj}"
+        log.error e
     }
-    catch (e) {
-        // ignore any errors - there many not be any existing webhooks
-        log.debug("createCircleSubscription: REMOVE_WEBHOOK: ${e}")
-    }
-
-    // create our own OAUTH access token to use in webhook url
-    createAccessToken()
-    def hookUrl = "${getFullApiServerUrl()}/placecallback?access_token=${state.accessToken}"
-    log.debug("createCircleSubscription: creating webhook url: ${hookUrl}")
-
-    params["body"] = "url=${hookUrl}"
-
-    try {
-        httpPost(params) {
-            response ->
-                if (response.status == 200) {
-                    log.info("createCircleSubscription: DONE: ${response.data}")
-                } else {
-                    log.error("createCircleSubscription: ERROR: bad response:${response.status}, ${response.data}")
-                }
-        }
-    }
-    catch (e) {
-        // ignore any errors - there many not be any existing webhooks
-        log.error("createCircleSubscription: EXCEPTION: ${e}")
-    }
-}
-
-/**
- * called by Life360 webhook on member entering or exiting a defined place
- */
-def placeEventHandler() {
-    log.info("placeEventHandler: ${params}")
-
-    // TODO: we get info about the member/place in the webhook - ideally only update that member's location
-//    def circleId = params?.circleId
-//    def placeId = params?.placeId
-//    def memberId = params?.userId
-//    def direction = params?.direction
-//    def timestamp = params?.timestamp
-
-    // update location of all members
-    fetchLocations()
-}
-
-def getLocalUri(String user) {
-    def url = getFullLocalApiServerUrl() + "/circle?access_token=${state.accessToken}"
-    if (user != None) {
-        url += "&user=${user}"
-    }
-    return url
-}
-
-def getCloudUri(String user) {
-    def url = "${getApiServerUrl()}/${hubUID}/apps/${app.id}/circle?access_token=${state.accessToken}"
-    if (user != None) {
-        url += "&user=${user}"
-    }
-    return url
 }
 
