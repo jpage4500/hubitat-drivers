@@ -12,6 +12,7 @@
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  *
  *  Changes:
+ *  5.0.7 - 12/11/24 - try to match Home Assistant
  *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
  *  5.0.4 - 11/09/24 - use newer API
  *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
@@ -157,7 +158,7 @@ def strToDate(dateStr) {
 // @param home - Life360 circle which user selected as 'home'
 // @return true if member location changed from last update; false if no change
 Boolean generatePresenceEvent(member, thePlaces, home) {
-    log.trace("generatePresenceEvent: member:${member}")
+    //log.trace("generatePresenceEvent: member:${member}")
     if (member.location == null) return
 
     // NOTE: only interested in sending updates device when location or battery changes
