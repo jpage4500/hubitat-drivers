@@ -78,24 +78,13 @@ def mainPage() {
             input 'appId', 'text', title: 'App ID', required: true, defaultValue: '', submitOnChange: true
         }
         section(header("Devices")) {
-            showChildren()
+            input "linkedDevices", "device.HDDevice", title: "Linked Devices", multiple: true, required: false
         }
         section(header("Other")) {
             input name: "debugOutput", type: "bool", title: "Enable Debug Logging?", defaultValue: false, submitOnChange: true
         }
 
     }
-}
-
-def showChildren() {
-    def childList = getChildDevices()
-    childList.each {
-        String name = it.getName()
-        String label = it.getLabel()
-        logDebug("showChildren: ${name}, ${label}")
-        paragraph("${name} - ${label}")
-    }
-    input("addChildBtn", "button", title: "Add Child Device")
 }
 
 def showAuthorizeButton() {
@@ -170,25 +159,15 @@ def handleAuthRedirect() {
 
 def updated() {
     logDebug("updating")
-    createChildDevices()
     rescheduleLogin()
 
-    def childDevice = getChildDevice(state.deviceId)
-    childDevice?.initialize()
+    updateLinkedDevices()
 }
 
 def installed() {
     log.info "installed"
-    createChildDevices()
     // start app on Hub reboot?
     subscribe(location, 'systemStart', initialize)
-}
-
-def createChildDevices() {
-    if (isEmpty(state.deviceId)) {
-        state.deviceId = UUID.randomUUID().toString()
-    }
-    addChildDevice('jpage4500', "HD+ Device", state.deviceId)
 }
 
 def uninstalled() {
@@ -236,6 +215,11 @@ def login(String authCode) {
     }
 }
 
+def setError(String error) {
+    state.error = error
+    updateLinkedDevices(true)
+}
+
 def refreshLogin() {
     if (clientId == null || clientSecret == null) {
         log.info('refreshLogin: clientId/clientSecret not set!')
@@ -254,23 +238,23 @@ def refreshLogin() {
         httpPost(params) { response -> handleLoginResponse(response) }
     } catch (groovyx.net.http.HttpResponseException e) {
         log.error("refreshLogin:HttpResponseException: ${e.getLocalizedMessage()}: ${e.response.data}")
-        state.error = "Refresh Error: ${e.getLocalizedMessage()}: ${e.response.data}"
+        setError("Refresh Error: ${e.getLocalizedMessage()}: ${e.response.data}")
     } catch (e) {
         // java.net.UnknownHostException: www.googleapis.com: Temporary failure in name resolution on line 285 (method initialize)
         log.error("refreshLogin:ERROR: ${e}")
-        state.error = "Refresh Error: ${e}"
+        setError("Refresh Error: ${e}")
     }
 }
 
 def handleLoginResponse(resp) {
-    state.error = null
+    setError(null)
     def respCode = resp.getStatus()
     def respJson = resp.getData()
     if (respCode == 200) {
         state.lastSuccess = new Date()
         logDebug("handleLoginResponse: ${respCode}")
     } else {
-        state.error = "Refresh Error: ${respCode}, ${respJson}"
+        setError("Refresh Error: ${respCode}, ${respJson}")
         log.error("handleLoginResponse: ERROR: ${respCode}, ${respJson}")
     }
     // refresh token not always returned (no change)
@@ -278,16 +262,21 @@ def handleLoginResponse(resp) {
         state.googleRefreshToken = respJson.refresh_token
     }
     state.googleAccessToken = respJson.access_token
+    
+    updateLinkedDevices()
 }
 
-def appButtonHandler(btn) {
-    logDebug("appButtonHandler: ${btn}")
-    switch (btn) {
-        case "addChildBtn":
-            logDebug("add child...")
-            String childId = UUID.randomUUID().toString()
-            addChildDevice('jpage4500', "HD+ Device", childId)
-            break;
+def updateLinkedDevices(boolean errorOnly=false) {
+    linkedDevices?.forEach {d -> 
+        if (!errorOnly) {
+            d.setProjectID(getProjectId())
+            d.setApiKey(getApiKey())
+            d.setGoogleAccessToken(getGoogleAccessToken())
+            d.setAppID(getAppId())
+            d.initialize()
+        }
+        
+        d.setError(getError())
     }
 }
 
