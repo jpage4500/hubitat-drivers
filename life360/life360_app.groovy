@@ -503,20 +503,15 @@ def notifyChildDevice(memberId, memberObj) {
     }
 }
 
-def void captureCookies(response) {
+void captureCookies(response) {
     def responseCookies = []
-    def cookieHeader
     // Extract just the "Set-Cookie" headers from the Response.
     response.getHeaders('Set-Cookie').each {
         def cookie = it.value.tokenize(';|,')[0]
         if (cookie) responseCookies << cookie
-        if (logEnable) log.debug("it.value = ${it.value}") //logging just this one cookie
-        if (logEnable) log.debug("cookie = ${cookie}")     //and logging the clean version
+        if (logEnable) log.debug("captureCookies: ${cookie}")     //and logging the clean version
     }
-    if (responseCookies) cookieHeader = responseCookies.join(";")
-
-    if (cookieHeader) {
-        state["cookies"] = cookieHeader
-        if (logEnable) log.debug("cookieHeader: ${cookieHeader}")
+    if (responseCookies) {
+        state["cookies"] = responseCookies.join(";")
     }
 }
