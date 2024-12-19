@@ -509,7 +509,7 @@ void captureCookies(response) {
     response.getHeaders('Set-Cookie').each {
         def cookie = it.value.tokenize(';|,')[0]
         if (cookie) responseCookies << cookie
-        if (logEnable) log.debug("captureCookies: ${cookie}")     //and logging the clean version
+        if (logEnable) log.trace("captureCookies: ${cookie}")     //and logging the clean version
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
