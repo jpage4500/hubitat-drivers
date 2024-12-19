@@ -170,12 +170,13 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     Double longitude = toDouble(member.location.longitude)
     Integer accuracy = toDouble(member.location.accuracy).round(0).toInteger()
     Integer battery = toDouble(member.location.battery).round(0).toInteger()
-    Boolean wifiState = member.location.wifiState == 1
-    Boolean charge = member.location.charge == 1
+    Boolean wifiState = toBool(member.location.wifiState)
+    Boolean charge = toBool(member.location.charge)
     Double speed = toDouble(member.location.speed)
-    Boolean inTransit = member.location.inTransit == 1
-    Boolean isDriving = member.location.isDriving == 1
+    Boolean inTransit = toBool(member.location.inTransit)
+    Boolean isDriving = toBool(member.location.isDriving)
     Long since = member.location.since.toLong()
+    // NOTE: userActivity passed in v5 API (not implemented)
     // userActivity:[unknown|os_biking|os_running|vehicle]
     String userActivity = member.location.userActivity
     if (userActivity?.startsWith("os_")) {
@@ -500,4 +501,12 @@ def sendTheMap(theMap) {
 static double toDouble(Object object) {
     if (object) return object.toDouble()
     else return 0
+}
+
+/**
+ * null-safe toBool()
+ */
+static boolean toBool(Object object) {
+    if (object) return object == "1"
+    else return false
 }
