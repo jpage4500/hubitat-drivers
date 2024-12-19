@@ -292,7 +292,7 @@ def fetchMemberLocation(memberId) {
 
                 if (response.status == 200) {
                     // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), member: ${firstName} - ${memberId}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200) || firstName: ${firstName} || memberId: ${memberId} || isDriving: ${isDriving}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -306,19 +306,44 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member: ${firstName} - ${memberId}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304) || firstName: ${firstName} || memberId: ${memberId} || isDriving: ${isDriving}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
                 }
 
-                if (isDriving == 1) {
-                    if (logEnable) log.trace("DRIVING: ${firstName} isDriving ${isDriving}")
-                    state.isDriving = true
-                    scheduleUpdates()
-                } else {
-                    state.isDriving = false
+
+
+                /* --------------------------- */
+
+                if ( firstName == "Matt" ) { isDriving = 0 }
+
+                if (dynamicPolling) {
+                    
+                    if (logEnable) log.trace("---------------------------")
+                    if (logEnable) log.trace("DRIVING - INFO: dynamicPolling:${dynamicPolling} || isDrivingState:${state.isDrivingState} || dynamicPollingActive:${state.dynamicPollingActive} || isDrivingMember:${state.isDrivingMember}")
+                    
+                    
+                    if (isDriving == 1 && ! state.isDrivingState && ! state.dynamicPollingActive) {
+                        if (logEnable) log.trace("DRIVING - SET DYNAMIC POLLING: ${firstName} isDriving ${isDriving}")
+                        state.isDrivingState = true
+                        state.isDrivingMember = memberId
+                        scheduleUpdates()
+                    } else if (isDriving == 1 && state.isDrivingState && state.dynamicPollingActive && state.isDrivingMember == memberId ) {
+                        if (logEnable) log.trace("DRIVING - ALREADY ACTIVE: ${firstName} isDriving ${isDriving}")
+                    } else if (isDriving == 0 && state.isDrivingState && state.dynamicPollingActive && state.isDrivingMember == memberId ) {
+                        if (logEnable) log.trace("DRIVING - SET STANDARD POLLING: ${firstName} isDriving ${isDriving}")
+                        state.isDrivingState = false
+                        state.isDrivingMember = null
+                        scheduleUpdates()
+                    } else {
+                        if (logEnable) log.trace("DRIVING - DO NOTHING")
+                    }
                 }
+                if (logEnable) log.trace("---------------------------")
+                /* --------------------------- */
+
+
         }
     } catch (e) {
         handleException("fetchMemberLocation: member:${memberId}", e)
@@ -427,19 +452,18 @@ def refresh() {
 
 def scheduleUpdates() {
 
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, dynamicPolling:$dynamicPolling")
-    if (logEnable) log.debug("scheduleUpdates: isDriving:${state.isDriving}")
-
     unschedule()
 
     Integer refreshSecs = 30
-    if (dynamicPolling && state.isDriving) {
-        if (logEnable) log.debug("scheduleUpdates - dynamicPolling: isDriving:${state.isDriving}")
+    if (dynamicPolling && state.isDrivingState) {
+        if (logEnable) log.trace("scheduleUpdates - dynamicPolling: isDrivingState:${state.isDrivingState}")
+        state.dynamicPollingActive = true
         refreshSecs = 10
     } else {
         refreshSecs = pollFreq.toInteger()
+        state.dynamicPollingActive = false
     }
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, dynamicPolling:$dynamicPolling")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
@@ -447,7 +471,6 @@ def scheduleUpdates() {
         // mins
         schedule("0 */${refreshSecs / 60} * * * ? *", handleTimerFired)
     }
-    if (logEnable) log.trace("scheduleUpdates: FINAL POLLING FREQ IS: ${refreshSecs}")
 }
 
 /**
