@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.8 - 12/18/24 - added cookies found by @user3774
  *  5.0.7 - 12/11/24 - try to match Home Assistant
  *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
  *  5.0.5 - 11/12/24 - support eTag for locations call
@@ -197,13 +198,10 @@ def fetchMembers() {
         return;
     }
 
-    // -- new API --
-    // https://api-cloudfront.life360.com/v4/circles/CIRCLE/members
-    // -- old API --
     // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
     def params = [
         uri    : "https://api-cloudfront.life360.com",
-        path   : "/v4/circles/${circle}/members",
+        path   : "/v3/circles/${circle}/members",
         headers: getHttpHeaders()
     ]
 
@@ -212,6 +210,8 @@ def fetchMembers() {
     try {
         httpGet(params) {
             response ->
+                captureCookies(response)
+                //if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
                     state.message = null
@@ -231,7 +231,7 @@ def fetchMembers() {
 def fetchLocations() {
     if (isEmpty(circle)) {
         log.debug("fetchLocations: circle not set")
-        return;
+        return
     } else if (isEmpty(settings.users)) {
         log.debug("fetchLocations: no users selected")
         return
@@ -263,15 +263,26 @@ def fetchMemberLocation(memberId) {
         headers: getHttpHeaders()
     ]
 
+    // add cookies to header
+    def cookies = state["cookies"]
+    if (cookies) {
+        params["headers"]["Cookie"] = cookies
+        //if (logEnable) log.debug("Cookies added to header:  ${cookies}")
+    }
+
     // set l360-etag value
     def tag = state["etag-${memberId}"]
-    if (!isEmpty(tag)) params["headers"]["If-None-Match"] = tag
+    if (tag) {
+        params["headers"]["If-None-Match"] = tag
+        //if (logEnable) log.debug("eTag header:  ${tag}")
+    }
 
     //if (logEnable) log.trace("fetchMemberLocation: member:${memberId}, tag:${tag}")
 
     try {
         httpGet(params) {
             response ->
+                captureCookies(response)
                 if (response.status == 200) {
                     // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
                     if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}")
@@ -325,21 +336,10 @@ Map getHttpHeaders() {
     // try to match these headers:
     // - https://github.com/pnbruckner/life360/blob/master/life360/const.py#L7
     // - https://github.com/pnbruckner/life360/blob/master/life360/api.py#L46
-    // NOTE: new /v5 API requires several new http headers (ce_*)
     def baseHeaders = [
-        "Accept"         : "application/json",
-        "cache-control"  : "no-cache",
-        "User-Agent"     : "com.life360.android.safetymapd/KOKO/23.50.0 android/13",
-//        "Accept-Encoding": "gzip",
-//        "Accept-Language": "en_US",
-//        "Content-Type"   : "application/json; charset=UTF-8",
-//        "Connection"     : "Keep-Alive",
-//        "Host"           : "api-cloudfront.life360.com",
-//        "ce-id"          : UUID.randomUUID().toString(),
-//        "ce-source"      : "/ANDROID/14/Google-Pixel-7/${state.deviceId}",
-//        "ce-specversion" : "1.0",
-//        "ce-time"        : new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"),
-//        "ce-type"        : "com.life360.cloud.platform.devices.locations.v1"
+        "Accept"       : "application/json",
+        "cache-control": "no-cache",
+        "User-Agent"   : "com.life360.android.safetymapd/KOKO/23.50.0 android/13",
     ]
 
     // TODO: not sure this is necessary for old API
@@ -433,7 +433,7 @@ def scheduleUpdates() {
  * called by timer
  */
 def handleTimerFired() {
-     fetchLocations()
+    fetchLocations()
 }
 
 def createChildDevices() {
@@ -503,3 +503,15 @@ def notifyChildDevice(memberId, memberObj) {
     }
 }
 
+void captureCookies(response) {
+    def responseCookies = []
+    // Extract just the "Set-Cookie" headers from the Response.
+    response.getHeaders('Set-Cookie').each {
+        def cookie = it.value.tokenize(';|,')[0]
+        if (cookie) responseCookies << cookie
+        //if (logEnable) log.trace("captureCookies: ${cookie}")     //and logging the clean version
+    }
+    if (responseCookies) {
+        state["cookies"] = responseCookies.join(";")
+    }
+}

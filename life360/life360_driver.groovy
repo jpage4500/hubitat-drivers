@@ -12,6 +12,7 @@
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  *
  *  Changes:
+ *  5.0.8 - 12/18/24 - added cookies found by @user3774
  *  5.0.7 - 12/11/24 - try to match Home Assistant
  *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
  *  5.0.4 - 11/09/24 - use newer API
@@ -48,6 +49,8 @@ metadata {
         attribute "isDriving", "enum", ["true", "false"]
         attribute "speed", "number"
         attribute "distance", "number"
+        attribute "since", "number"
+        // NOTE: sent in V5 API (not implemented)
         attribute "userActivity", "string"
 
         // device data
@@ -167,12 +170,13 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     Double longitude = toDouble(member.location.longitude)
     Integer accuracy = toDouble(member.location.accuracy).round(0).toInteger()
     Integer battery = toDouble(member.location.battery).round(0).toInteger()
-    Boolean wifiState = member.location.wifiState == 1
-    Boolean charge = member.location.charge == 1
+    Boolean wifiState = toBool(member.location.wifiState)
+    Boolean charge = toBool(member.location.charge)
     Double speed = toDouble(member.location.speed)
-    Boolean inTransit = member.location.inTransit == 1
-    Boolean isDriving = member.location.isDriving == 1
-    Date lastUpdated = new Date(member.location.since)
+    Boolean inTransit = toBool(member.location.inTransit)
+    Boolean isDriving = toBool(member.location.isDriving)
+    Long since = member.location.since.toLong()
+    // NOTE: userActivity passed in v5 API (not implemented)
     // userActivity:[unknown|os_biking|os_running|vehicle]
     String userActivity = member.location.userActivity
     if (userActivity?.startsWith("os_")) {
@@ -215,6 +219,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
     if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
+    Date lastUpdated = new Date()
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
@@ -260,6 +265,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         sendEvent(name: "address1prev", value: prevAddress)
         sendEvent(name: "address1", value: address1)
         sendEvent(name: "lastLocationUpdate", value: lastUpdated)
+        sendEvent(name: "since", value: since)
     }
 
     // *** Presence ***
@@ -346,22 +352,29 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {
-        // clear out existing html values (only useful if you previously had HTML enabled..)
-        sendEvent(name: "avatarHtml", value: null)
-        sendEvent(name: "html", value: null)
         return isLocationChanged
     }
 
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    sendEvent(name: "avatarHtml", value: generateHtml)
+    sendEvent(name: "avatarHtml", value: avatarHtml)
 
     String binTransita
     if (isDriving) binTransita = "Driving"
     else if (inTransit) binTransita = "Moving"
     else binTransita = "Not Moving"
 
+    int sEpoch = device.currentValue('since')
+    if (sEpoch == null) {
+        theDate = use(groovy.time.TimeCategory) {
+            new Date(0)
+        }
+    } else {
+        theDate = use(groovy.time.TimeCategory) {
+            new Date(0) + sEpoch.seconds
+        }
+    }
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
-    String lastUpdatedDesc = DATE_FORMAT.format(lastUpdated)
+    String dateSince = DATE_FORMAT.format(theDate)
 
     String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
 
@@ -369,7 +382,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
     tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" : address1}</a><br>"
-    tileMap += "Updated: ${lastUpdatedDesc}<br>"
+    tileMap += "Since: ${dateSince}<br>"
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
     if (address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
@@ -488,4 +501,12 @@ def sendTheMap(theMap) {
 static double toDouble(Object object) {
     if (object) return object.toDouble()
     else return 0
+}
+
+/**
+ * null-safe toBool()
+ */
+static boolean toBool(Object object) {
+    if (object) return object == "1"
+    else return false
 }
