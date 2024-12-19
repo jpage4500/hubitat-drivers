@@ -312,37 +312,36 @@ def fetchMemberLocation(memberId) {
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
                 }
 
-
-
                 /* --------------------------- */
+                annoyingDebugging = false
 
-                if ( firstName == "Matt" ) { isDriving = 0 }
+                // HACK FOR TESTING DYNAMIC POLLING
+                // if ( firstName == "Matt" ) { isDriving = 0 }
 
                 if (dynamicPolling) {
                     
-                    if (logEnable) log.trace("---------------------------")
-                    if (logEnable) log.trace("DRIVING - INFO: dynamicPolling:${dynamicPolling} || isDrivingState:${state.isDrivingState} || dynamicPollingActive:${state.dynamicPollingActive} || isDrivingMember:${state.isDrivingMember}")
+                    if (annoyingDebugging) log.trace("---------------------------")
+                    if (annoyingDebugging) log.trace("DRIVING - INFO: dynamicPolling:${dynamicPolling} || isDrivingState:${state.isDrivingState} || dynamicPollingActive:${state.dynamicPollingActive} || isDrivingMember:${state.isDrivingMember}")
                     
                     
                     if (isDriving == 1 && ! state.isDrivingState && ! state.dynamicPollingActive) {
-                        if (logEnable) log.trace("DRIVING - SET DYNAMIC POLLING: ${firstName} isDriving ${isDriving}")
+                        if (logEnable) log.debug("DRIVING - SET DYNAMIC POLLING: ${firstName} isDriving ${isDriving}")
                         state.isDrivingState = true
                         state.isDrivingMember = memberId
                         scheduleUpdates()
                     } else if (isDriving == 1 && state.isDrivingState && state.dynamicPollingActive && state.isDrivingMember == memberId ) {
-                        if (logEnable) log.trace("DRIVING - ALREADY ACTIVE: ${firstName} isDriving ${isDriving}")
+                        if (annoyingDebugging) log.trace("DRIVING - ALREADY ACTIVE: ${firstName} isDriving ${isDriving}")
                     } else if (isDriving == 0 && state.isDrivingState && state.dynamicPollingActive && state.isDrivingMember == memberId ) {
-                        if (logEnable) log.trace("DRIVING - SET STANDARD POLLING: ${firstName} isDriving ${isDriving}")
+                        if (logEnable) log.debug("DRIVING - SET STANDARD POLLING: ${firstName} isDriving ${isDriving}")
                         state.isDrivingState = false
                         state.isDrivingMember = null
                         scheduleUpdates()
                     } else {
-                        if (logEnable) log.trace("DRIVING - DO NOTHING")
+                        // if (logEnable) log.trace("DRIVING - DO NOTHING")
                     }
                 }
-                if (logEnable) log.trace("---------------------------")
+                if (annoyingDebugging) log.trace("---------------------------")
                 /* --------------------------- */
-
 
         }
     } catch (e) {
@@ -451,12 +450,10 @@ def refresh() {
 }
 
 def scheduleUpdates() {
-
     unschedule()
 
     Integer refreshSecs = 30
     if (dynamicPolling && state.isDrivingState) {
-        if (logEnable) log.trace("scheduleUpdates - dynamicPolling: isDrivingState:${state.isDrivingState}")
         state.dynamicPollingActive = true
         refreshSecs = 10
     } else {
