@@ -49,6 +49,8 @@ metadata {
         attribute "isDriving", "enum", ["true", "false"]
         attribute "speed", "number"
         attribute "distance", "number"
+        attribute "since", "number"
+        // NOTE: sent in V5 API (not implemented)
         attribute "userActivity", "string"
 
         // device data
@@ -173,7 +175,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     Double speed = toDouble(member.location.speed)
     Boolean inTransit = member.location.inTransit == 1
     Boolean isDriving = member.location.isDriving == 1
-    Date lastUpdated = new Date(member.location.since)
+    Long since = member.location.since.toLong()
     // userActivity:[unknown|os_biking|os_running|vehicle]
     String userActivity = member.location.userActivity
     if (userActivity?.startsWith("os_")) {
@@ -216,6 +218,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
     if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
+    Date lastUpdated = new Date()
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
@@ -261,6 +264,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         sendEvent(name: "address1prev", value: prevAddress)
         sendEvent(name: "address1", value: address1)
         sendEvent(name: "lastLocationUpdate", value: lastUpdated)
+        sendEvent(name: "since", value: since)
     }
 
     // *** Presence ***
@@ -361,6 +365,16 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     else if (inTransit) binTransita = "Moving"
     else binTransita = "Not Moving"
 
+    int sEpoch = device.currentValue('since')
+    if (sEpoch == null) {
+        theDate = use(groovy.time.TimeCategory) {
+            new Date(0)
+        }
+    } else {
+        theDate = use(groovy.time.TimeCategory) {
+            new Date(0) + sEpoch.seconds
+        }
+    }
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
     String lastUpdatedDesc = DATE_FORMAT.format(lastUpdated)
 
@@ -370,7 +384,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
     tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" : address1}</a><br>"
-    tileMap += "Updated: ${lastUpdatedDesc}<br>"
+    tileMap += "Since: ${dateSince}<br>"
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
     if (address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
