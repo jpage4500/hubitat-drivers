@@ -102,6 +102,7 @@ def mainPage() {
 
         section(header("Other Options")) {
             input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -283,9 +284,15 @@ def fetchMemberLocation(memberId) {
         httpGet(params) {
             response ->
                 captureCookies(response)
+
+                def memberState = state.members.find {it.id == memberId}
+                def firstName = memberState.firstName
+                def isDriving = memberState["location"].isDriving
+
+
                 if (response.status == 200) {
                     // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), member: ${firstName} - ${memberId}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -299,10 +306,18 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member: ${firstName} - ${memberId}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
+                }
+
+                if (isDriving == 1) {
+                    if (logEnable) log.trace("DRIVING: ${firstName} isDriving ${isDriving}")
+                    state.isDriving = true
+                    scheduleUpdates()
+                } else {
+                    state.isDriving = false
                 }
         }
     } catch (e) {
@@ -411,11 +426,16 @@ def refresh() {
 }
 
 def scheduleUpdates() {
+
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, dynamicPolling:$dynamicPolling")
+    if (logEnable) log.debug("scheduleUpdates: isDriving:${state.isDriving}")
+
     unschedule()
 
     Integer refreshSecs = 30
-    if (pollFreq == "auto") {
-        // TODO: REMOVE
+    if (dynamicPolling && state.isDriving) {
+        if (logEnable) log.debug("scheduleUpdates - dynamicPolling: isDriving:${state.isDriving}")
+        refreshSecs = 10
     } else {
         refreshSecs = pollFreq.toInteger()
     }
@@ -427,6 +447,7 @@ def scheduleUpdates() {
         // mins
         schedule("0 */${refreshSecs / 60} * * * ? *", handleTimerFired)
     }
+    if (logEnable) log.trace("scheduleUpdates: FINAL POLLING FREQ IS: ${refreshSecs}")
 }
 
 /**
