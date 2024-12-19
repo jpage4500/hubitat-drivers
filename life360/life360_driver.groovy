@@ -351,14 +351,11 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {
-        // clear out existing html values (only useful if you previously had HTML enabled..)
-        sendEvent(name: "avatarHtml", value: null)
-        sendEvent(name: "html", value: null)
         return isLocationChanged
     }
 
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    sendEvent(name: "avatarHtml", value: generateHtml)
+    sendEvent(name: "avatarHtml", value: avatarHtml)
 
     String binTransita
     if (isDriving) binTransita = "Driving"
@@ -376,7 +373,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         }
     }
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
-    String lastUpdatedDesc = DATE_FORMAT.format(lastUpdated)
+    String dateSince = DATE_FORMAT.format(theDate)
 
     String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
 
