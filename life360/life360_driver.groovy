@@ -12,6 +12,7 @@
  * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
  *
  *  Changes:
+ *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
  *  5.0.8 - 12/18/24 - added cookies found by @user3774
  *  5.0.7 - 12/11/24 - try to match Home Assistant
  *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
