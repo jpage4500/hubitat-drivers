@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "5.0.8",
+  "version": "5.0.9",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "added cookies found by @user3774",
+  "releaseNotes": "try a different API when hitting 403 error",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
