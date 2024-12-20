@@ -255,7 +255,43 @@ def fetchLocations() {
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
+    
+    /*    
+    state.inTransit = false
+    state.inTransitMember = "4810db1a-3ccf-4eb4-aba3-46c7f0c8576d"
+    */
+    
+    
+    /* --------- DYNAMIC POLLING START --------- */
+
+    if (dynamicPolling) {
+
+        if (logEnable) log.trace("TRANSIT - INFO: dynamicPolling:${dynamicPolling} || inTransitState:${state.inTransit} || dynamicPollingActive:${state.dynamicPollingActive} || inTransitMember:${state.inTransitMember}")
+
+        if (state.inTransit && ! state.dynamicPollingActive) {
+            if (logEnable) log.debug("TRANSIT - SET DYNAMIC POLLING: ${firstName} inTransit ${state.inTransit}")
+            scheduleUpdates()
+
+        } else if (state.inTransit && state.dynamicPollingActive) {
+            if (logEnable) log.debug("TRANSIT - ALREADY ACTIVE: ${firstName} inTransit ${state.inTransit}")
+
+        } else if (! state.inTransit && state.inTransitMember && state.dynamicPollingActive) {
+            if (logEnable) log.debug("TRANSIT - SET STANDARD POLLING: ${firstName} inTransit ${state.inTransit}")
+            state.inTransit = false
+            state.inTransitMember = null
+            scheduleUpdates()
+        } else {
+            if (annoyingDebugging) log.trace("TRANSIT - DO NOTHING")
+        }
+    }
+
+    /* --------- DYNAMIC POLLING END --------- */
+            
+    if (annoyingDebugging) log.trace("========= RESPONSE END - ${firstName} =========")    
 }
+
+
+    
 
 def fetchMemberLocation(memberId) {
     // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members/MEMBER
@@ -294,29 +330,30 @@ def fetchMemberLocation(memberId) {
                 def memberState = state.members.find {it.id == memberId}
                 def firstName = memberState.firstName
 
-            if (annoyingDebugging) log.trace("========= RESPONSE START - ${firstName} =========")
+                if (annoyingDebugging) log.trace("========= RESPONSE START - ${firstName} =========")
 
-                if (response.data) {
-                    def responseData = response.data
-                    inTransit = responseData["location"].inTransit
-                    log.trace("fetchMemberLocation: YES DATA || firstName: ${firstName} || inTransit: ${inTransit}")
-                } else {
-                     //log.trace("fetchMemberLocation: NO DATA || firstName: ${firstName}")
+                if (response.data && response.data['location'].inTransit == 1) {
+                    state.inTransit = true
+                    state.inTransitMember = memberId
+                    log.trace("fetchMemberLocation: YES DATA || firstName: ${firstName} || inTransit: ${state.inTransit}")
+                    log.trace("${responseData}")
                 }
 
                 ///////////////////////////
                 // HACK FOR TESTING DYNAMIC POLLING
-                /*if ( firstName == "Matt" ) {
-                    inTransit = 1
-                } else {
-                    inTransit = null
-                }*/
+                /*
+                if ( firstName == "Matt" ) {
+                    state.inTransit = true
+                    state.inTransitMember = memberId
+                    //state.inTransitMember = null
+                }
+                */
                 ///////////////////////////
 
 
                 if (response.status == 200) {
 
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200) || firstName: ${firstName} || memberId: ${memberId} || inTransit: ${inTransit}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200) || firstName: ${firstName} || memberId: ${memberId}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -331,42 +368,11 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304) || firstName: ${firstName} || memberId: ${memberId} || inTransit: ${inTransit}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304) || firstName: ${firstName} || memberId: ${memberId}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
                 }
-
-
-                /* --------- DYNAMIC POLLING START --------- */
-
-                if (dynamicPolling) {
-                    
-                    if (annoyingDebugging) log.trace("TRANSIT - INFO: dynamicPolling:${dynamicPolling} || inTransitState:${state.inTransitState} || dynamicPollingActive:${state.dynamicPollingActive} || inTransitMember:${state.inTransitMember}")
-
-                    if (inTransit == 1 && ! state.inTransitState && ! state.dynamicPollingActive) {
-                        if (logEnable) log.debug("TRANSIT - SET DYNAMIC POLLING: ${firstName} inTransit ${inTransit}")
-                        state.inTransitState = true
-                        state.inTransitMember = memberId
-                        scheduleUpdates()
-                    } else if (inTransit == 1 && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
-                        if (annoyingDebugging) log.trace("TRANSIT - ALREADY ACTIVE: ${firstName} inTransit ${inTransit}")
-                    //} else if (inTransit == 0 && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
-                    //} else if ((! inTransit || inTransit ==0) && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
-                    } else if (! inTransit && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
-                        if (logEnable) log.debug("TRANSIT - SET STANDARD POLLING: ${firstName} inTransit ${inTransit}")
-                        state.inTransitState = false
-                        state.inTransitMember = null
-                        scheduleUpdates()
-                    } else {
-                        if (annoyingDebugging) log.trace("TRANSIT - DO NOTHING")
-                    }
-                }
-
-                /* --------- DYNAMIC POLLING END --------- */
-            
-                if (annoyingDebugging) log.trace("========= RESPONSE END - ${firstName} =========")
-
         }
     } catch (e) {
         handleException("fetchMemberLocation: member:${memberId}", e)
@@ -490,7 +496,7 @@ def scheduleUpdates() {
     unschedule()
 
     Integer refreshSecs = 30
-    if (pollFreq.toInteger() > 20 && dynamicPolling && state.inTransitState) {
+    if (pollFreq.toInteger() > 20 && dynamicPolling && state.inTransit) {
         state.dynamicPollingActive = true
         refreshSecs = 20
     } else {
