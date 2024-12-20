@@ -283,16 +283,39 @@ def fetchMemberLocation(memberId) {
     try {
         httpGet(params) {
             response ->
+
+            
+                annoyingDebugging = false
+
+            
                 captureCookies(response)
 
                 def memberState = state.members.find {it.id == memberId}
                 def firstName = memberState.firstName
-                def isDriving = memberState["location"].isDriving
+
+            if (annoyingDebugging) log.trace("========= RESPONSE START - ${firstName} =========")
+
+                if (response.data) {
+                    def responseData = response.data
+                    inTransit = responseData["location"].inTransit
+                    log.trace("fetchMemberLocation: YES DATA || firstName: ${firstName} || inTransit: ${inTransit}")
+                } else {
+                     //log.trace("fetchMemberLocation: NO DATA || firstName: ${firstName}")
+                }
+
+                ///////////////////////////
+                // HACK FOR TESTING DYNAMIC POLLING
+                /*if ( firstName == "Matt" ) {
+                    inTransit = 1
+                } else {
+                    inTransit = null
+                }*/
+                ///////////////////////////
 
 
                 if (response.status == 200) {
-                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200) || firstName: ${firstName} || memberId: ${memberId} || isDriving: ${isDriving}")
+
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200) || firstName: ${firstName} || memberId: ${memberId} || inTransit: ${inTransit}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -306,47 +329,55 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304) || firstName: ${firstName} || memberId: ${memberId} || isDriving: ${isDriving}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304) || firstName: ${firstName} || memberId: ${memberId} || inTransit: ${inTransit}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
                 }
 
+
                 /* --------------------------- */
-                annoyingDebugging = false
 
-                // HACK FOR TESTING DYNAMIC POLLING
-                // if ( firstName == "Matt" ) { isDriving = 0 }
 
+                //if (annoyingDebugging) log.trace("--------- DYNAMIC POLLING START ---------")
                 if (dynamicPolling) {
                     
-                    if (annoyingDebugging) log.trace("---------------------------")
-                    if (annoyingDebugging) log.trace("DRIVING - INFO: dynamicPolling:${dynamicPolling} || isDrivingState:${state.isDrivingState} || dynamicPollingActive:${state.dynamicPollingActive} || isDrivingMember:${state.isDrivingMember}")
-                    
-                    
-                    if (isDriving == 1 && ! state.isDrivingState && ! state.dynamicPollingActive) {
-                        if (logEnable) log.debug("DRIVING - SET DYNAMIC POLLING: ${firstName} isDriving ${isDriving}")
-                        state.isDrivingState = true
-                        state.isDrivingMember = memberId
+                    if (annoyingDebugging) log.trace("TRANSIT - INFO: dynamicPolling:${dynamicPolling} || inTransitState:${state.inTransitState} || dynamicPollingActive:${state.dynamicPollingActive} || inTransitMember:${state.inTransitMember}")
+
+                    if (inTransit == 1 && ! state.inTransitState && ! state.dynamicPollingActive) {
+                        if (logEnable) log.debug("TRANSIT - SET DYNAMIC POLLING: ${firstName} inTransit ${inTransit}")
+                        state.inTransitState = true
+                        state.inTransitMember = memberId
                         scheduleUpdates()
-                    } else if (isDriving == 1 && state.isDrivingState && state.dynamicPollingActive && state.isDrivingMember == memberId ) {
-                        if (annoyingDebugging) log.trace("DRIVING - ALREADY ACTIVE: ${firstName} isDriving ${isDriving}")
-                    } else if (isDriving == 0 && state.isDrivingState && state.dynamicPollingActive && state.isDrivingMember == memberId ) {
-                        if (logEnable) log.debug("DRIVING - SET STANDARD POLLING: ${firstName} isDriving ${isDriving}")
-                        state.isDrivingState = false
-                        state.isDrivingMember = null
+                    } else if (inTransit == 1 && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
+                        if (annoyingDebugging) log.trace("TRANSIT - ALREADY ACTIVE: ${firstName} inTransit ${inTransit}")
+                    //} else if (inTransit == 0 && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
+                    //} else if ((! inTransit || inTransit ==0) && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
+                    } else if (! inTransit && state.inTransitState && state.dynamicPollingActive && state.inTransitMember == memberId ) {
+                        if (logEnable) log.debug("TRANSIT - SET STANDARD POLLING: ${firstName} inTransit ${inTransit}")
+                        state.inTransitState = false
+                        state.inTransitMember = null
                         scheduleUpdates()
                     } else {
-                        // if (logEnable) log.trace("DRIVING - DO NOTHING")
+                        if (logEnable) log.trace("TRANSIT - DO NOTHING")
                     }
                 }
-                if (annoyingDebugging) log.trace("---------------------------")
+
+                //if (annoyingDebugging) log.trace("--------- DYNAMIC POLLING END ---------")
+
+
                 /* --------------------------- */
+                if (annoyingDebugging) log.trace("========= RESPONSE END - ${firstName} =========")
 
         }
     } catch (e) {
         handleException("fetchMemberLocation: member:${memberId}", e)
+        if (logEnable) log.debug("FORCING REFRESH - START")
+        fetchMembers()
+        //fetchLocations()
+        if (logEnable) log.debug("FORCING REFRESH - END")
     }
+
 }
 
 def handleException(String tag, Exception e) {
@@ -453,9 +484,9 @@ def scheduleUpdates() {
     unschedule()
 
     Integer refreshSecs = 30
-    if (dynamicPolling && state.isDrivingState) {
+    if (pollFreq.toInteger() > 20 && dynamicPolling && state.inTransitState) {
         state.dynamicPollingActive = true
-        refreshSecs = 10
+        refreshSecs = 20
     } else {
         refreshSecs = pollFreq.toInteger()
         state.dynamicPollingActive = false
