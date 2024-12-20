@@ -336,10 +336,8 @@ def fetchMemberLocation(memberId) {
                 }
 
 
-                /* --------------------------- */
+                /* --------- DYNAMIC POLLING START --------- */
 
-
-                //if (annoyingDebugging) log.trace("--------- DYNAMIC POLLING START ---------")
                 if (dynamicPolling) {
                     
                     if (annoyingDebugging) log.trace("TRANSIT - INFO: dynamicPolling:${dynamicPolling} || inTransitState:${state.inTransitState} || dynamicPollingActive:${state.dynamicPollingActive} || inTransitMember:${state.inTransitMember}")
@@ -359,14 +357,12 @@ def fetchMemberLocation(memberId) {
                         state.inTransitMember = null
                         scheduleUpdates()
                     } else {
-                        if (logEnable) log.trace("TRANSIT - DO NOTHING")
+                        if (annoyingDebugging) log.trace("TRANSIT - DO NOTHING")
                     }
                 }
 
-                //if (annoyingDebugging) log.trace("--------- DYNAMIC POLLING END ---------")
-
-
-                /* --------------------------- */
+                /* --------- DYNAMIC POLLING END --------- */
+            
                 if (annoyingDebugging) log.trace("========= RESPONSE END - ${firstName} =========")
 
         }
