@@ -267,7 +267,7 @@ def fetchMemberLocation(memberId) {
     def cookies = state["cookies"]
     if (cookies) {
         params["headers"]["Cookie"] = cookies
-        //if (logEnable) log.debug("Cookies added to header:  ${cookies}")
+        //if (logEnable) log.debug("fetchMemberLocation: cookie: ${cookies}")
     }
 
     // set l360-etag value
@@ -290,6 +290,7 @@ def fetchMemberLocation(memberId) {
                     // update child devices
                     notifyChildDevice(memberId, response.data)
 
+                    state.failCount = 0
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
 
@@ -307,6 +308,18 @@ def fetchMemberLocation(memberId) {
         }
     } catch (e) {
         handleException("fetchMemberLocation: member:${memberId}", e)
+        def status = e.response?.status
+        if (status == 403) {
+            // if this call fails with a 403 error, try a different API to capture updated cookies
+            // alternately we could try clearing cookies and re-trying same call..
+            def failCount = state.failCount ?: 0
+            failCount++
+            // NOTE: I'm setting a limit on how many times this will try fetchMembers()
+            if (failCount <= 10) {
+                log.debug("fetchMemberLocation: RETRY, fail:${failCount}")
+                fetchMembers()
+            }
+        }
     }
 }
 
@@ -515,3 +528,4 @@ void captureCookies(response) {
         state["cookies"] = responseCookies.join(";")
     }
 }
+
