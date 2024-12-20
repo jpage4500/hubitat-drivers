@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
  *  5.0.8 - 12/18/24 - added cookies found by @user3774
  *  5.0.7 - 12/11/24 - try to match Home Assistant
  *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
@@ -268,7 +269,7 @@ def fetchMemberLocation(memberId) {
     def cookies = state["cookies"]
     if (cookies) {
         params["headers"]["Cookie"] = cookies
-        //if (logEnable) log.debug("Cookies added to header:  ${cookies}")
+        //if (logEnable) log.debug("fetchMemberLocation: cookie: ${cookies}")
     }
 
     // set l360-etag value
@@ -320,6 +321,7 @@ def fetchMemberLocation(memberId) {
                     // update child devices
                     notifyChildDevice(memberId, response.data)
 
+                    state.failCount = 0
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
 
@@ -368,10 +370,18 @@ def fetchMemberLocation(memberId) {
         }
     } catch (e) {
         handleException("fetchMemberLocation: member:${memberId}", e)
-        if (logEnable) log.debug("FORCING REFRESH - START")
-        fetchMembers()
-        //fetchLocations()
-        if (logEnable) log.debug("FORCING REFRESH - END")
+        def status = e.response?.status
+        if (status == 403) {
+            // if this call fails with a 403 error, try a different API to capture updated cookies
+            // alternately we could try clearing cookies and re-trying same call..
+            def failCount = state.failCount ?: 0
+            failCount++
+            // NOTE: I'm setting a limit on how many times this will try fetchMembers()
+            if (failCount <= 10) {
+                log.debug("fetchMemberLocation: RETRY, fail:${failCount}")
+                fetchMembers()
+            }
+        }
     }
 
 }
