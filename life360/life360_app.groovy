@@ -212,7 +212,7 @@ def fetchMembers() {
         httpGet(params) {
             response ->
                 captureCookies(response)
-                if (logEnable) log.debug("fetchMembers: ${response.data}")
+                //if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
                     state.message = null
@@ -240,13 +240,13 @@ def fetchMembers() {
 /**
  * fetch location for every member
  */
-def fetchLocations() {
+boolean fetchLocations() {
     if (isEmpty(circle)) {
         log.debug("fetchLocations: circle not set")
-        return
+        return false
     } else if (isEmpty(settings.users)) {
         log.debug("fetchLocations: no users selected")
-        return
+        return false
     }
 
     // prevent calling this API too frequently (< 5 seconds)
@@ -254,11 +254,10 @@ def fetchLocations() {
     if (state.lastUpdateMs != null) {
         long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
         if (lastAttempt < 5) {
-            if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
+            //if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
             state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
-            return
+            return false
         }
-        if (logEnable) log.trace "fetchLocations: last:${lastAttempt}ms"
     }
     state.lastUpdateMs = currentTimeMs
 
@@ -266,9 +265,7 @@ def fetchLocations() {
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
-
-    // re-schedule timer to add a little randomness
-    scheduleUpdates()
+    return true
 }
 
 def fetchMemberLocation(memberId) {
@@ -465,7 +462,24 @@ def scheduleUpdates() {
  * called by timer
  */
 def handleTimerFired() {
-    fetchLocations()
+    if (!fetchLocations()) return
+
+    // change things up every 10 minutes or so
+    Long currentTimeMs = new Date().getTime()
+    Long updateTimeMs = state.updateTimeMs ?: 0
+    if (currentTimeMs > updateTimeMs) {
+        if (logEnable) log.info "handleTimerFired: changing things up"
+
+        // re-schedule timer to add a little randomness
+        scheduleUpdates()
+
+        // this call doesn't use cookies
+        fetchMembers()
+
+        // update again in 5-10 minutes
+        Integer random = Math.abs(new Random().nextInt() % 300000) + 300000
+        state.updateTimeMs = currentTimeMs + random
+    }
 }
 
 def createChildDevices() {
