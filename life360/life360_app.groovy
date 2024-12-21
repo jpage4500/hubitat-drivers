@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.10 - 12/21/24 - add some randomness
  *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
  *  5.0.8 - 12/18/24 - added cookies found by @user3774
  *  5.0.7 - 12/11/24 - try to match Home Assistant
@@ -216,6 +217,16 @@ def fetchMembers() {
                 if (response.status == 200) {
                     state.members = response.data?.members
                     state.message = null
+
+                    // update child devices
+                    settings.users.each { memberId ->
+                        def externalId = "${app.id}.${memberId}"
+                        def deviceWrapper = getChildDevice("${externalId}")
+                        if (!deviceWrapper) {
+                            def member = state.members.find { it.id == memberId }
+                            notifyChildDevice(memberId, member)
+                        }
+                    }
                 } else {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
@@ -229,23 +240,23 @@ def fetchMembers() {
 /**
  * fetch location for every member
  */
-def fetchLocations() {
+boolean fetchLocations() {
     if (isEmpty(circle)) {
         log.debug("fetchLocations: circle not set")
-        return
+        return false
     } else if (isEmpty(settings.users)) {
         log.debug("fetchLocations: no users selected")
-        return
+        return false
     }
 
     // prevent calling this API too frequently (< 5 seconds)
+    long currentTimeMs = new Date().getTime()
     if (state.lastUpdateMs != null) {
-        long currentTimeMs = new Date().getTime()
         long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
         if (lastAttempt < 5) {
-            if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
+            //if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
             state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
-            return
+            return false
         }
     }
     state.lastUpdateMs = currentTimeMs
@@ -254,6 +265,7 @@ def fetchLocations() {
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
+    return true
 }
 
 def fetchMemberLocation(memberId) {
@@ -313,11 +325,10 @@ def fetchMemberLocation(memberId) {
         if (status == 403) {
             // if this call fails with a 403 error, try a different API to capture updated cookies
             // alternately we could try clearing cookies and re-trying same call..
-            def failCount = state.failCount ?: 0
-            failCount++
+            state.failCount = (state.failCount ?: 0) + 1
             // NOTE: I'm setting a limit on how many times this will try fetchMembers()
-            if (failCount <= 10) {
-                log.debug("fetchMemberLocation: RETRY, fail:${failCount}")
+            if (state.failCount <= 10) {
+                log.debug("fetchMemberLocation: RETRY, fail:${state.failCount}")
                 fetchMembers()
             }
         }
@@ -433,7 +444,11 @@ def scheduleUpdates() {
     } else {
         refreshSecs = pollFreq.toInteger()
     }
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
+    // add some randomness to this value (between 0 and 5 seconds)
+    Integer random = Math.abs(new Random().nextInt() % 5)
+    refreshSecs += random
+
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
@@ -447,7 +462,23 @@ def scheduleUpdates() {
  * called by timer
  */
 def handleTimerFired() {
-    fetchLocations()
+    if (!fetchLocations()) return
+
+    // change things up every 10 minutes or so
+    Long currentTimeMs = new Date().getTime()
+    Long updateTimeMs = state.updateTimeMs ?: 0
+    if (currentTimeMs > updateTimeMs) {
+        // update again in 5-10 minutes
+        Integer random = Math.abs(new Random().nextInt() % 300000) + 300000
+        state.updateTimeMs = currentTimeMs + random
+        if (logEnable) log.info "handleTimerFired: changing things up; ${random}ms"
+
+        // re-schedule timer to add a little randomness
+        scheduleUpdates()
+
+        // this call doesn't use cookies
+        fetchMembers()
+    }
 }
 
 def createChildDevices() {
@@ -523,7 +554,7 @@ void captureCookies(response) {
     response.getHeaders('Set-Cookie').each {
         def cookie = it.value.tokenize(';|,')[0]
         if (cookie) responseCookies << cookie
-        //if (logEnable) log.trace("captureCookies: ${cookie}")     //and logging the clean version
+        if (logEnable) log.trace("captureCookies: ${it.value}")
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
