@@ -226,7 +226,6 @@ def fetchMembers() {
                             notifyChildDevice(memberId, member)
                         }
                     }
-
                 } else {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
@@ -468,17 +467,16 @@ def handleTimerFired() {
     Long currentTimeMs = new Date().getTime()
     Long updateTimeMs = state.updateTimeMs ?: 0
     if (currentTimeMs > updateTimeMs) {
-        if (logEnable) log.info "handleTimerFired: changing things up"
+        // update again in 5-10 minutes
+        Integer random = Math.abs(new Random().nextInt() % 300000) + 300000
+        state.updateTimeMs = currentTimeMs + random
+        if (logEnable) log.info "handleTimerFired: changing things up; ${random}ms"
 
         // re-schedule timer to add a little randomness
         scheduleUpdates()
 
         // this call doesn't use cookies
         fetchMembers()
-
-        // update again in 5-10 minutes
-        Integer random = Math.abs(new Random().nextInt() % 300000) + 300000
-        state.updateTimeMs = currentTimeMs + random
     }
 }
 
