@@ -212,10 +212,21 @@ def fetchMembers() {
         httpGet(params) {
             response ->
                 captureCookies(response)
-                //if (logEnable) log.debug("fetchMembers: ${response.data}")
+                if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
                     state.message = null
+
+                    // update child devices
+                    settings.users.each { memberId ->
+                        def externalId = "${app.id}.${memberId}"
+                        def deviceWrapper = getChildDevice("${externalId}")
+                        if (!deviceWrapper) {
+                            def member = state.members.find { it.id == memberId }
+                            notifyChildDevice(memberId, member)
+                        }
+                    }
+
                 } else {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
@@ -239,14 +250,15 @@ def fetchLocations() {
     }
 
     // prevent calling this API too frequently (< 5 seconds)
+    long currentTimeMs = new Date().getTime()
     if (state.lastUpdateMs != null) {
-        long currentTimeMs = new Date().getTime()
         long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
         if (lastAttempt < 5) {
             if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
             state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
             return
         }
+        if (logEnable) log.trace "fetchLocations: last:${lastAttempt}ms"
     }
     state.lastUpdateMs = currentTimeMs
 
@@ -254,6 +266,9 @@ def fetchLocations() {
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
+
+    // re-schedule timer to add a little randomness
+    scheduleUpdates()
 }
 
 def fetchMemberLocation(memberId) {
@@ -313,11 +328,10 @@ def fetchMemberLocation(memberId) {
         if (status == 403) {
             // if this call fails with a 403 error, try a different API to capture updated cookies
             // alternately we could try clearing cookies and re-trying same call..
-            def failCount = state.failCount ?: 0
-            failCount++
+            state.failCount = (state.failCount ?: 0) + 1
             // NOTE: I'm setting a limit on how many times this will try fetchMembers()
-            if (failCount <= 10) {
-                log.debug("fetchMemberLocation: RETRY, fail:${failCount}")
+            if (state.failCount <= 10) {
+                log.debug("fetchMemberLocation: RETRY, fail:${state.failCount}")
                 fetchMembers()
             }
         }
@@ -433,7 +447,11 @@ def scheduleUpdates() {
     } else {
         refreshSecs = pollFreq.toInteger()
     }
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
+    // add some randomness to this value (between 0 and 5 seconds)
+    Integer random = Math.abs(new Random().nextInt() % 5)
+    refreshSecs += random
+
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
@@ -523,7 +541,7 @@ void captureCookies(response) {
     response.getHeaders('Set-Cookie').each {
         def cookie = it.value.tokenize(';|,')[0]
         if (cookie) responseCookies << cookie
-        //if (logEnable) log.trace("captureCookies: ${cookie}")     //and logging the clean version
+        if (logEnable) log.trace("captureCookies: ${it.value}")
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
