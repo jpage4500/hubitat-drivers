@@ -575,9 +575,9 @@ void dynamicPolling(response) {
     state.memberInTransit = false
     
     state.members.each { member ->
-        if (member["location"].inTransit.toInteger() == 1) {
+        if (member["location"].inTransit.toInteger() == 1 && member["location"].speed.toInteger() > 1) {
             state.memberInTransit = true
-            log.trace("fetchMembers - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed} || ${state.memberInTransit}")
+            log.trace("fetchMembers - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
         }
     }
 
