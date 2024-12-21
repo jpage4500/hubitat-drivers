@@ -199,7 +199,7 @@ def fetchMembers() {
         log.debug("fetchMembers: circle not set")
         return;
     }
-    
+
     // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
     def params = [
         uri    : "https://api-cloudfront.life360.com",
@@ -213,7 +213,7 @@ def fetchMembers() {
         httpGet(params) {
             response ->
                 captureCookies(response)
-                // if (logEnable) log.debug("fetchMembers: ${response.data}")
+                //if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
                     state.message = null
@@ -275,17 +275,17 @@ def fetchMemberLocation(memberId) {
     def cookies = state["cookies"]
     if (cookies) {
         params["headers"]["Cookie"] = cookies
-        // if (logEnable) log.debug("fetchMemberLocation: cookie: ${cookies}")
+        //if (logEnable) log.debug("fetchMemberLocation: cookie: ${cookies}")
     }
 
     // set l360-etag value
     def tag = state["etag-${memberId}"]
     if (tag) {
         params["headers"]["If-None-Match"] = tag
-        // if (logEnable) log.debug("eTag header:  ${tag}")
+        //if (logEnable) log.debug("eTag header:  ${tag}")
     }
 
-    // if (logEnable) log.trace("fetchMemberLocation: member:${memberId}, tag:${tag}")
+    //if (logEnable) log.trace("fetchMemberLocation: member:${memberId}, tag:${tag}")
 
     try {
         httpGet(params) {
@@ -332,7 +332,7 @@ def fetchMemberLocation(memberId) {
 }
 
 def handleException(String tag, Exception e) {
-    // log.error("handleException: ${e}")
+    //log.error("handleException: ${e}")
     if (e instanceof HttpTimeoutException) {
         log.error("${tag}: EXCEPTION: ${e}")
         state.message = "TIMEOUT: ${tag}: ${e}"
@@ -513,7 +513,7 @@ def notifyChildDevice(memberId, memberObj) {
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
             // send circle places and home to individual children
-            // if (logEnable) log.trace("notifyChildDevice: updating: ${memberObj.firstName}")
+            //if (logEnable) log.trace("notifyChildDevice: updating: ${memberObj.firstName}")
             boolean isChanged = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
             // if (logEnable) log.trace("notifyChildDevice: DONE updating: ${memberObj.firstName}, isChanged:${isChanged}")
             if (isChanged) isAnyChanged = true
@@ -532,7 +532,7 @@ void captureCookies(response) {
     response.getHeaders('Set-Cookie').each {
         def cookie = it.value.tokenize(';|,')[0]
         if (cookie) responseCookies << cookie
-        // if (logEnable) log.trace("captureCookies: ${cookie}")     // and logging the clean version
+        //if (logEnable) log.trace("captureCookies: ${cookie}")     // and logging the clean version
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
