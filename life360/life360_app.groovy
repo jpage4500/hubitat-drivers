@@ -200,6 +200,9 @@ def fetchMembers() {
         return;
     }
 
+    state.memberInTransit = false
+
+    
     // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
     def params = [
         uri    : "https://api-cloudfront.life360.com",
@@ -207,7 +210,7 @@ def fetchMembers() {
         headers: getHttpHeaders()
     ]
 
-    log.debug("fetchMembers:")
+//    log.debug("fetchMembers:")
 
     try {
         httpGet(params) {
@@ -220,6 +223,10 @@ def fetchMembers() {
                 } else {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
+                }
+
+                if (settings.dynamicPolling) {
+                    dynamicPolling(response)
                 }
         }
     } catch (e) {
@@ -251,47 +258,13 @@ def fetchLocations() {
     }
     state.lastUpdateMs = currentTimeMs
 
+    fetchMembers()
+
     // iterate over every selected member
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
-    
-    /*    
-    state.inTransit = false
-    state.inTransitMember = "4810db1a-3ccf-4eb4-aba3-46c7f0c8576d"
-    */
-    
-    
-    /* --------- DYNAMIC POLLING START --------- */
-
-    if (dynamicPolling) {
-
-        if (logEnable) log.trace("TRANSIT - INFO: dynamicPolling:${dynamicPolling} || inTransitState:${state.inTransit} || dynamicPollingActive:${state.dynamicPollingActive} || inTransitMember:${state.inTransitMember}")
-
-        if (state.inTransit && ! state.dynamicPollingActive) {
-            if (logEnable) log.debug("TRANSIT - SET DYNAMIC POLLING: ${firstName} inTransit ${state.inTransit}")
-            scheduleUpdates()
-
-        } else if (state.inTransit && state.dynamicPollingActive) {
-            if (logEnable) log.debug("TRANSIT - ALREADY ACTIVE: ${firstName} inTransit ${state.inTransit}")
-
-        } else if (! state.inTransit && state.inTransitMember && state.dynamicPollingActive) {
-            if (logEnable) log.debug("TRANSIT - SET STANDARD POLLING: ${firstName} inTransit ${state.inTransit}")
-            state.inTransit = false
-            state.inTransitMember = null
-            scheduleUpdates()
-        } else {
-            if (annoyingDebugging) log.trace("TRANSIT - DO NOTHING")
-        }
-    }
-
-    /* --------- DYNAMIC POLLING END --------- */
-            
-    if (annoyingDebugging) log.trace("========= RESPONSE END - ${firstName} =========")    
 }
-
-
-    
 
 def fetchMemberLocation(memberId) {
     // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members/MEMBER
@@ -320,40 +293,10 @@ def fetchMemberLocation(memberId) {
     try {
         httpGet(params) {
             response ->
-
-            
-                annoyingDebugging = false
-
-            
                 captureCookies(response)
-
-                def memberState = state.members.find {it.id == memberId}
-                def firstName = memberState.firstName
-
-                if (annoyingDebugging) log.trace("========= RESPONSE START - ${firstName} =========")
-
-                if (response.data && response.data['location'].inTransit == 1) {
-                    state.inTransit = true
-                    state.inTransitMember = memberId
-                    log.trace("fetchMemberLocation: YES DATA || firstName: ${firstName} || inTransit: ${state.inTransit}")
-                    log.trace("${responseData}")
-                }
-
-                ///////////////////////////
-                // HACK FOR TESTING DYNAMIC POLLING
-                /*
-                if ( firstName == "Matt" ) {
-                    state.inTransit = true
-                    state.inTransitMember = memberId
-                    //state.inTransitMember = null
-                }
-                */
-                ///////////////////////////
-
-
                 if (response.status == 200) {
-
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200) || firstName: ${firstName} || memberId: ${memberId}")
+                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200): member:${memberId}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -368,7 +311,7 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304) || firstName: ${firstName} || memberId: ${memberId}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
@@ -389,7 +332,6 @@ def fetchMemberLocation(memberId) {
             }
         }
     }
-
 }
 
 def handleException(String tag, Exception e) {
@@ -496,14 +438,14 @@ def scheduleUpdates() {
     unschedule()
 
     Integer refreshSecs = 30
-    if (pollFreq.toInteger() > 20 && dynamicPolling && state.inTransit) {
+    if (pollFreq.toInteger() > 20 && dynamicPolling && state.memberInTransit) {
         state.dynamicPollingActive = true
         refreshSecs = 20
     } else {
         refreshSecs = pollFreq.toInteger()
         state.dynamicPollingActive = false
     }
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, dynamicPolling:$dynamicPolling")
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
@@ -593,9 +535,41 @@ void captureCookies(response) {
     response.getHeaders('Set-Cookie').each {
         def cookie = it.value.tokenize(';|,')[0]
         if (cookie) responseCookies << cookie
-        // if (logEnable) log.trace("captureCookies: ${cookie}")     //and logging the clean version
+        //if (logEnable) log.trace("captureCookies: ${cookie}")     //and logging the clean version
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
+    }
+}
+
+void dynamicPolling(response) {
+
+    state.memberInTransit = false
+    
+    state.members.each { member ->
+        if (member["location"].inTransit.toInteger() == 1) {
+            state.memberInTransit = true
+            log.trace("fetchMembers - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed} || ${state.memberInTransit}")
+        }
+    }
+
+    // FOR TESTING DYNAMIC POLLING
+    //state.memberInTransit = true
+
+    // if (logEnable) log.trace("dynamicPolling - INFO: dynamicPolling:${dynamicPolling} || memberInTransit:${state.memberInTransit} || dynamicPollingActive:${state.dynamicPollingActive}")
+
+    if (state.memberInTransit && ! state.dynamicPollingActive) {
+        if (logEnable) log.debug("dynamicPolling - SET DYNAMIC POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+        scheduleUpdates()
+
+    } else if (state.memberInTransit && state.dynamicPollingActive) {
+        if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+
+    } else if (! state.memberInTransit && state.dynamicPollingActive) {
+        if (logEnable) log.debug("dynamicPolling - SET STANDARD POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+        state.memberInTransit = false
+        scheduleUpdates()
+    } else {
+        // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
     }
 }
