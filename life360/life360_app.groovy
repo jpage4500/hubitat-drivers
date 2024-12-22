@@ -103,8 +103,9 @@ def mainPage() {
         }
 
         section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
-            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
+            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
+            input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -458,9 +459,9 @@ def scheduleUpdates() {
     unschedule()
 
     Integer refreshSecs = 30
-    if (pollFreq.toInteger() > 20 && dynamicPolling && state.memberInTransit) {
+    if (settings.dynamicPolling && state.memberInTransit && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger())) {
         state.dynamicPollingActive = true
-        refreshSecs = 20
+        refreshSecs = settings.dynamicPollFreq.toInteger()
     } else {
         refreshSecs = pollFreq.toInteger()
         state.dynamicPollingActive = false
@@ -469,7 +470,7 @@ def scheduleUpdates() {
     Integer random = Math.abs(new Random().nextInt() % 5)
     refreshSecs += random
 
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}")
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
