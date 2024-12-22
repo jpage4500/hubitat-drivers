@@ -463,7 +463,7 @@ def scheduleUpdates() {
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
     } else if (refreshSecs > 0) {
         // mins
-        schedule("0 */${refreshSecs / 60} * * * ? *", handleTimerFired)
+        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
     }
 }
 
