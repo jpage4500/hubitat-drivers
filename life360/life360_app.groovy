@@ -274,7 +274,7 @@ boolean fetchLocations() {
     // state.memberInTransit = true
 
     if (settings.dynamicPolling) {
-        dynamicPolling(response)
+        dynamicPolling()
     }
 
     return true
@@ -582,7 +582,7 @@ void captureCookies(response) {
     }
 }
 
-void dynamicPolling(response) {
+void dynamicPolling() {
 
     // if (logEnable) log.trace("dynamicPolling - INFO: dynamicPolling:${dynamicPolling} || memberInTransit:${state.memberInTransit} || dynamicPollingActive:${state.dynamicPollingActive}")
 
