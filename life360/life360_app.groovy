@@ -232,10 +232,6 @@ def fetchMembers() {
                     log.error("fetchMembers: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
                 }
-
-                if (settings.dynamicPolling) {
-                    dynamicPolling(response)
-                }
         }
     } catch (e) {
         handleException("fetch members", e)
@@ -266,12 +262,21 @@ boolean fetchLocations() {
     }
     state.lastUpdateMs = currentTimeMs
 
-    fetchMembers()
+    // Reset var for upcoming poll
+    state.memberInTransit = false
 
     // iterate over every selected member
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
+
+    // FOR TESTING DYNAMIC POLLING
+    // state.memberInTransit = true
+
+    if (settings.dynamicPolling) {
+        dynamicPolling(response)
+    }
+
     return true
 }
 
@@ -302,7 +307,14 @@ def fetchMemberLocation(memberId) {
     try {
         httpGet(params) {
             response ->
+
+                if (response.data && response.data['location'].inTransit.toInteger() == 1 && response.data['location'].speed.toInteger() > 1) {
+                    state.memberInTransit = true
+                    log.trace("fetchMembers - ${response.data["firstName"]}: ${response.data["location"].inTransit} || ${response.data["location"].speed.toInteger()} || ${state.memberInTransit}")
+                }
+
                 captureCookies(response)
+
                 if (response.status == 200) {
                     // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
                     if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200): member:${memberId}")
@@ -571,18 +583,6 @@ void captureCookies(response) {
 }
 
 void dynamicPolling(response) {
-
-    state.memberInTransit = false
-    
-    state.members.each { member ->
-        if (member["location"].inTransit.toInteger() == 1 && member["location"].speed.toInteger() > 1) {
-            state.memberInTransit = true
-            log.trace("fetchMembers - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
-        }
-    }
-
-    // FOR TESTING DYNAMIC POLLING
-    // state.memberInTransit = true
 
     // if (logEnable) log.trace("dynamicPolling - INFO: dynamicPolling:${dynamicPolling} || memberInTransit:${state.memberInTransit} || dynamicPollingActive:${state.dynamicPollingActive}")
 
