@@ -15,15 +15,15 @@ import java.net.http.HttpTimeoutException
  * Changes:
  *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
  *  5.0.10 - 12/21/24 - add some randomness
- *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
- *  5.0.8 - 12/18/24 - added cookies found by @user3774
- *  5.0.7 - 12/11/24 - try to match Home Assistant
- *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
- *  5.0.5 - 11/12/24 - support eTag for locations call
- *  5.0.4 - 11/09/24 - use newer API
- *  5.0.2 - 11/03/24 - restore webhook
- *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
- *  4.0.0 - 02/08/24 - implement new Life360 API
+ *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
+ *  5.0.8  - 12/18/24 - added cookies found by @user3774
+ *  5.0.7  - 12/11/24 - try to match Home Assistant
+ *  5.0.6  - 12/05/24 - return to older API version (keeping eTag support)
+ *  5.0.5  - 11/12/24 - support eTag for locations call
+ *  5.0.4  - 11/09/24 - use newer API
+ *  5.0.2  - 11/03/24 - restore webhook
+ *  5.0.0  - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
+ *  4.0.0  - 02/08/24 - implement new Life360 API
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
  * - please see that thread for full history of this app/driver
@@ -264,16 +264,10 @@ boolean fetchLocations() {
     }
     state.lastUpdateMs = currentTimeMs
 
-    // Reset var for upcoming poll
-    state.memberInTransit = false
-
     // iterate over every selected member
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
-
-    // FOR TESTING DYNAMIC POLLING
-    // state.memberInTransit = true
 
     if (settings.dynamicPolling) {
         dynamicPolling()
@@ -310,11 +304,11 @@ def fetchMemberLocation(memberId) {
         httpGet(params) {
             response ->
 
-                if (response.data && response.data['location'].inTransit.toInteger() == 1 && response.data['location'].speed.toInteger() > 1) {
-                    state.memberInTransit = true
-                    log.trace("fetchMembers - ${response.data["firstName"]}: ${response.data["location"].inTransit} || ${response.data["location"].speed.toInteger()} || ${state.memberInTransit}")
+/*
+                if (response.data) {
+                    log.trace("fetchMemberLocation (${response.status}) - ${response.data["firstName"]}: inTransit ${response.data["location"].inTransit} || speed ${response.data["location"].speed.toInteger()} || memberInTransit ${state.memberInTransit}")
                 }
-
+*/
                 captureCookies(response)
 
                 if (response.status == 200) {
@@ -471,7 +465,7 @@ def scheduleUpdates() {
     Integer random = Math.abs(new Random().nextInt() % 5)
     refreshSecs += random
 
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
+    if (logEnable) log.debug("scheduleUpdates: pollFreq:$pollFreq, dynamicPollFreq: ${settings.dynamicPollFreq}, random:${random}, refreshSecs:$refreshSecs")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
@@ -587,6 +581,25 @@ void captureCookies(response) {
 void dynamicPolling() {
 
     // if (logEnable) log.trace("dynamicPolling - INFO: dynamicPolling:${dynamicPolling} || memberInTransit:${state.memberInTransit} || dynamicPollingActive:${state.dynamicPollingActive}")
+
+    state.memberInTransit = false
+
+    state.members.each { member ->
+    
+        // FOR TESTING DYNAMIC POLLING
+/*
+        if (member["firstName"] == "YOURNAME") {
+            state.memberInTransit = true
+        }
+*/
+
+        if (member["location"].inTransit.toInteger() == 1 && member["location"].speed.toInteger() > 1) {
+            state.memberInTransit = true
+            if (logEnable) log.trace("dynamicPolling MOVING - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
+        } else {
+            // if (logEnable) log.trace("dynamicPolling STILL - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
+        }
+    }
 
     if (state.memberInTransit && ! state.dynamicPollingActive) {
         if (logEnable) log.debug("dynamicPolling - SET DYNAMIC POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
