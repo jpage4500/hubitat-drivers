@@ -10,9 +10,10 @@ import java.net.http.HttpTimeoutException
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** LIFE360+ Hubitat App **
  * Life360 companion app to track members' location in your circle
- * - see discussion: https://community.hubitat.com/t/release-life360/118544
+ * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.12 - 12/24/24 - Dynamic Polling (mpalermo73)
  *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
  *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
  *  5.0.10 - 12/21/24 - add some randomness
