@@ -438,23 +438,36 @@ def refresh() {
 def scheduleUpdates() {
     unschedule()
 
-    Integer refreshSecs = 30
+    Integer refreshSecs = 60
+    
     if (pollFreq == "auto") {
         // TODO: REMOVE
     } else {
-        refreshSecs = pollFreq.toInteger()
+        refreshSecs = settings.pollFreq.toInteger()
     }
-    // add some randomness to this value (between 0 and 5 seconds)
-    Integer random = Math.abs(new Random().nextInt() % 5)
-    refreshSecs += random
 
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}")
+    // add some randomness to this value (between -5 and +5 seconds)
+    Integer randomSeconds = -5 + new Random().nextInt(11)
+    Integer finalSeconds = (refreshSecs + randomSeconds)
+    Integer finalMinutes = 0
+
+    while ( finalSeconds > 60 ) {
+        finalSeconds = (finalSeconds - 60)
+        finalMinutes++
+        // log.debug("scheduleUpdates WORKING - refreshSecs: ${refreshSecs} || minutesFinal: ${finalMinutes} || secondsFinal: ${finalSeconds}")
+    }
+
+    // log.debug("scheduleUpdates FINAL - refreshSecs: ${refreshSecs} || minutesFinal: ${finalMinutes} || secondsFinal: ${finalSeconds}")
+
+
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, randomSeconds:${randomSeconds}")
+
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
-        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
+        schedule("0/${finalSeconds} * * * * ? *", handleTimerFired)
     } else if (refreshSecs > 0) {
         // mins
-        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
+        schedule("0/${finalSeconds} */${finalMinutes} * * * ? *", handleTimerFired)
     }
 }
 
