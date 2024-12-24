@@ -439,7 +439,7 @@ def refresh() {
 def scheduleUpdates() {
     unschedule()
 
-    Integer refreshSecs = 30
+    Integer refreshSecs = 60
     if (pollFreq == "auto") {
         // TODO: REMOVE
     } else {
