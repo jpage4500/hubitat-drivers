@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
  *  5.0.10 - 12/21/24 - add some randomness
  *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
  *  5.0.8 - 12/18/24 - added cookies found by @user3774
