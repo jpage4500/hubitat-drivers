@@ -455,7 +455,7 @@ def refresh() {
 def scheduleUpdates() {
     unschedule()
 
-    Integer refreshSecs = 30
+    Integer refreshSecs = 60
     if (settings.dynamicPolling && state.memberInTransit && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger())) {
         state.dynamicPollingActive = true
         refreshSecs = settings.dynamicPollFreq.toInteger()
@@ -463,28 +463,21 @@ def scheduleUpdates() {
         refreshSecs = settings.pollFreq.toInteger()
         state.dynamicPollingActive = false
     }
+    // add some randomness to this value (between 0 and 5 seconds)
+    Integer random = Math.abs(new Random().nextInt() % 5)
+    refreshSecs += random
 
-    // add some randomness to this value (between -5 and +5 seconds)
-    Integer randomSeconds = -5 + new Random().nextInt(11)
-    Integer finalSeconds = (refreshSecs + randomSeconds)
-    Integer finalMinutes = 0
-
-    while ( finalSeconds > 60 ) {
-        finalSeconds = (finalSeconds - 60)
-        finalMinutes++
-        // log.debug("scheduleUpdates WORKING - refreshSecs: ${refreshSecs} || minutesFinal: ${finalMinutes} || secondsFinal: ${finalSeconds}")
-    }
-
-    if (logEnable) log.debug("scheduleUpdates: pollFreq:${settings.pollFreq}, dynamicPollFreq:${settings.dynamicPollFreq}, randomSeconds:${randomSeconds}, finalSeconds:${finalSeconds}, finalMinutes:${finalMinutes}")
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
 
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
-        schedule("0/${finalSeconds} * * * * ? *", handleTimerFired)
+        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
     } else if (refreshSecs > 0) {
         // mins
-        schedule("0/${finalSeconds} */${finalMinutes} * * * ? *", handleTimerFired)
+        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
     }
 }
+
 
 /**
  * called by timer
