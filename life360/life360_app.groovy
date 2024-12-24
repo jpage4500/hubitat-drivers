@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
  *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
  *  5.0.10 - 12/21/24 - add some randomness
  *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
@@ -458,20 +459,29 @@ def scheduleUpdates() {
         state.dynamicPollingActive = true
         refreshSecs = settings.dynamicPollFreq.toInteger()
     } else {
-        refreshSecs = pollFreq.toInteger()
+        refreshSecs = settings.pollFreq.toInteger()
         state.dynamicPollingActive = false
     }
-    // add some randomness to this value (between 0 and 5 seconds)
-    Integer random = Math.abs(new Random().nextInt() % 5)
-    refreshSecs += random
 
-    if (logEnable) log.debug("scheduleUpdates: pollFreq:$pollFreq, dynamicPollFreq: ${settings.dynamicPollFreq}, random:${random}, refreshSecs:$refreshSecs")
+    // add some randomness to this value (between -5 and +5 seconds)
+    Integer randomSeconds = -5 + new Random().nextInt(11)
+    Integer finalSeconds = (refreshSecs + randomSeconds)
+    Integer finalMinutes = 0
+
+    while ( finalSeconds > 60 ) {
+        finalSeconds = (finalSeconds - 60)
+        finalMinutes++
+        // log.debug("scheduleUpdates WORKING - refreshSecs: ${refreshSecs} || minutesFinal: ${finalMinutes} || secondsFinal: ${finalSeconds}")
+    }
+
+    if (logEnable) log.debug("scheduleUpdates: pollFreq:${settings.pollFreq}, dynamicPollFreq:${settings.dynamicPollFreq}, randomSeconds:${randomSeconds}, finalSeconds:${finalSeconds}, finalMinutes:${finalMinutes}")
+
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
-        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
+        schedule("0/${finalSeconds} * * * * ? *", handleTimerFired)
     } else if (refreshSecs > 0) {
         // mins
-        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
+        schedule("0/${finalSeconds} */${finalMinutes} * * * ? *", handleTimerFired)
     }
 }
 
