@@ -595,8 +595,8 @@ void dynamicPolling() {
             state.memberInTransit = true
         }
 */
-
-        if (member["location"].inTransit.toInteger() == 1 && member["location"].speed.toInteger() > 1) {
+        def location = member[ "location"]
+        if (location != null && toBool(location.inTransit) && toInt(location.speed) > 1) {
             state.memberInTransit = true
             if (logEnable) log.trace("dynamicPolling MOVING - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
         } else {
@@ -618,4 +618,20 @@ void dynamicPolling() {
     } else {
         // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
     }
+}
+
+/**
+ * null-safe toBool()
+ */
+static boolean toBool(Object object) {
+    if (object) return object == "1"
+    else return false
+}
+
+/**
+ * null-safe toInteger()
+ */
+static double toInt(Object object) {
+    if (object) return object.toInteger()
+    else return 0
 }
