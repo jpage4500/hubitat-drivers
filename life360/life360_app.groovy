@@ -13,17 +13,17 @@ import java.net.http.HttpTimeoutException
  * - see discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
- *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
+ *  5.0.13 - 12/24/24 - restore original scheduling routine
  *  5.0.10 - 12/21/24 - add some randomness
- *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
- *  5.0.8 - 12/18/24 - added cookies found by @user3774
- *  5.0.7 - 12/11/24 - try to match Home Assistant
- *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
- *  5.0.5 - 11/12/24 - support eTag for locations call
- *  5.0.4 - 11/09/24 - use newer API
- *  5.0.2 - 11/03/24 - restore webhook
- *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
- *  4.0.0 - 02/08/24 - implement new Life360 API
+ *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
+ *  5.0.8  - 12/18/24 - added cookies found by @user3774
+ *  5.0.7  - 12/11/24 - try to match Home Assistant
+ *  5.0.6  - 12/05/24 - return to older API version (keeping eTag support)
+ *  5.0.5  - 11/12/24 - support eTag for locations call
+ *  5.0.4  - 11/09/24 - use newer API
+ *  5.0.2  - 11/03/24 - restore webhook
+ *  5.0.0  - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
+ *  4.0.0  -  02/08/24 - implement new Life360 API
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
  * - please see that thread for full history of this app/driver
@@ -440,35 +440,22 @@ def scheduleUpdates() {
     unschedule()
 
     Integer refreshSecs = 60
-    
     if (pollFreq == "auto") {
         // TODO: REMOVE
     } else {
-        refreshSecs = settings.pollFreq.toInteger()
+        refreshSecs = pollFreq.toInteger()
     }
+    // add some randomness to this value (between 0 and 5 seconds)
+    Integer random = Math.abs(new Random().nextInt() % 5)
+    refreshSecs += random
 
-    // add some randomness to this value (between -5 and +5 seconds)
-    Integer randomSeconds = -5 + new Random().nextInt(11)
-    Integer finalSeconds = (refreshSecs + randomSeconds)
-    Integer finalMinutes = 0
-
-    while ( finalSeconds > 60 ) {
-        finalSeconds = (finalSeconds - 60)
-        finalMinutes++
-        // log.debug("scheduleUpdates WORKING - refreshSecs: ${refreshSecs} || minutesFinal: ${finalMinutes} || secondsFinal: ${finalSeconds}")
-    }
-
-    // log.debug("scheduleUpdates FINAL - refreshSecs: ${refreshSecs} || minutesFinal: ${finalMinutes} || secondsFinal: ${finalSeconds}")
-
-
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, randomSeconds:${randomSeconds}")
-
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}")
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
-        schedule("0/${finalSeconds} * * * * ? *", handleTimerFired)
+        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
     } else if (refreshSecs > 0) {
         // mins
-        schedule("0/${finalSeconds} */${finalMinutes} * * * ? *", handleTimerFired)
+        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
     }
 }
 
