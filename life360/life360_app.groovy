@@ -13,9 +13,8 @@ import java.net.http.HttpTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
- *  5.0.12 - 12/24/24 - Dynamic Polling (mpalermo73)
- *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
- *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
+ *  5.0.14 - 12/24/24 - Dynamic Polling
+ *  5.0.13 - 12/24/24 - restore original scheduling routine
  *  5.0.10 - 12/21/24 - add some randomness
  *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
  *  5.0.8  - 12/18/24 - added cookies found by @user3774
@@ -25,7 +24,7 @@ import java.net.http.HttpTimeoutException
  *  5.0.4  - 11/09/24 - use newer API
  *  5.0.2  - 11/03/24 - restore webhook
  *  5.0.0  - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
- *  4.0.0  - 02/08/24 - implement new Life360 API
+ *  4.0.0  -  02/08/24 - implement new Life360 API
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
  * - please see that thread for full history of this app/driver
