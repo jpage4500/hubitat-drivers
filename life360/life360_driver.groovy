@@ -6,24 +6,29 @@
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
- * ** LIFE360+ Hubitat Driver **
+ * ** LIFE360+ Hubitat App **
  * Life360 companion app to track members' location in your circle
+ * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
- * - see community discussion here: https://community.hubitat.com/t/release-life360/118544
- *
- *  Changes:
- *  5.0.9 - 12/19/24 - try a different API when hitting 403 error
- *  5.0.8 - 12/18/24 - added cookies found by @user3774
- *  5.0.7 - 12/11/24 - try to match Home Assistant
- *  5.0.6 - 12/05/24 - return to older API version (keeping eTag support)
- *  5.0.4 - 11/09/24 - use newer API
- *  5.0.0 - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
+ * Changes:
+ *  5.0.12 - 12/24/24 - Dynamic Polling (mpalermo73)
+ *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
+ *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
+ *  5.0.10 - 12/21/24 - add some randomness
+ *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
+ *  5.0.8  - 12/18/24 - added cookies found by @user3774
+ *  5.0.7  - 12/11/24 - try to match Home Assistant
+ *  5.0.6  - 12/05/24 - return to older API version (keeping eTag support)
+ *  5.0.5  - 11/12/24 - support eTag for locations call
+ *  5.0.4  - 11/09/24 - use newer API
+ *  5.0.2  - 11/03/24 - restore webhook
+ *  5.0.0  - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
+ *  4.0.0  - 02/08/24 - implement new Life360 API
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
  * - please see that thread for full history of this app/driver
- *
  * ------------------------------------------------------------------------------------------------------------------------------
- */
+ **/
 
 import java.text.SimpleDateFormat
 
