@@ -10,9 +10,10 @@ import java.net.http.HttpTimeoutException
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** LIFE360+ Hubitat App **
  * Life360 companion app to track members' location in your circle
- * - see discussion: https://community.hubitat.com/t/release-life360/118544
+ * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.14 - 12/24/24 - Dynamic Polling
  *  5.0.13 - 12/24/24 - restore original scheduling routine
  *  5.0.10 - 12/21/24 - add some randomness
  *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
@@ -104,7 +105,9 @@ def mainPage() {
         }
 
         section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
+            input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -208,7 +211,7 @@ def fetchMembers() {
         headers: getHttpHeaders()
     ]
 
-    log.debug("fetchMembers:")
+    if (logEnable) log.debug("fetchMembers:")
 
     try {
         httpGet(params) {
@@ -266,6 +269,11 @@ boolean fetchLocations() {
     settings.users.each { memberId ->
         fetchMemberLocation(memberId)
     }
+
+    if (settings.dynamicPolling) {
+        dynamicPolling()
+    }
+
     return true
 }
 
@@ -296,10 +304,17 @@ def fetchMemberLocation(memberId) {
     try {
         httpGet(params) {
             response ->
+
+/*
+                if (response.data) {
+                    log.trace("fetchMemberLocation (${response.status}) - ${response.data["firstName"]}: inTransit ${response.data["location"].inTransit} || speed ${response.data["location"].speed.toInteger()} || memberInTransit ${state.memberInTransit}")
+                }
+*/
                 captureCookies(response)
+
                 if (response.status == 200) {
                     // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200): member:${memberId}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -440,16 +455,19 @@ def scheduleUpdates() {
     unschedule()
 
     Integer refreshSecs = 60
-    if (pollFreq == "auto") {
-        // TODO: REMOVE
+    if (settings.dynamicPolling && state.memberInTransit && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger())) {
+        state.dynamicPollingActive = true
+        refreshSecs = settings.dynamicPollFreq.toInteger()
     } else {
-        refreshSecs = pollFreq.toInteger()
+        refreshSecs = settings.pollFreq.toInteger()
+        state.dynamicPollingActive = false
     }
     // add some randomness to this value (between 0 and 5 seconds)
     Integer random = Math.abs(new Random().nextInt() % 5)
     refreshSecs += random
 
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:$refreshSecs, pollFreq:$pollFreq, random:${random}")
+    if (logEnable) log.debug("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
+
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
         schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
@@ -458,6 +476,7 @@ def scheduleUpdates() {
         schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
     }
 }
+
 
 /**
  * called by timer
@@ -562,3 +581,41 @@ void captureCookies(response) {
     }
 }
 
+void dynamicPolling() {
+
+    // if (logEnable) log.trace("dynamicPolling - INFO: dynamicPolling:${dynamicPolling} || memberInTransit:${state.memberInTransit} || dynamicPollingActive:${state.dynamicPollingActive}")
+
+    state.memberInTransit = false
+
+    state.members.each { member ->
+    
+        // FOR TESTING DYNAMIC POLLING
+/*
+        if (member["firstName"] == "YOURNAME") {
+            state.memberInTransit = true
+        }
+*/
+
+        if (member["location"].inTransit.toInteger() == 1 && member["location"].speed.toInteger() > 1) {
+            state.memberInTransit = true
+            if (logEnable) log.trace("dynamicPolling MOVING - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
+        } else {
+            // if (logEnable) log.trace("dynamicPolling STILL - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
+        }
+    }
+
+    if (state.memberInTransit && ! state.dynamicPollingActive) {
+        if (logEnable) log.debug("dynamicPolling - SET DYNAMIC POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+        scheduleUpdates()
+
+    } else if (state.memberInTransit && state.dynamicPollingActive) {
+        if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+
+    } else if (! state.memberInTransit && state.dynamicPollingActive) {
+        if (logEnable) log.debug("dynamicPolling - SET STANDARD POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+        state.memberInTransit = false
+        scheduleUpdates()
+    } else {
+        // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
+    }
+}
