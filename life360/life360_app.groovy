@@ -456,7 +456,7 @@ def refresh() {
 def scheduleUpdates() {
     unschedule()
 
-    Integer refreshSecs = 60
+    Integer refreshSecs
     if (settings.dynamicPolling && state.memberInTransit && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger())) {
         state.dynamicPollingActive = true
         refreshSecs = settings.dynamicPollFreq.toInteger()
@@ -557,7 +557,7 @@ def notifyChildDevice(memberId, memberObj) {
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
             // send location, places and home to device driver
-            Boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
+            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
             boolean prevInTransit = isMemberInTransit(memberId)
             if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${memberObj.firstName}: inTransit:${inTransit}")
             // save inTransit state per member
