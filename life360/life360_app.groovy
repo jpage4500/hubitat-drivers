@@ -555,10 +555,10 @@ def notifyChildDevice(memberId, memberObj) {
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
             // send circle places and home to individual children
-            //if (logEnable) log.trace("notifyChildDevice: updating: ${memberObj.firstName}")
-            boolean isChanged = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
-            // if (logEnable) log.trace("notifyChildDevice: DONE updating: ${memberObj.firstName}, isChanged:${isChanged}")
-            if (isChanged) isAnyChanged = true
+            Boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
+            if (logEnable) log.trace("notifyChildDevice: updating: ${memberObj.firstName}, inTransit:${inTransit}")
+            // save inTransit state per member
+            state["inTransit-${memberId}"] = inTransit
         } else {
             log.error("notifyChildDevice: device not found: ${externalId}")
         }
@@ -587,20 +587,11 @@ void dynamicPolling() {
 
     state.memberInTransit = false
 
-    state.members.each { member ->
-    
-        // FOR TESTING DYNAMIC POLLING
-/*
-        if (member["firstName"] == "YOURNAME") {
+    // iterate over every selected member
+    settings.users.each { memberId ->
+        def inTransit = state["inTransit-${memberId}"]
+        if (inTransit != null && inTransit) {
             state.memberInTransit = true
-        }
-*/
-
-        if (member["location"].inTransit.toInteger() == 1 && member["location"].speed.toInteger() > 1) {
-            state.memberInTransit = true
-            if (logEnable) log.trace("dynamicPolling MOVING - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
-        } else {
-            // if (logEnable) log.trace("dynamicPolling STILL - ${member["firstName"]}: ${member["location"].inTransit} || ${member["location"].speed.toInteger()} || ${state.memberInTransit}")
         }
     }
 
