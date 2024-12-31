@@ -167,7 +167,7 @@ def strToDate(dateStr) {
 // @param home - Life360 circle which user selected as 'home'
 //
 // @return true if member is in transit (inTransit=true OR speed > 1)
-Boolean generatePresenceEvent(member, thePlaces, home) {
+boolean generatePresenceEvent(member, thePlaces, home) {
     if (member == null) return false
     //log.trace("generatePresenceEvent: member:${member}")
     def location = member.location
@@ -215,21 +215,19 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         || (prevLongitude == null || prevLongitude != longitude)
         || (prevAccuracy == null || prevAccuracy != accuracy))
 
-    Boolean isDeviceMoving = inTransit || speed > 0
-
     // skip update if location, accuracy and battery have not changed
-    if (!isDeviceMoving && !isLocationChanged
+    if (!inTransit && !isLocationChanged
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
-        if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
+        if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
         return false
     }
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
+    if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -363,7 +361,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {
-        return isDeviceMoving
+        return inTransit
     }
 
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
@@ -408,7 +406,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     int tileDevice1Count = tileMap.length()
     if (tileDevice1Count > 1024) log.warn "generatePresenceEvent: Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
-    return isDeviceMoving
+    return inTransit
 }
 
 def haversine(lat1, lon1, lat2, lon2) {
