@@ -166,7 +166,7 @@ def strToDate(dateStr) {
 // @param thePlaces - all Life360 circles (locations)
 // @param home - Life360 circle which user selected as 'home'
 //
-// @return true if member is in transit (inTransit=true OR speed > 0)
+// @return true if member is in transit (inTransit=true OR speed > 1)
 Boolean generatePresenceEvent(member, thePlaces, home) {
     if (member == null) return false
     //log.trace("generatePresenceEvent: member:${member}")

@@ -329,7 +329,9 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}")
+                    // NOTE: if user WAS inTransit before, do we keep them in that state?
+                    boolean prevInTransit = isMemberInTransit(memberId)
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}, prevInTransit:${prevInTransit}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
@@ -554,9 +556,10 @@ def notifyChildDevice(memberId, memberObj) {
         // find the appropriate child device based on app id and the device network id
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
-            // send circle places and home to individual children
+            // send location, places and home to device driver
             Boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
-            if (logEnable) log.trace("notifyChildDevice: updating: ${memberObj.firstName}, inTransit:${inTransit}")
+            boolean prevInTransit = isMemberInTransit(memberId)
+            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${memberObj.firstName}: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
         } else {
@@ -589,8 +592,8 @@ void dynamicPolling() {
 
     // iterate over every selected member
     settings.users.each { memberId ->
-        def inTransit = state["inTransit-${memberId}"]
-        if (inTransit != null && inTransit) {
+        boolean inTransit = isMemberInTransit(memberId)
+        if (inTransit) {
             state.memberInTransit = true
         }
     }
@@ -600,7 +603,7 @@ void dynamicPolling() {
         scheduleUpdates()
 
     } else if (state.memberInTransit && state.dynamicPollingActive) {
-        if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
+        //if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
 
     } else if (! state.memberInTransit && state.dynamicPollingActive) {
         if (logEnable) log.debug("dynamicPolling - SET STANDARD POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
@@ -609,4 +612,9 @@ void dynamicPolling() {
     } else {
         // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
     }
+}
+
+boolean isMemberInTransit(memberId) {
+    def inTransit = state["inTransit-${memberId}"]
+    return inTransit != null && inTransit
 }
