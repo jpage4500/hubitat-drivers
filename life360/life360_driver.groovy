@@ -11,6 +11,7 @@
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.15 - 12/31/24 - minor fixes
  *  5.0.12 - 12/24/24 - Dynamic Polling (mpalermo73)
  *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
  *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
@@ -216,7 +217,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         || (prevAccuracy == null || prevAccuracy != accuracy))
 
     // skip update if location, accuracy and battery have not changed
-    if (!inTransit && !isLocationChanged
+    if (!inTransit && speed <= 0 && !isLocationChanged
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
