@@ -11,6 +11,7 @@
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.15 - 12/31/24 - minor fixes
  *  5.0.12 - 12/24/24 - Dynamic Polling (mpalermo73)
  *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
  *  5.0.11 - 12/22/24 - bugfix when polling > 1 min
@@ -165,26 +166,29 @@ def strToDate(dateStr) {
 // @param member - Life360 member object (user details)
 // @param thePlaces - all Life360 circles (locations)
 // @param home - Life360 circle which user selected as 'home'
-// @return true if member location changed from last update; false if no change
-Boolean generatePresenceEvent(member, thePlaces, home) {
+//
+// @return true if member is in transit (inTransit=true OR speed > 1)
+boolean generatePresenceEvent(member, thePlaces, home) {
+    if (member == null) return false
     //log.trace("generatePresenceEvent: member:${member}")
-    if (member.location == null) return
+    def location = member.location
+    if (location == null) return false
 
     // NOTE: only interested in sending updates device when location or battery changes
     // -- location --
-    Double latitude = toDouble(member.location.latitude)
-    Double longitude = toDouble(member.location.longitude)
-    Integer accuracy = toDouble(member.location.accuracy).round(0).toInteger()
-    Integer battery = toDouble(member.location.battery).round(0).toInteger()
-    Boolean wifiState = toBool(member.location.wifiState)
-    Boolean charge = toBool(member.location.charge)
-    Double speed = toDouble(member.location.speed)
-    Boolean inTransit = toBool(member.location.inTransit)
-    Boolean isDriving = toBool(member.location.isDriving)
-    Long since = member.location.since.toLong()
+    Double latitude = toDouble(location.latitude)
+    Double longitude = toDouble(location.longitude)
+    Integer accuracy = toDouble(location.accuracy).round(0).toInteger()
+    Integer battery = toDouble(location.battery).round(0).toInteger()
+    Boolean wifiState = toBool(location.wifiState)
+    Boolean charge = toBool(location.charge)
+    Double speed = toDouble(location.speed)
+    Boolean inTransit = toBool(location.inTransit)
+    Boolean isDriving = toBool(location.isDriving)
+    Long since = location.since.toLong()
     // NOTE: userActivity passed in v5 API (not implemented)
     // userActivity:[unknown|os_biking|os_running|vehicle]
-    String userActivity = member.location.userActivity
+    String userActivity = location.userActivity
     if (userActivity?.startsWith("os_")) {
         userActivity = userActivity.substring(3)
     }
@@ -197,8 +201,8 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     Double homeLongitude = toDouble(home.longitude)
     Double homeRadius = toDouble(home.radius)
 
-    String address1 = (member.location.name) ? member.location.name : member.location.address1
-    String address2 = (member.location.address2) ? member.location.address2 : member.location.shortaddress
+    String address1 = (location.name) ? location.name : location.address1
+    String address2 = (location.address2) ? location.address2 : location.shortaddress
 
     // -- previous values (could be null) --
     Double prevLatitude = device.currentValue('latitude')
@@ -213,18 +217,18 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
         || (prevAccuracy == null || prevAccuracy != accuracy))
 
     // skip update if location, accuracy and battery have not changed
-    if (!isLocationChanged
+    if (!inTransit && speed <= 0 && !isLocationChanged
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
         // NOTE: uncomment to see 'no change' updates every <30> seconds
-        if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:$speed"
+        if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
         return false
     }
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}"
+    if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -358,7 +362,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {
-        return isLocationChanged
+        return inTransit
     }
 
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
@@ -403,7 +407,7 @@ Boolean generatePresenceEvent(member, thePlaces, home) {
     int tileDevice1Count = tileMap.length()
     if (tileDevice1Count > 1024) log.warn "generatePresenceEvent: Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
-    return isLocationChanged
+    return inTransit
 }
 
 def haversine(lat1, lon1, lat2, lon2) {
