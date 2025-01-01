@@ -13,6 +13,7 @@ import java.net.http.HttpTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.0.15 - 12/31/24 - minor fixes
  *  5.0.14 - 12/24/24 - Dynamic Polling
  *  5.0.13 - 12/24/24 - restore original scheduling routine
  *  5.0.10 - 12/21/24 - add some randomness
@@ -559,7 +560,7 @@ def notifyChildDevice(memberId, memberObj) {
             // send location, places and home to device driver
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
             boolean prevInTransit = isMemberInTransit(memberId)
-            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${memberObj.firstName}: inTransit:${inTransit}")
+            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${memberObj.firstName}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
         } else {
