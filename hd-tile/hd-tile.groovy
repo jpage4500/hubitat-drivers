@@ -57,6 +57,7 @@ preferences {
             "webUrl" : "Web URL",
             "calendar" : "Calendar (ical URL)",
             "pollen" : "Pollen Count (Zip Code)",
+            "pollen-google" : "Pollen - Google (LAT,LNG) (API Key)",
             "radar" : "Radar (LAT,LNG)",
             "stock" : "Stock (Symbol)",
             "dadjokes" : "Dad Jokes",
