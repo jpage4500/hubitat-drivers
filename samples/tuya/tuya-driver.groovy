@@ -162,7 +162,7 @@ metadata {
     'fanSpeed'       : [ 'fan_speed_enum', 'fan_speed' ],
     'fanSwitch'      : [ 'switch_fan', 'switch' ],
     'light'          : [ 'switch_led', 'switch_led_1', 'switch_led_2', 'light' ],
-    'litter'         : [ 'auto_clean' ],
+    'litter'         : [ 'start' ],
     'humiditySet'    : [ 'dehumidify_set_value' ],                                                                                       /* Inserted by SJB */
     'humiditySpeed'  : [ 'fan_speed_enum' ],
     'humidity'       : [ 'temp_indoor', 'swing', 'shake', 'child_lock', 'lock', 'fan_speed_enum', 'dehumidify_set_value', 'humidity_indoor', 'humidity', 'envhumid', 'switch', 'mode', 'anion', 'pump', 'dry', 'windspeed', 'countdown', 'countdown_left', 'fault' ],
@@ -308,7 +308,8 @@ private static Map mapTuyaCategory(Map d) {
         case 'cwwsq': // Pet Feeder (https://developer.tuya.com/en/docs/iot/f?id=K9gf468bl11rj)
             return [ driver: 'Generic Component Button Controller' ]
         case 'msp':   // Litter Box (https://developer.tuya.com/en/docs/iot/categorymsp?id=Kakg2t7714ky7)
-            return [ driver: 'Generic Component Switch' ]
+            return [ driver: 'Generic Component Button Controller' ]
+            // return [ driver: 'Generic Component Switch' ]
         case 'cz':    // Socket (https://developer.tuya.com/en/docs/iot/s?id=K9gf7o5prgf7s)
         case 'kg':    // Switch
         case 'pc':    // Power Strip (https://developer.tuya.com/en/docs/iot/s?id=K9gf7o5prgf7s)
@@ -416,7 +417,7 @@ void componentLock(DeviceWrapper dw) {
 // Component command to turn on device
 void componentOn(DeviceWrapper dw) {
     Map<String, Map> functions = getFunctions(dw)
-    String code = getFunctionCode(functions, tuyaFunctions.litter + tuyaFunctions.light + tuyaFunctions.power)
+    String code = getFunctionCode(functions, tuyaFunctions.light + tuyaFunctions.power)
 
     if (code != null) {
         if (txtEnable) { LOG.info "Turning ${dw} on" }
@@ -436,7 +437,7 @@ void componentOn(DeviceWrapper dw) {
 // Component command to turn off device
 void componentOff(DeviceWrapper dw) {
     Map<String, Map> functions = getFunctions(dw)
-    String code = getFunctionCode(functions, tuyaFunctions.litter + tuyaFunctions.light + tuyaFunctions.power)
+    String code = getFunctionCode(functions, tuyaFunctions.light + tuyaFunctions.power)
 
     if (code != null) {
         if (txtEnable) { LOG.info "Turning ${dw} off" }
@@ -464,11 +465,20 @@ void componentOpen(DeviceWrapper dw) {
 
 // Component command to turn on device
 void componentPush(DeviceWrapper dw, BigDecimal button) {
+    // special litter box handling: send 'start'
+    String category = dw.getDataValue('category')
+    if (category == "msp") {
+        // litter box: send "start" to start auto cleaning
+        code = "start"
+        if (txtEnable) { LOG.info "LITTER: code: ${code}, device: ${dw}, functions: ${functions}" }
+        tuyaSendDeviceCommandsAsync(dw.getDataValue('id'), [ 'code': code, 'value': true ])
+        return
+    }
+
     Map<String, Map> functions = getFunctions(dw)
     String code = getFunctionCode(functions, tuyaFunctions.push)
-
     if (code != null) {
-        if (txtEnable) { LOG.info "Pushing ${dw} button ${button}" }
+        if (txtEnable) { LOG.info "Pushing ${dw} button ${button}, code: ${code}, device: ${dw}, functions: ${functions}" }
         tuyaSendDeviceCommandsAsync(dw.getDataValue('id'), [ 'code': code, 'value': button ])
     } else {
         Integer homeId = dw.getDataValue('homeId')
