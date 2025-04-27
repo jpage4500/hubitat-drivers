@@ -1,4 +1,10 @@
-/* 
+// hubitat start
+// hub: 192.168.0.200
+// type: device
+// id: 1671
+// hubitat end
+
+/*
 
 MIT License
 
@@ -25,6 +31,7 @@ SOFTWARE.
 
 // History:
 // 
+// 2025-04-27: v1.6 Levoit V201S-WUS support
 // 2023-02-04: v1.5 Adding heartbeat event
 // 2023-02-03: v1.4 Logging errors properly.
 // 2022-08-05: v1.3 Fixed error caused by change in VeSync API for getPurifierStatus.
@@ -48,7 +55,7 @@ metadata {
         documentationLink: "https://github.com/dcmeglio/hubitat-bond/blob/master/README.md")
         {
             capability "Actuator"
-            attribute "heartbeat", "string";  
+            attribute "heartbeat", "string";
         }
 
     preferences {
@@ -67,7 +74,7 @@ def installed() {
     updated()
 }
 
-def updated() { 
+def updated() {
 	logDebug "Updated with settings: ${settings}"
 
 	initialize()
@@ -81,7 +88,7 @@ def updated() {
 }
 
 def uninstalled() {
-    
+
     unschedule()
 
 	logDebug "Uninstalled app"
@@ -89,7 +96,7 @@ def uninstalled() {
 	for (device in getChildDevices())
 	{
 		deleteChildDevice(device.deviceNetworkId)
-	}	
+	}
 }
 
 def initialize() {
@@ -119,11 +126,11 @@ private Boolean login()
             "userType": "1",
             "method": "login"
         ],
-		headers: [ 
+		headers: [
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
-            "User-Agent": "Hubitat Elevation", 
+            "User-Agent": "Hubitat Elevation",
             "accept-language": "en",
             "appVersion": "2.5.1",
             "tz": "America/Los_Angeles"
@@ -173,7 +180,7 @@ def Boolean updateDevices()
             def configModule = e.value
 
             if (dni.endsWith("-nl")) continue;
-            
+
             logDebug "Updating ${dni}"
 
             def dev = getChildDevice(dni)
@@ -205,28 +212,30 @@ def Boolean updateDevices()
 private deviceType(code) {
     switch(code)
     {
-        case "Core200S": 
+        case "Core200S":
         case "LAP-C201S-AUSR":
         case "LAP-C201S-WUSR":
         case "LAP-V201S-WUS":
             return "200S";
-        case "Core300S": 
+        case "Core300S":
         case "LAP-C301S-WJP":
             return "300S";
-        case "Core400S": 
+        case "Core400S":
         case "LAP-C401S-WJP":
         case "LAP-C401S-WUSR":
         case "LAP-C401S-WAAA":
             return "400S";
-        case "Core600S": 
+        case "Core600S":
         case "LAP-C601S-WUS":
         case "LAP-C601S-WUSR":
         case "LAP-C601S-WEU":
             return "600S";
     }
 
-    return "N/A";
+    logDebug "NOT_FOUND: ${code}"
+    return null;
 }
+
 private Boolean getDevices() {
 
 	def params = [
@@ -246,12 +255,12 @@ private Boolean getDevices() {
             "pageNo": "1",
             "pageSize": "100"
         ],
-		headers: [ 
+		headers: [
             "tz": "America/Los_Angeles",
             "Accept": "application/json",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
-            "User-Agent": "Hubitat Elevation", 
+            "User-Agent": "Hubitat Elevation",
             "accept-language": "en",
             "appVersion": "2.5.1",
             "accountID": state.accountID,
@@ -269,17 +278,11 @@ private Boolean getDevices() {
                     logDebug "Device found: ${device.deviceType} / ${device.deviceName} / ${device.macID}"
 
                     def dtype = deviceType(device.deviceType);
+                    if (dtype == null) continue
 
-                    if (dtype == "200S")
-                    {
-                        newList[device.cid] = device.configModule;
-                        newList[device.cid+"-nl"] = device.configModule;
-                    }
-                    else if (dtype == "400S" || dtype == "300S" || dtype == "600S") {
-                        newList[device.cid] = device.configModule;
-                    }
+                    newList[device.cid] = device.configModule;
                 }
-                
+
                 // Remove devices that are no longer present.
 
                 List<com.hubitat.app.ChildDeviceWrapper> list = getChildDevices();
@@ -292,103 +295,29 @@ private Boolean getDevices() {
                 }
 
 				for (device in resp.data.result.list) {
-                    
                     def dtype = deviceType(device.deviceType);
+                    if (dtype == null) continue
 
                     com.hubitat.app.ChildDeviceWrapper equip1 = getChildDevice(device.cid)
-
-                    if (dtype == "200S")
-                    {
-                        def update = null;
-
-                        com.hubitat.app.ChildDeviceWrapper equip2 = getChildDevice(device.cid+"-nl")
-
-                        if (equip2 == null)
-                        {
-                            equip2 = addChildDevice("Levoit Core200S Air Purifier Light", device.cid+"-nl", [name: device.deviceName + " Light", label: device.deviceName + " Light", isComponent: false]);                                                    
-                            equip2.updateDataValue("configModule", device.configModule);
-                            equip2.updateDataValue("cid", device.cid);
-                            equip2.updateDataValue("uuid", device.uuid);
-                        }
-                        else {
-                            // In case the device name has changed.
-                            logDebug "Updating ${device.deviceName} Light / " + dtype;
-                            equip2.name = device.deviceName + " Light";
-                            equip2.label = device.deviceName + " Light";
-                        }                        
-
-                        if (equip1 == null)
-                        {
-                            logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core200S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);                                                    
-                            equip1.updateDataValue("configModule", device.configModule);
-                            equip1.updateDataValue("cid", device.cid);
-                            equip1.updateDataValue("uuid", device.uuid);
-                        }
-                        else {
-                            // In case the device name has changed.
-                            logDebug "Updating ${device.deviceName} / " + dtype;
-                            equip1.name = device.deviceName;
-                            equip1.label = device.deviceName;
-                        }                        
+                    if (equip1 == null) {
+                        logDebug "Adding ${device.deviceName}"
+                        equip1 = addChildDevice("Levoit Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);
+                        equip1.updateDataValue("configModule", device.configModule);
+                        equip1.updateDataValue("cid", device.cid);
+                        equip1.updateDataValue("uuid", device.uuid);
                     }
-                    else if (dtype == "300S")
-                    {
-                        if (equip1 == null)
-                        {
-                            logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core300S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);                                                    
-                            equip1.updateDataValue("configModule", device.configModule);
-                            equip1.updateDataValue("cid", device.cid);
-                            equip1.updateDataValue("uuid", device.uuid);
-                        }
-                        else {
-                            // In case the device name has changed.
-                            logDebug "Updating ${device.deviceName} / " + dtype;
-                            equip1.name = device.deviceName;
-                            equip1.label = device.deviceName;
-                        }                        
+                    else {
+                        // In case the device name has changed.
+                        logDebug "Updating ${device.deviceName} / " + dtype;
+                        equip1.name = device.deviceName;
+                        equip1.label = device.deviceName;
                     }
-                    else if (dtype == "400S")
-                    {
-                        if (equip1 == null)
-                        {
-                            logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core400S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);                                                    
-                            equip1.updateDataValue("configModule", device.configModule);
-                            equip1.updateDataValue("cid", device.cid);
-                            equip1.updateDataValue("uuid", device.uuid);
-                        }
-                        else {
-                            // In case the device name has changed.
-                            logDebug "Updating ${device.deviceName} / " + dtype;
-                            equip1.name = device.deviceName;
-                            equip1.label = device.deviceName;
-                        }                        
-                    }
-                    else if (dtype == "600S")
-                    {
-                        if (equip1 == null)
-                        {
-                            logDebug "Adding ${device.deviceName}"
-                            equip1 = addChildDevice("Levoit Core600S Air Purifier", device.cid, [name: device.deviceName, label: device.deviceName, isComponent: false]);                                                    
-                            equip1.updateDataValue("configModule", device.configModule);
-                            equip1.updateDataValue("cid", device.cid);
-                            equip1.updateDataValue("uuid", device.uuid);
-                        }
-                        else {
-                            // In case the device name has changed.
-                            logDebug "Updating ${device.deviceName} / " + dtype;
-                            equip1.name = device.deviceName;
-                            equip1.label = device.deviceName;
-                        }                        
-                    }
-				}                
+                }
 
                 state.deviceList = newList
 
                 runIn(5 * (int)settings.refreshInterval, timeOutLevoit)
-                
+
                 updateDevices()
 
 				result = true
@@ -439,7 +368,7 @@ def Boolean sendBypassRequest(equipment, payload, Closure closure)
             "accountID": getAccountID(),
             "tk": getAccountToken() ]
 	]
-    
+
 	try
 	{
 		httpPost(params, closure)
@@ -481,7 +410,7 @@ def getAccountID() {
 def MD5(s) {
 	def digest = MessageDigest.getInstance("MD5")
 	new BigInteger(1,digest.digest(s.getBytes())).toString(16).padLeft(32,"0")
-} 
+}
 
 def parseJSON(data) {
     def json = data.getText()
