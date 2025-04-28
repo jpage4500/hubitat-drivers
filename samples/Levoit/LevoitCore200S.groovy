@@ -297,24 +297,50 @@ def update() {
                 if (status == null)
                     logError "No status returned from getPurifierStatus: ${resp.msg}"
                 else
-                    result = update(status, nightLight)                
+                    result = update(status)
 			}
 		}
     return result
 }
 
-def update(status, nightLight)
+def update(status)
 {
-    logDebug "update(status, nightLight)"
+    logDebug "update(status)"
 
     logDebug status
 
-    state.speed = mapIntegerToSpeed(status.result.level)
-    state.mode = status.result.mode
+    // fan speed
+    def speed = null
+    if (status.fanSpeedLevel != null) {
+        speed = status.fanSpeedLevel
+    } else {
+        speed = status.result.level
+    }
+    if (speed != null) {
+        state.speed = mapIntegerToSpeed(speed)
+    }
 
-    device.sendEvent(name: "switch", value: status.result.enabled ? "on" : "off")
-    device.sendEvent(name: "mode", value: status.result.mode)
-    device.sendEvent(name: "filter", value: status.result.filter_life)
+    // mode
+    if (status.workMode != null) {
+        state.mode = status.result.workMode
+    } else {
+        state.mode = status.result.mode
+    }
+
+    // switch
+    if (status.powerSwitch != null) {
+        device.sendEvent(name: "switch", value: status.powerSwitch ? "on" : "off")
+    } else {
+        device.sendEvent(name: "switch", value: status.result.enabled ? "on" : "off")
+    }
+
+    device.sendEvent(name: "mode", value: status.state.mode)
+
+    if (status.filterLifePercent != null) {
+        device.sendEvent(name: "filter", value: status.status.filterLifePercent)
+    } else {
+        device.sendEvent(name: "filter", value: status.result.filter_life)
+    }
 
     switch(state.mode)
     {

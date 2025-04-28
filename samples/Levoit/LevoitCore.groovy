@@ -54,6 +54,7 @@ metadata {
         iconX3Url: "https://s3.amazonaws.com/smartapp-icons/Convenience/Cat-Convenience@2x.png",
         documentationLink: "https://github.com/dcmeglio/hubitat-bond/blob/master/README.md")
         {
+            capability "AirQuality"
             capability "Switch"
             capability "FanControl"
             capability "Actuator"
@@ -62,11 +63,11 @@ metadata {
             attribute "filter", "number";                              // Filter status (0-100%)
             attribute "mode", "string";                                // Purifier mode
 
-            attribute "aqi", "number";                                 // AQI (0-500)
+            attribute "airQualityIndex", "number";                     // AQI (0-500)
             attribute "aqiDanger", "string";                           // AQI danger level
             attribute "aqiColor", "string";                            // AQI HTML color
 
-            attribute "info", "string";                               // HTML
+            attribute "html", "string";                               // HTML
 
             command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
             command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "sleep", "auto", "low", "medium", "high", "max"] ] ]
@@ -428,56 +429,70 @@ def update() {
             if (status == null)
                 logError "No status returned from getPurifierStatus: ${resp.msg}"
             else
-                result = update(status, null)
+                result = update(status)
         }
     }
     return result
 }
 
-def update(status, nightLight)
+def update(status)
 {
-    logDebug "update(status, nightLight)"
+    def result = status.result
+    logDebug "update: ${result}"
 
-    logDebug status
-
-    def speed = mapIntegerToSpeed(status.result.level)
-    def mode = status.result.mode
-
-    def auto_mode = null
-    def room_size = null
-    if (status.result.configuration != null) {
-        auto_mode = status.result.configuration.auto_preference.type
-        room_size = status.result.configuration.auto_preference.room_size
-    } else if (status.result.autoPreference != null) {
-        //auto_mode = status.result.autoPreference.autoPreferenceType
-        room_size = status.result.autoPreference.roomSize
+    // fan speed
+    def speed = null
+    if (result.fanSpeedLevel != null) {
+        speed = result.fanSpeedLevel
+    } else {
+        speed = result.level
+    }
+    if (speed != null) {
+        state.speed = mapIntegerToSpeed(speed)
     }
 
-    handleEvent("switch", status.result.enabled ? "on" : "off")
-    if (state.mode == null || mode != state.mode)
-        handleEvent("mode",   status.result.mode)
-    if (state.auto_mode == null || auto_mode != state.auto_mode)
-        handleEvent("auto_mode", auto_mode)
-
-    switch(state.mode)
-    {
-        case "manual":
-            handleEvent("speed",  speed)
-            break;
-        case "auto":
-            handleEvent("speed",  "auto")
-            break;
-        case "sleep":
-            handleEvent("speed",  "on")
-            break;
+    // mode
+    def mode = null
+    if (result.workMode != null) {
+        mode = result.workMode
+    } else {
+        mode = result.mode
+    }
+    if (mode != null && (state.mode == null || mode != state.mode)) {
+        handleEvent("mode", mode)
     }
 
-    state.speed = speed
-    state.mode = status.result.mode
-    state.auto_mode = auto_mode
-    state.room_size = room_size
+//    if (state.auto_mode == null || auto_mode != state.auto_mode)
+//        handleEvent("auto_mode", auto_mode)
 
-    updateAQIandFilter(status.result.air_quality_value.toString(), status.result.filter_life)
+    // switch
+    if (result.powerSwitch != null) {
+        device.sendEvent(name: "switch", value: result.powerSwitch ? "on" : "off")
+    } else {
+        device.sendEvent(name: "switch", value: result.enabled ? "on" : "off")
+    }
+
+    // filter life
+    def filter = 0
+    if (result.filterLifePercent != null) {
+        filter = result.filterLifePercent
+        device.sendEvent(name: "filter", value: result.filterLifePercent)
+    } else {
+        filter = result.filter_life
+        device.sendEvent(name: "filter", value: result.filter_life)
+    }
+
+    // aqi
+    def api = -1
+    if (result.AQLevel != null) {
+        api = result.AQLevel
+    } else {
+        api = result.air_quality_value
+    }
+
+    if (api >= 0) {
+        updateAQIandFilter(api.toString(), filter)
+    }
 }
 
 private void handleEvent(name, val)
@@ -487,8 +502,7 @@ private void handleEvent(name, val)
 }
 
 private void updateAQIandFilter(String val, filter) {
-
-    logDebug "updateAQI(${val})"
+    logDebug "updateAQI: ${val}, filter: ${filter}"
 
     //
     // Conversions based on https://en.wikipedia.org/wiki/Air_quality_index
@@ -510,7 +524,7 @@ private void updateAQIandFilter(String val, filter) {
         else if (pm < 350.5) aqi = convertRange(pm, 250.5, 350.4, 301, 400);
         else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
 
-        handleEvent("AQI", aqi);
+        handleEvent("airQualityIndex", aqi);
 
         String danger;
         String color;
@@ -528,7 +542,7 @@ private void updateAQIandFilter(String val, filter) {
 
         def html = "AQI: ${aqi}<br>PM2.5: ${pm} &micro;g/m&sup3;<br>Filter: ${filter}%"
 
-        handleEvent("info", html)
+        handleEvent("html", html)
         handleEvent("filter", filter)
     }
 }

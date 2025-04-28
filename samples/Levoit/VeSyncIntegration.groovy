@@ -192,7 +192,7 @@ def Boolean updateDevices()
                     if (status == null)
                         logError "No status returned from getPurifierStatus: ${resp.msg}"
                     else
-                        result = dev.update(status, getChildDevice(dni+"-nl"))
+                        result = dev.update(status)
                 }
             }
         }
