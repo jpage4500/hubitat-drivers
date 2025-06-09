@@ -67,14 +67,17 @@ metadata {
             attribute "aqiDanger", "string";                           // AQI danger level
             attribute "aqiColor", "string";                            // AQI HTML color
 
+            attribute "lastChecked", "date";                           // last time device was checked
+            attribute "lastUpdated", "date";                           // last time AQI/filter was updated
+
             attribute "html", "string";                               // HTML
 
-            command "setDisplay", [[name:"Display*", type: "ENUM", description: "Display", constraints: ["on", "off"] ] ]
-            command "setSpeed", [[name:"Speed*", type: "ENUM", description: "Speed", constraints: ["off", "sleep", "auto", "low", "medium", "high", "max"] ] ]
-            command "setMode",  [[name:"Mode*", type: "ENUM", description: "Mode", constraints: ["manual", "sleep", "auto"] ] ]
-            command "setAutoMode",  [
-                [name:"Mode*", type: "ENUM", description: "Mode", constraints: ["default", "quiet", "eco", "efficient"] ],
-                [ name:"Room Size", type: "NUMBER", description: "Room size in square feet" ] ]
+            command "setDisplay", [[name: "Display*", type: "ENUM", description: "Display", constraints: ["on", "off"]]]
+            command "setSpeed", [[name: "Speed*", type: "ENUM", description: "Speed", constraints: ["off", "sleep", "auto", "low", "medium", "high", "max"]]]
+            command "setMode", [[name: "Mode*", type: "ENUM", description: "Mode", constraints: ["manual", "sleep", "auto"]]]
+            command "setAutoMode", [
+                [name: "Mode*", type: "ENUM", description: "Mode", constraints: ["default", "quiet", "eco", "efficient"]],
+                [name: "Room Size", type: "NUMBER", description: "Room size in square feet"]]
             command "toggle"
             command "update"
         }
@@ -116,15 +119,13 @@ def on() {
 
     if (state.speed != null) {
         setSpeed(state.speed)
-    }
-    else {
+    } else {
         setSpeed("low")
     }
 
     if (state.mode != null) {
         setMode(state.mode)
-    }
-    else {
+    } else {
         update()
     }
 }
@@ -149,7 +150,7 @@ def cycleSpeed() {
 
     def speed = "low";
 
-    switch(state.speed) {
+    switch (state.speed) {
         case "low":
             speed = "medium";
             break;
@@ -164,23 +165,21 @@ def cycleSpeed() {
             break;
     }
 
-    if (state.switch == "off")
-    {
+    if (state.switch == "off") {
         on()
     }
     setSpeed(speed)
 }
 
-def setLevel(value)
-{
+def setLevel(value) {
     logDebug "setLevel $value"
     def speed = 0
     setMode("manual") // always manual if setLevel() cmd was called
 
-    if(value < 25) speed = 1
-    if(value >= 25 && value < 50) speed = 2
-    if(value >= 50 && value < 75) speed = 3
-    if(value >= 75) speed = 4
+    if (value < 25) speed = 1
+    if (value >= 25 && value < 50) speed = 2
+    if (value >= 50 && value < 75) speed = 3
+    if (value >= 75) speed = 4
 
     sendEvent(name: "level", value: value)
     setSpeed(speed)
@@ -190,22 +189,18 @@ def setSpeed(speed) {
     logDebug "setSpeed(${speed})"
     if (speed == "off") {
         off()
-    }
-    else if (speed == "auto") {
+    } else if (speed == "auto") {
         setMode(speed)
         state.speed = speed
         handleEvent("speed", speed)
-    }
-    else if (speed == "sleep") {
+    } else if (speed == "sleep") {
         setMode(speed)
         handleEvent("speed", "on")
-    }
-    else if (state.mode == "manual") {
+    } else if (state.mode == "manual") {
         handleSpeed(speed)
         state.speed = speed
         handleEvent("speed", speed)
-    }
-    else if (state.mode == "sleep") {
+    } else if (state.mode == "sleep") {
         setMode("manual")
         handleSpeed(speed)
         state.speed = speed
@@ -220,16 +215,15 @@ def setMode(mode) {
     state.mode = mode
     handleEvent("mode", mode)
 
-    switch(mode)
-    {
+    switch (mode) {
         case "manual":
-            handleEvent("speed",  state.speed)
+            handleEvent("speed", state.speed)
             break;
         case "auto":
-            handleEvent("speed",  "auto")
+            handleEvent("speed", "auto")
             break;
         case "sleep":
-            handleEvent("speed",  "on")
+            handleEvent("speed", "on")
             break;
     }
 }
@@ -243,8 +237,7 @@ def setAutoMode(mode, roomSize) {
 
     if (mode == "efficient") {
         handleAutoMode(mode, roomSize);
-    }
-    else {
+    } else {
         handleAutoMode(mode);
     }
 
@@ -255,7 +248,7 @@ def setAutoMode(mode, roomSize) {
 
     handleEvent("auto_mode", mode)
     handleEvent("mode", "auto")
-    handleEvent("speed",  "auto")
+    handleEvent("speed", "auto")
 }
 
 def setDisplay(displayOn) {
@@ -264,8 +257,7 @@ def setDisplay(displayOn) {
 }
 
 def mapSpeedToInteger(speed) {
-    switch(speed)
-    {
+    switch (speed) {
         case "1":
         case "low":
             return 1;
@@ -280,8 +272,7 @@ def mapSpeedToInteger(speed) {
 }
 
 def mapIntegerStringToSpeed(speed) {
-    switch(speed)
-    {
+    switch (speed) {
         case "1":
             return "low";
         case "2":
@@ -293,8 +284,7 @@ def mapIntegerStringToSpeed(speed) {
 }
 
 def mapIntegerToSpeed(speed) {
-    switch(speed)
-    {
+    switch (speed) {
         case 1:
             return "low";
         case 2:
@@ -328,11 +318,10 @@ def handlePower(on) {
     def result = false
 
     parent.sendBypassRequest(device, [
-        data: [ enabled: on, id: 0 ],
+        data    : [enabled: on, id: 0],
         "method": "setSwitch",
-        "source": "APP" ]) { resp ->
-        if (checkHttpResponse("handleOn", resp))
-        {
+        "source": "APP"]) { resp ->
+        if (checkHttpResponse("handleOn", resp)) {
             def operation = on ? "ON" : "OFF"
             logDebug "turned ${operation}()"
             result = true
@@ -346,12 +335,11 @@ def handleSpeed(speed) {
     def result = false
 
     parent.sendBypassRequest(device, [
-        data: [ level: mapSpeedToInteger(speed), id: 0, type: "wind" ],
+        data    : [level: mapSpeedToInteger(speed), id: 0, type: "wind"],
         "method": "setLevel",
         "source": "APP"
     ]) { resp ->
-        if (checkHttpResponse("handleSpeed", resp))
-        {
+        if (checkHttpResponse("handleSpeed", resp)) {
             logDebug "Set speed"
             result = true
         }
@@ -364,12 +352,11 @@ def handleMode(mode) {
     def result = false
 
     parent.sendBypassRequest(device, [
-        data: [ "mode": mode ],
+        data    : ["mode": mode],
         "method": "setPurifierMode",
         "source": "APP"
     ]) { resp ->
-        if (checkHttpResponse("handleMode", resp))
-        {
+        if (checkHttpResponse("handleMode", resp)) {
             logDebug "Set mode"
             result = true
         }
@@ -382,12 +369,11 @@ def handleAutoMode(mode) {
     def result = false
 
     parent.sendBypassRequest(device, [
-        data: [ "type": mode ],
+        data    : ["type": mode],
         "method": "setAutoPreference",
         "source": "APP"
     ]) { resp ->
-        if (checkHttpResponse("handleMode", resp))
-        {
+        if (checkHttpResponse("handleMode", resp)) {
             logDebug "Set mode"
             result = true
         }
@@ -400,12 +386,11 @@ def handleAutoMode(mode, size) {
     def result = false
 
     parent.sendBypassRequest(device, [
-        data: [ "type": mode, "room_size": size ],
+        data    : ["type": mode, "room_size": size],
         "method": "setAutoPreference",
         "source": "APP"
     ]) { resp ->
-        if (checkHttpResponse("handleMode", resp))
-        {
+        if (checkHttpResponse("handleMode", resp)) {
             logDebug "Set mode"
             result = true
         }
@@ -418,13 +403,12 @@ def update() {
 
     def result = null
 
-    parent.sendBypassRequest(device,  [
+    parent.sendBypassRequest(device, [
         "method": "getPurifierStatus",
         "source": "APP",
-        "data": [:]
+        "data"  : [:]
     ]) { resp ->
-        if (checkHttpResponse("update", resp))
-        {
+        if (checkHttpResponse("update", resp)) {
             def status = resp.data.result
             if (status == null)
                 logError "No status returned from getPurifierStatus: ${resp.msg}"
@@ -435,8 +419,7 @@ def update() {
     return result
 }
 
-def update(status)
-{
+def update(status) {
     def result = status.result
     logDebug "update: ${result}"
 
@@ -482,60 +465,74 @@ def update(status)
         device.sendEvent(name: "filter", value: result.filter_life)
     }
 
+    // AQLevel:4, PM25:180
+
+    // NOTE: AQI level isn't changing in my testing.. only PM2.5
     // aqi
-    def api = -1
-    if (result.AQLevel != null) {
-        api = result.AQLevel
-    } else {
-        api = result.air_quality_value
+//    def aqi = -1
+//    if (result.AQLevel != null) {
+//        aqi = result.AQLevel
+//    } else {
+//        aqi = result.air_quality_value
+//    }
+
+    // PM2.5
+    BigDecimal pm = -1
+    if (result.PM25 != null) {
+        pm = result.PM25
     }
 
-    if (api >= 0) {
-        updateAQIandFilter(api.toString(), filter)
+    if (pm >= 0) {
+        updateAQIandFilter(pm, filter)
     }
 }
 
-private void handleEvent(name, val)
-{
+private void handleEvent(name, val) {
     logDebug "handleEvent(${name}, ${val})"
     device.sendEvent(name: name, value: val)
 }
 
-private void updateAQIandFilter(String val, filter) {
-    logDebug "updateAQI: ${val}, filter: ${filter}"
+private void updateAQIandFilter(BigDecimal pm, filter) {
+    logDebug "updateAQIandFilter: pm: ${pm}, filter: ${filter}"
 
     //
     // Conversions based on https://en.wikipedia.org/wiki/Air_quality_index
     //
-    BigDecimal pm = val.toBigDecimal();
-
-    BigDecimal aqi;
-
     if (state.prevPM == null || state.prevPM != pm || state.prevFilter == null || state.prevFilter != filter) {
 
-        state.prevPM = pm;
-        state.prevFilter = filter;
+        state.prevPM = pm
+        state.prevFilter = filter
 
-        if      (pm <  12.1) aqi = convertRange(pm,   0.0,  12.0,   0,  50);
-        else if (pm <  35.5) aqi = convertRange(pm,  12.1,  35.4,  51, 100);
-        else if (pm <  55.5) aqi = convertRange(pm,  35.5,  55.4, 101, 150);
-        else if (pm < 150.5) aqi = convertRange(pm,  55.5, 150.4, 151, 200);
+        BigDecimal aqi
+
+        if (pm < 12.1) aqi = convertRange(pm, 0.0, 12.0, 0, 50);
+        else if (pm < 35.5) aqi = convertRange(pm, 12.1, 35.4, 51, 100);
+        else if (pm < 55.5) aqi = convertRange(pm, 35.5, 55.4, 101, 150);
+        else if (pm < 150.5) aqi = convertRange(pm, 55.5, 150.4, 151, 200);
         else if (pm < 250.5) aqi = convertRange(pm, 150.5, 250.4, 201, 300);
         else if (pm < 350.5) aqi = convertRange(pm, 250.5, 350.4, 301, 400);
-        else                 aqi = convertRange(pm, 350.5, 500.4, 401, 500);
+        else aqi = convertRange(pm, 350.5, 500.4, 401, 500);
 
         handleEvent("airQualityIndex", aqi);
 
         String danger;
         String color;
 
-        if      (aqi <  51) { danger = "Good";                           color = "7e0023"; }
-        else if (aqi < 101) { danger = "Moderate";                       color = "fff300"; }
-        else if (aqi < 151) { danger = "Unhealthy for Sensitive Groups"; color = "f18b00"; }
-        else if (aqi < 201) { danger = "Unhealthy";                      color = "e53210"; }
-        else if (aqi < 301) { danger = "Very Unhealthy";                 color = "b567a4"; }
-        else if (aqi < 401) { danger = "Hazardous";                      color = "7e0023"; }
-        else {                danger = "Hazardous";                      color = "7e0023"; }
+        if (aqi < 51) {
+            danger = "Good"; color = "7e0023";
+        } else if (aqi < 101) {
+            danger = "Moderate"; color = "fff300";
+        } else if (aqi < 151) {
+            danger = "Unhealthy for Sensitive Groups"; color = "f18b00";
+        } else if (aqi < 201) {
+            danger = "Unhealthy"; color = "e53210";
+        } else if (aqi < 301) {
+            danger = "Very Unhealthy"; color = "b567a4";
+        } else if (aqi < 401) {
+            danger = "Hazardous"; color = "7e0023";
+        } else {
+            danger = "Hazardous"; color = "7e0023";
+        }
 
         handleEvent("aqiColor", color)
         handleEvent("aqiDanger", danger)
@@ -544,7 +541,11 @@ private void updateAQIandFilter(String val, filter) {
 
         handleEvent("html", html)
         handleEvent("filter", filter)
+        handleEvent("lastUpdated", new Date());
     }
+
+    // always update to indicate app is still receiving updates
+    // handleEvent("lastChecked", new Date());
 }
 
 private BigDecimal convertRange(BigDecimal val, BigDecimal inMin, BigDecimal inMax, BigDecimal outMin, BigDecimal outMax, Boolean returnInt = true) {
@@ -565,19 +566,17 @@ private BigDecimal convertRange(BigDecimal val, BigDecimal inMin, BigDecimal inM
     return (val);
 }
 
-def handleDisplayOn(displayOn)
-{
+def handleDisplayOn(displayOn) {
     logDebug "handleDisplayOn()"
 
     def result = false
 
     parent.sendBypassRequest(device, [
-        data: [ "state": (displayOn == "on")],
+        data    : ["state": (displayOn == "on")],
         "method": "setDisplay",
         "source": "APP"
     ]) { resp ->
-        if (checkHttpResponse("handleDisplayOn", resp))
-        {
+        if (checkHttpResponse("handleDisplayOn", resp)) {
             logDebug "Set display"
             result = true
         }
@@ -588,13 +587,10 @@ def handleDisplayOn(displayOn)
 def checkHttpResponse(action, resp) {
     if (resp.status == 200 || resp.status == 201 || resp.status == 204)
         return true
-    else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500)
-    {
+    else if (resp.status == 400 || resp.status == 401 || resp.status == 404 || resp.status == 409 || resp.status == 500) {
         log.error "${action}: ${resp.status} - ${resp.getData()}"
         return false
-    }
-    else
-    {
+    } else {
         log.error "${action}: unexpected HTTP response: ${resp.status}"
         return false
     }
