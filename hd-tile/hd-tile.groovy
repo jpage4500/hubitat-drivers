@@ -61,7 +61,8 @@ preferences {
             "radar" : "Radar (LAT,LNG)",
             "stock" : "Stock (Symbol)",
             "dadjokes" : "Dad Jokes",
-            "activity" : "Device Activity"
+            "activity" : "Device Activity",
+            "accuweather-health" : "Accuweather Health (URL)",
         ])
 
     input("url", "string", title: "URL | Zip Code | Stock Symbol", description: "", required: false)
