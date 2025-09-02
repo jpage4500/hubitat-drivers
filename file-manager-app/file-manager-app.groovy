@@ -492,6 +492,7 @@ def moveFile() {
     def targetFolder = params.targetFolder
 
     if (!filename) {
+        log.error "moveFile: Missing filename"
         render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename"])
         return
     }
@@ -504,10 +505,23 @@ def moveFile() {
             return
         }
 
-        // Create new filename with folder prefix
-        def newFilename = filename
+        // Always remove any existing folder prefix from filename
+        def baseFilename = filename.replaceFirst(/^${state.folderPrefix}[^_]+_/, '')
+        log.debug "moveFile: computed baseFilename: ${baseFilename} from filename: ${filename}"
+
+        def newFilename
         if (targetFolder) {
-            newFilename = "${state.folderPrefix}${targetFolder}_${filename}"
+            newFilename = "${state.folderPrefix}${targetFolder}_${baseFilename}"
+        } else {
+            newFilename = baseFilename
+        }
+
+        log.debug "moveFile: file: ${filename} -> ${newFilename}"
+
+        // If the new filename is the same as the old, just return success
+        if (newFilename == filename) {
+            render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File already in target location"])
+            return
         }
 
         // Upload to new location
@@ -517,7 +531,6 @@ def moveFile() {
         deleteHubFile(filename)
 
         render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File moved successfully"])
-
     } catch (Exception e) {
         log.error "Error moving file ${filename}: ${e.message}"
         render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to move file"])
