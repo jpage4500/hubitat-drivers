@@ -176,6 +176,8 @@
         .actions {
             display: flex;
             gap: 10px;
+            justify-content: flex-end;
+            width: 100%;
         }
 
         .btn {
@@ -496,7 +498,7 @@
 <body>
 <div class="container">
     <div class="header">
-        <h1>📁 File Manager ➕</h1>
+        <h1>📁 File Manager➕</h1>
         <p>Hubitat File Manager</p>
     </div>
 
@@ -526,8 +528,10 @@
 
         <div class="content-area">
             <div class="toolbar">
-                <div class="actions">
-                    <input type="text" id="fileFilterInput" placeholder="Filter files..." style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;" oninput="onFileFilterInput()">
+                <div class="actions" style="display: flex; gap: 10px; justify-content: flex-end; width: 100%;">
+                    <input type="text" id="fileFilterInput" placeholder="Filter files..."
+                           style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;"
+                           oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
                     <button class="btn btn-secondary" onclick="changeAccessToken()">🔑 Token</button>
                     <button class="btn btn-secondary" onclick="changeAppId()"># App ID</button>
@@ -539,21 +543,29 @@
                     </button>
                 </div>
             </div>
-            <div class="breadcrumb-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: #f8f9fa; border-radius: 8px;">
-                <div class="breadcrumb" id="breadcrumb" style="display: flex; align-items: center; gap: 0.5em; font-size: 1.05em;">
+            <div class="breadcrumb-bar"
+                 style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: #f8f9fa; border-radius: 8px;">
+                <div class="breadcrumb" id="breadcrumb"
+                     style="display: flex; align-items: center; gap: 0.5em; font-size: 1.05em;">
                     <!-- Breadcrumb items will be rendered here -->
                 </div>
                 <div class="sort-controls" style="display: flex; align-items: center; gap: 6px;">
-                    <select id="sortSelect" style="padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 100px;" onchange="onSortChange()">
+                    <select id="sortSelect"
+                            style="padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 100px;"
+                            onchange="onSortChange()">
                         <option value="name">Sort: Name</option>
                         <option value="date">Sort: Date</option>
                         <option value="size">Sort: Size</option>
                     </select>
-                    <button id="sortDirBtn" onclick="toggleSortDirection()" title="Toggle sort direction" style="background: none; border: none; font-size: 1.2em; cursor: pointer; padding: 0 6px;">▲</button>
+                    <button id="sortDirBtn" onclick="toggleSortDirection()" title="Toggle sort direction"
+                            style="background: none; border: none; font-size: 1.2em; cursor: pointer; padding: 0 6px;">▲
+                    </button>
                 </div>
             </div>
-            <div id="fileListToolbar" style="display: flex; align-items: center; padding: 8px 12px; background: #f8f9fa; border-bottom: 1px solid #e9ecef;">
-                <input type="checkbox" id="selectAllCheckbox" style="margin-right: 8px;" onclick="toggleSelectAllFiles(this.checked)">
+            <div id="fileListToolbar"
+                 style="display: flex; align-items: center; padding: 8px 12px; background: #f8f9fa; border-bottom: 1px solid #e9ecef;">
+                <input type="checkbox" id="selectAllCheckbox" style="margin-right: 8px;"
+                       onclick="toggleSelectAllFiles(this.checked)">
                 <label for="selectAllCheckbox" style="user-select: none; cursor: pointer;">Select All</label>
             </div>
             <div id="fileList" class="file-list">
@@ -627,12 +639,25 @@
     let currentFiles = [];
     let deleteTarget = null;
     let selectedFiles = new Set();
-    let appId = localStorage.getItem('fileManagerAppId') || '';
-    let accessToken = localStorage.getItem('fileManagerAccessToken') || '';
-    let API_BASE = appId ? `/apps/api/${appId}` : '';
     let fileFilter = '';
     let sortOrder = 'name';
     let sortDirection = 'asc';
+
+    function getUrlParam(name) {
+        const url = new URL(window.location.href);
+        return url.searchParams.get(name);
+    }
+
+    function getAppIdFromPath() {
+        // Match /apps/api/{appId}/ or /apps/api/{appId}
+        const match = window.location.pathname.match(/\/apps\/api\/(\d+)/);
+        return match ? match[1] : '';
+    }
+
+    // Use access_token and appId from URL if present
+    let appId = getAppIdFromPath() || localStorage.getItem('fileManagerAppId') || '';
+    let accessToken = getUrlParam('access_token') || localStorage.getItem('fileManagerAccessToken') || '';
+    let API_BASE = appId ? `/apps/api/${appId}` : '';
 
     function updateSortArrow() {
         const btn = document.getElementById('sortDirBtn');
@@ -770,12 +795,18 @@
                 })
             })
                 .then(response => response.text())
-                .then(data => {
-                    if (data.success) {
-                        showAlert('File uploaded successfully!', 'success');
-                        refreshFiles();
-                    } else {
-                        showAlert('Upload failed: ' + data.error, 'error');
+                .then(text => {
+                    try {
+                        const data = JSON.parse(text);
+                        if (data.success) {
+                            showAlert('File uploaded successfully!', 'success');
+                            refreshFiles();
+                        } else {
+                            showAlert('Upload failed: ' + (data.error || 'Unknown error'), 'error');
+                        }
+                    } catch (e) {
+                        showAlert('Upload error: Invalid JSON response', 'error');
+                        return;
                     }
                 })
                 .catch(error => {
@@ -876,11 +907,10 @@
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon folder">📁</div>
                             <div class="file-info">
-                                <div class="file-name">${file.name}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${file.name}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
-                                <button class="btn btn-sm btn-primary" onclick="navigateToFolder('${file.name}')">📂</button>
                                 <button class="btn btn-sm btn-danger" onclick="deleteFolder('${file.name}')">🗑️</button>
                             </div>
                         </div>
@@ -891,11 +921,10 @@
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon ${getFileIconClass(file.name)}">${getFileIcon(file.name)}</div>
                             <div class="file-info">
-                                <div class="file-name">${file.name}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="downloadFile('${file.fullName}')">${file.name}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
-                                <button class="btn btn-sm btn-primary" onclick="downloadFile('${file.fullName}')">📥</button>
                                 <button class="btn btn-sm btn-danger" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>
                             </div>
                         </div>
@@ -941,7 +970,7 @@
         const breadcrumb = document.getElementById('breadcrumb');
         // Render as segments with separator
         let html = '';
-        html += `<span class="breadcrumb-item" data-folder="">Home</span>`;
+        html += `<span class="breadcrumb-item" data-folder="" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('')">Home</span>`;
         if (currentFolder) {
             html += `<span class="breadcrumb-separator" style="color:#bbb; margin:0 0.4em;">›</span>`;
             html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${currentFolder}</span>`;
@@ -1023,7 +1052,6 @@
             .then(text => {
                 try {
                     const data = JSON.parse(text);
-                    console.log('Create folder response:', data);
                     if (data.success) {
                         showAlert('Folder created successfully!', 'success');
                         closeModal('folderModal');
@@ -1076,14 +1104,19 @@
             body: JSON.stringify(body)
         })
             .then(response => response.text())
-            .then(data => {
-                if (data.success) {
-                    showAlert(`${deleteTarget.type} deleted successfully!`, 'success');
-                    closeModal('deleteModal');
-                    refreshFiles();
-                    updateFolderList();
-                } else {
-                    showAlert(`Failed to delete ${deleteTarget.type}: ` + data.error, 'error');
+            .then(text => {
+                try {
+                    const data = JSON.parse(text);
+                    if (data.success) {
+                        showAlert(`${deleteTarget.type} deleted successfully!`, 'success');
+                        closeModal('deleteModal');
+                        refreshFiles();
+                        updateFolderList();
+                    } else {
+                        showAlert(`Failed to delete ${deleteTarget.type}: ` + data.error, 'error');
+                    }
+                } catch (e) {
+                    console.error('Error parsing folders:', e);
                 }
             })
             .catch(error => {
@@ -1204,10 +1237,10 @@
                 })
             })
                 .then(response => response.text())
-                .then(data => {
+                .then(text => {
                     try {
-                        const result = JSON.parse(data);
-                        if (result.success) {
+                        const data = JSON.parse(text);
+                        if (data.success) {
                             movedCount++;
                         } else {
                             errorCount++;
@@ -1262,12 +1295,10 @@
                     body: JSON.stringify({filename: filename})
                 })
                     .then(response => response.text())
-                    .then(data => {
-                        console.log('Delete response:', data);
+                    .then(text => {
                         try {
-                            const result = JSON.parse(data);
-                            console.log('result:', result);
-                            if (result.success) {
+                            const data = JSON.parse(text);
+                            if (data.success) {
                                 deletedCount++;
                             } else {
                                 errorCount++;

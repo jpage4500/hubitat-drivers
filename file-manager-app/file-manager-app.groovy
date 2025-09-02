@@ -19,26 +19,34 @@ definition(
 
 preferences {
     page(name: "mainPage", title: "File Manager+", install: true, uninstall: true) {
-        section("File Manager+ Settings") {
-            input "folderPrefix", "text", title: "Folder prefix (e.g., 'folder_')", defaultValue: "folder_", required: false, submitOnChange: true
-            input "showHiddenFiles", "bool", title: "Show hidden files (starting with .)", defaultValue: false, submitOnChange: true
-            input "fileTypes", "text", title: "File type filter (comma separated, e.g., jpg,png,pdf)", defaultValue: "", required: false, submitOnChange: true
-            input "maxFileSize", "number", title: "Maximum file size (MB)", defaultValue: 10, required: false, submitOnChange: true
+        section() {
+            //input "showHiddenFiles", "bool", title: "Show hidden files (starting with .)", defaultValue: false, submitOnChange: true
+            //input "maxFileSize", "number", title: "Maximum file size (MB)", defaultValue: 10, required: false, submitOnChange: true
+            //input "sortOrder", "enum", title: "Sort order", options: ["name", "size", "date"], defaultValue: "name", submitOnChange: true
+            //input "sortDirection", "enum", title: "Sort direction", options: ["asc", "desc"], defaultValue: "asc", submitOnChange: true
+
+            paragraph "<a target=_blank href=${getFullLocalApiServerUrl()}/dashboard?access_token=${state.accessToken}>View File Manager+</a>"
+
+            // NOTE: cloud endpoint has a limit to how much data can be returned (128k??)
+            //href(
+            //    title      : 'View File Manager+ (cloud)',
+            //    url        : "${getFullApiServerUrl()}/dashboard?access_token=${state.accessToken}",
+            //    description: 'View File Manager+',
+            //)
         }
 
-        section("Upload Settings") {
-            input "uploadFolder", "text", title: "Default upload folder (optional)", defaultValue: "", required: false, submitOnChange: true
-            input "autoOrganize", "bool", title: "Auto-organize uploads by file type", defaultValue: true, submitOnChange: true
-        }
-
-        section("Display Settings") {
-            input "sortOrder", "enum", title: "Sort order", options: ["name", "size", "date"], defaultValue: "name", submitOnChange: true
-            input "sortDirection", "enum", title: "Sort direction", options: ["asc", "desc"], defaultValue: "asc", submitOnChange: true
+        section("Debug") {
+            paragraph "Access Token: ${state.accessToken}"
+            paragraph "App ID: ${app.id}"
         }
     }
 }
 
 mappings {
+    path("/dashboard") {
+        action:
+        [GET: "dashboard"]
+    }
     path("/files") {
         action:
         [GET: "listFiles"]
@@ -85,14 +93,12 @@ def updated() {
 
 def initialize() {
     log.debug "Initializing File Manager App"
-    state.folderPrefix = folderPrefix ?: "folder_"
+    state.folderPrefix = "folder_"
     state.showHiddenFiles = showHiddenFiles ?: false
     state.fileTypes = fileTypes ?: ""
     state.maxFileSize = maxFileSize ?: 10
-    state.uploadFolder = uploadFolder ?: ""
-    state.autoOrganize = autoOrganize ?: true
-    state.sortOrder = sortOrder ?: "name"
-    state.sortDirection = sortDirection ?: "asc"
+    state.sortOrder = "name"
+    state.sortDirection = "asc"
 
     // Create child device if it doesn't exist
     if (!getChildDevice("FileManager+Device")) {
@@ -123,15 +129,6 @@ def getFilteredFiles() {
     // Filter by hidden files
     if (!state.showHiddenFiles) {
         filteredFiles = filteredFiles.findAll { !it.name.startsWith('.') }
-    }
-
-    // Filter by file types
-    if (state.fileTypes) {
-        def allowedTypes = state.fileTypes.split(',').collect { it.trim().toLowerCase() }
-        filteredFiles = filteredFiles.findAll { file ->
-            def extension = file.name.tokenize('.').last().toLowerCase()
-            allowedTypes.contains(extension)
-        }
     }
 
     // Sort files
@@ -239,20 +236,6 @@ def uploadFileWithOrganization(String filename, byte[] content) {
     try {
         def finalFilename = filename
 
-        // Add folder prefix if specified
-        if (state.uploadFolder) {
-            finalFilename = "${state.folderPrefix}${state.uploadFolder}_${filename}"
-        }
-
-        // Auto-organize by file type if enabled
-        if (state.autoOrganize && !state.uploadFolder) {
-            def extension = filename.tokenize('.').last().toLowerCase()
-            def typeFolder = getTypeFolder(extension)
-            if (typeFolder) {
-                finalFilename = "${state.folderPrefix}${typeFolder}_${filename}"
-            }
-        }
-
         // Check file size
         if (content.length > (state.maxFileSize * 1024 * 1024)) {
             log.error "File ${filename} exceeds maximum size of ${state.maxFileSize}MB"
@@ -268,28 +251,21 @@ def uploadFileWithOrganization(String filename, byte[] content) {
     }
 }
 
-// Get folder name for file type
-def getTypeFolder(String extension) {
-    def typeMap = [
-        'jpg' : 'images',
-        'jpeg': 'images',
-        'png' : 'images',
-        'gif' : 'images',
-        'bmp' : 'images',
-        'pdf' : 'documents',
-        'doc' : 'documents',
-        'docx': 'documents',
-        'txt' : 'documents',
-        'mp3' : 'audio',
-        'wav' : 'audio',
-        'mp4' : 'video',
-        'avi' : 'video',
-        'mov' : 'video',
-        'zip' : 'archives',
-        'rar' : 'archives',
-        '7z'  : 'archives'
-    ]
-    return typeMap[extension] ?: 'misc'
+// API endpoint: view dashboard
+def dashboard() {
+    def filename = "file-manager-dashboard.html"
+    try {
+        byte[] bytes = downloadHubFile(filename)
+        if (!bytes) {
+            render status: 404, text: "File not found: ${filename}"
+            return
+        }
+        log.debug "Viewing dashboard file: ${filename}, size: ${bytes.length} bytes"
+        render contentType: "text/html", data: bytes
+    } catch (Exception e) {
+        log.error "Error viewing dashboard ${filename}: ${e.message}"
+        render status: 500, text: "Error viewing dashboard"
+    }
 }
 
 // API endpoint: List files
@@ -370,11 +346,6 @@ def uploadFile() {
     } catch (Exception e) {
         render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Invalid content encoding"])
         return
-    }
-
-    // Set upload folder if specified
-    if (folder) {
-        state.uploadFolder = folder
     }
 
     def success = uploadFileWithOrganization(filename, fileContent)
@@ -565,3 +536,4 @@ def getPublicUrl(String filename) {
 static String safeName(String filename) {
     return filename?.replaceAll("[^a-zA-Z0-9_.\\-]", "")
 }
+
