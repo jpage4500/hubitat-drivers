@@ -221,14 +221,17 @@ def createFolder(String folderName) {
 }
 
 // Delete a folder and all its contents
+// This deletes the marker file and ALL files in the folder (files with the folder's prefix)
 def deleteFolder(String folderName) {
     try {
         def allFiles = getAllFiles()
         def folderPrefix = "${state.folderPrefix}${folderName}_"
+        // Find all files in the folder, including the marker file
         def folderFiles = allFiles.findAll { it.name.startsWith(folderPrefix) }
 
         def deletedCount = 0
         folderFiles.each { file ->
+            log.debug "Deleting file: ${file.name}"
             deleteHubFile(file.name) // returns void
             deletedCount++
         }
