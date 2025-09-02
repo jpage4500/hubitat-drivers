@@ -9,7 +9,7 @@
       "id": "764e673c-d27e-44e2-be98-70def8ea9d66",
       "name": "File Manager+",
       "namespace": "jpage4500",
-      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/refs/heads/master/file-manager-app/file-manager-app.groovy",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/file-manager-app.groovy",
       "required": true,
       "oauth": true,
       "primary": false
@@ -20,7 +20,7 @@
       "id": "0e463f5e-9e12-413e-ae07-6ac79743355f",
       "name": "File Manager+ Device",
       "namespace": "jpage4500",
-      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/refs/heads/master/file-manager-app/file-manager-device.groovy",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/file-manager-device.groovy",
       "required": true
     }
   ],
@@ -28,7 +28,7 @@
     {
       "id": "3cba80ed-7bda-4421-97dd-6bcc20b1146d",
       "name": "file-manager-dashboard.html",
-      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/refs/heads/master/file-manager-app/file-manager-dashboard.html"
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/file-manager-dashboard.html"
     }
   ]
 }
