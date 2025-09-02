@@ -1010,6 +1010,20 @@
             html += `<span class="breadcrumb-separator" style="color:#bbb; margin:0 0.4em;">›</span>`;
             html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${displayName(currentFolder)}</span>`;
         }
+
+        // Calculate total items and total size for current folder
+        let visibleFiles = currentFiles;
+        // Only count files/folders actually displayed (after filter)
+        if (fileFilter && fileFilter.trim() !== '') {
+            const filterLower = fileFilter.trim().toLowerCase();
+            visibleFiles = currentFiles.filter(file => file.name.toLowerCase().includes(filterLower));
+        }
+        const itemCount = visibleFiles.length;
+        // Only sum sizes for files (not folders)
+        const totalBytes = visibleFiles.filter(f => !f.isFolder && f.size && !isNaN(Number(f.size))).reduce((sum, f) => sum + Number(f.size), 0);
+        const sizeStr = formatFileSize(totalBytes);
+        html += ` <span style='color:#888; font-size:0.95em;'>(` + itemCount + ` item` + (itemCount === 1 ? '' : 's') + `, ` + sizeStr + `)</span>`;
+
         breadcrumb.innerHTML = html;
     }
 
@@ -1241,7 +1255,8 @@
                     (data.folders || []).forEach(folder => {
                         const option = document.createElement('option');
                         option.value = folder.name;
-                        option.textContent = folder.name;
+                        // Display folder name with spaces instead of dots
+                        option.textContent = folder.name.replace(/\./g, ' ');
                         folderSelect.appendChild(option);
                     });
                 } catch (e) {
@@ -1314,24 +1329,36 @@
         });
     }
 
-    // Delete selected files
+    // Delete selected files and folders
     function deleteSelected() {
         if (selectedFiles.size === 0) return;
 
         const fileList = Array.from(selectedFiles);
-        const confirmMessage = `Are you sure you want to delete ${selectedFiles.size} file(s)?`;
+        const confirmMessage = `Are you sure you want to delete ${selectedFiles.size} item(s)?`;
 
         if (confirm(confirmMessage)) {
             let deletedCount = 0;
             let errorCount = 0;
+            let totalCount = fileList.length;
 
             fileList.forEach(filename => {
-                fetch(`${API_BASE}/delete?access_token=${accessToken}`, {
+                // Find the file object to determine if it's a folder
+                const fileObj = currentFiles.find(f => f.fullName === filename);
+                let isFolder = fileObj && fileObj.isFolder;
+                let endpoint, body;
+                if (isFolder) {
+                    endpoint = `${API_BASE}/delete-folder?access_token=${accessToken}`;
+                    body = {folderName: fileObj.name};
+                } else {
+                    endpoint = `${API_BASE}/delete?access_token=${accessToken}`;
+                    body = {filename: filename};
+                }
+                fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                     },
-                    body: JSON.stringify({filename: filename})
+                    body: JSON.stringify(body)
                 })
                     .then(response => response.text())
                     .then(text => {
@@ -1343,29 +1370,29 @@
                                 errorCount++;
                             }
                         } catch (e) {
-                            console.log('delete error:', e);
                             errorCount++;
                         }
-
                         // Check if all operations are complete
-                        if (deletedCount + errorCount === fileList.length) {
+                        if (deletedCount + errorCount === totalCount) {
                             if (errorCount > 0) {
-                                showAlert(`Deleted ${deletedCount} files, ${errorCount} failed`, 'error');
+                                showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
                             } else {
-                                showAlert(`Successfully deleted ${deletedCount} files`, 'success');
+                                showAlert(`Successfully deleted ${deletedCount} items`, 'success');
                             }
                             selectedFiles.clear();
                             updateDeleteButton();
                             refreshFiles();
+                            updateFolderList();
                         }
                     })
                     .catch(error => {
                         errorCount++;
-                        if (deletedCount + errorCount === fileList.length) {
-                            showAlert(`Deleted ${deletedCount} files, ${errorCount} failed`, 'error');
+                        if (deletedCount + errorCount === totalCount) {
+                            showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
                             selectedFiles.clear();
                             updateDeleteButton();
                             refreshFiles();
+                            updateFolderList();
                         }
                     });
             });
