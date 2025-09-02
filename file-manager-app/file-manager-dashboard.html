@@ -227,6 +227,14 @@
             background: #5a6268;
         }
 
+        .btn-clear {
+            color: white;
+        }
+
+        .btn-clear:hover {
+            background: #c82333;
+        }
+
         .file-list {
             background: white;
             border: 1px solid #e9ecef;
@@ -395,9 +403,19 @@
         }
 
         .alert {
-            padding: 15px;
-            border-radius: 6px;
-            margin-bottom: 20px;
+            position: fixed;
+            bottom: 30px;
+            padding: 10px;
+            left: 30px;
+            right: auto;
+            top: auto;
+            transform: none;
+            z-index: 2000;
+            min-width: 300px;
+            max-width: 90vw;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+            text-align: left;
+            font-size: 1.5em;
         }
 
         .alert-success {
@@ -533,8 +551,8 @@
                            style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;"
                            oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
+                    <button class="btn btn-secondary" onclick="changeAppId()">🆔 App ID</button>
                     <button class="btn btn-secondary" onclick="changeAccessToken()">🔑 Token</button>
-                    <button class="btn btn-secondary" onclick="changeAppId()"># App ID</button>
                     <button class="btn btn-success" onclick="moveSelectedToFolder()" id="moveSelectedBtn"
                             style="display: none;">📁 Move to Folder
                     </button>
@@ -724,7 +742,7 @@
 
     // Change access token
     function changeAccessToken() {
-        const newToken = prompt('Enter new access token:', accessToken);
+        const newToken = prompt('Enter File Manager+ Access Token:', accessToken);
         if (newToken && newToken.trim() !== '') {
             accessToken = newToken.trim();
             localStorage.setItem('fileManagerAccessToken', accessToken);
@@ -736,7 +754,7 @@
 
     // Change app ID
     function changeAppId() {
-        const newId = prompt('Enter new Hubitat App ID:', appId);
+        const newId = prompt('Enter File Manager+ App ID:', appId);
         if (newId && !isNaN(newId)) {
             appId = newId.trim();
             localStorage.setItem('fileManagerAppId', appId);
@@ -911,7 +929,7 @@
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
-                                <button class="btn btn-sm btn-danger" onclick="deleteFolder('${file.name}')">🗑️</button>
+                                <button class="btn btn-sm btn-clear" onclick="deleteFolder('${file.name}')">🗑️</button>
                             </div>
                         </div>
                     `;
@@ -925,7 +943,7 @@
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
-                                <button class="btn btn-sm btn-danger" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>
+                                <button class="btn btn-sm btn-clear" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>
                             </div>
                         </div>
                     `;

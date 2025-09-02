@@ -10,7 +10,7 @@ definition(
     name: "File Manager+",
     namespace: "jpage4500",
     author: "Joe Page",
-    description: "Comprehensive file manager for Hubitat with upload, delete, and folder support",
+    description: "File manager for Hubitat with multiple upload, delete, and folder support",
     oauth: true,
     iconUrl: '',
     iconX2Url: '',
@@ -18,26 +18,33 @@ definition(
 )
 
 preferences {
-    page(name: "mainPage", title: "File Manager+", install: true, uninstall: true) {
+    page(name: "mainPage", install: true, uninstall: true) {
         section() {
-            //input "showHiddenFiles", "bool", title: "Show hidden files (starting with .)", defaultValue: false, submitOnChange: true
-            //input "maxFileSize", "number", title: "Maximum file size (MB)", defaultValue: 10, required: false, submitOnChange: true
-            //input "sortOrder", "enum", title: "Sort order", options: ["name", "size", "date"], defaultValue: "name", submitOnChange: true
-            //input "sortDirection", "enum", title: "Sort direction", options: ["asc", "desc"], defaultValue: "asc", submitOnChange: true
+            if (!state.accessToken) {
+                paragraph "Please click 'Done' to initialize the app and create an access token.\n\nThen re-open the app to view File Manager+ link"
+            } else {
+                //input "showHiddenFiles", "bool", title: "Show hidden files (starting with .)", defaultValue: false, submitOnChange: true
+                //input "maxFileSize", "number", title: "Maximum file size (MB)", defaultValue: 10, required: false, submitOnChange: true
+                //input "sortOrder", "enum", title: "Sort order", options: ["name", "size", "date"], defaultValue: "name", submitOnChange: true
+                //input "sortDirection", "enum", title: "Sort direction", options: ["asc", "desc"], defaultValue: "asc", submitOnChange: true
 
-            paragraph "<a target=_blank href=${getFullLocalApiServerUrl()}/dashboard?access_token=${state.accessToken}>View File Manager+</a>"
+                href(
+                    title: 'View File Manager+',
+                    url: "${getFullLocalApiServerUrl()}/dashboard?access_token=${state.accessToken}"
+                )
 
-            // NOTE: cloud endpoint has a limit to how much data can be returned (128k??)
-            //href(
-            //    title      : 'View File Manager+ (cloud)',
-            //    url        : "${getFullApiServerUrl()}/dashboard?access_token=${state.accessToken}",
-            //    description: 'View File Manager+',
-            //)
-        }
+                paragraph "<a target=_blank href=${getFullLocalApiServerUrl()}/dashboard?access_token=${state.accessToken}>Open in new tab</a>"
 
-        section("Debug") {
-            paragraph "Access Token: ${state.accessToken}"
-            paragraph "App ID: ${app.id}"
+                // NOTE: cloud endpoint has a limit to how much data can be returned (128k??)
+                //href(
+                //    title      : 'View File Manager+ (cloud)',
+                //    url        : "${getFullApiServerUrl()}/dashboard?access_token=${state.accessToken}",
+                //    description: 'View File Manager+',
+                //)
+
+                paragraph "Access Token: ${state.accessToken}"
+                paragraph "App ID: ${app.id}"
+            }
         }
     }
 }
@@ -232,16 +239,17 @@ def deleteFolder(String folderName) {
 }
 
 // Upload file with optional folder organization
-def uploadFileWithOrganization(String filename, byte[] content) {
+def uploadFileWithOrganization(String filename, byte[] content, String folder) {
     try {
         def finalFilename = filename
-
+        if (folder) {
+            finalFilename = "${state.folderPrefix}${folder}_${filename}"
+        }
         // Check file size
         if (content.length > (state.maxFileSize * 1024 * 1024)) {
             log.error "File ${filename} exceeds maximum size of ${state.maxFileSize}MB"
             return false
         }
-
         uploadHubFile(finalFilename, content)
         log.info "Uploaded file: ${finalFilename} (${content.length} bytes)"
         return true
@@ -272,7 +280,7 @@ def dashboard() {
 def listFiles() {
     // Accept folder param from either JSON body or query string
     def folder = (request.JSON?.folder) ?: params.folder
-    log.debug "Listing files in folder: ${folder ?: 'all'}"
+    //log.debug "Listing files in folder: ${folder ?: 'all'}"
 
     def files
     if (folder) {
@@ -332,7 +340,7 @@ def uploadFile() {
     def content = params.content
     def folder = params.folder
 
-    log.debug "Uploading file: ${filename} to folder: ${folder ?: 'default'}"
+    log.debug "Uploading file: ${filename} to folder: ${folder ?: 'root'}"
 
     if (!filename || !content) {
         render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename or content"])
@@ -348,7 +356,7 @@ def uploadFile() {
         return
     }
 
-    def success = uploadFileWithOrganization(filename, fileContent)
+    def success = uploadFileWithOrganization(filename, fileContent, folder)
 
     if (success) {
         render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File uploaded successfully"])
@@ -370,7 +378,6 @@ def deleteFile() {
     log.debug "Deleting file: ${filename}"
     def allFiles = getAllFiles()
     def allFileNames = allFiles.collect { it.name }
-    log.debug "All files: ${allFileNames}"
 
     if (!allFileNames.contains(filename)) {
         log.error "File not found: ${filename}"
@@ -536,4 +543,5 @@ def getPublicUrl(String filename) {
 static String safeName(String filename) {
     return filename?.replaceAll("[^a-zA-Z0-9_.\\-]", "")
 }
+
 
