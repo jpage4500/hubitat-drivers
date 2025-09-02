@@ -653,6 +653,8 @@
 </div>
 
 <script>
+    // Used instead of spaces in filenames/folders for Hubitat compatibility
+    const SPACE_CHAR = '.';
     let currentFolder = '';
     let currentFiles = [];
     let deleteTarget = null;
@@ -676,6 +678,10 @@
     let appId = getAppIdFromPath() || localStorage.getItem('fileManagerAppId') || '';
     let accessToken = getUrlParam('access_token') || localStorage.getItem('fileManagerAccessToken') || '';
     let API_BASE = appId ? `/apps/api/${appId}` : '';
+
+    function escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
 
     function updateSortArrow() {
         const btn = document.getElementById('sortDirBtn');
@@ -906,6 +912,12 @@
             updateSelectAllCheckbox();
             return;
         }
+
+        // --- Replace FILE_SAFE_CHAR with space for display ---
+        function displayName(name) {
+            return name.replace(new RegExp(escapeRegExp(SPACE_CHAR), 'g'), ' ');
+        }
+
         fileList.innerHTML = filteredFiles.map(file => {
             // Robust date/size display
             let dateStr = '';
@@ -925,7 +937,7 @@
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon folder">📁</div>
                             <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${file.name}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${displayName(file.name)}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
@@ -939,7 +951,7 @@
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon ${getFileIconClass(file.name)}">${getFileIcon(file.name)}</div>
                             <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="downloadFile('${file.fullName}')">${file.name}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="downloadFile('${file.fullName}')">${displayName(file.name)}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
@@ -988,10 +1000,15 @@
         const breadcrumb = document.getElementById('breadcrumb');
         // Render as segments with separator
         let html = '';
+
+        function displayName(name) {
+            return name.replace(new RegExp(escapeRegExp(SPACE_CHAR), 'g'), ' ');
+        }
+
         html += `<span class="breadcrumb-item" data-folder="" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('')">Home</span>`;
         if (currentFolder) {
             html += `<span class="breadcrumb-separator" style="color:#bbb; margin:0 0.4em;">›</span>`;
-            html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${currentFolder}</span>`;
+            html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${displayName(currentFolder)}</span>`;
         }
         breadcrumb.innerHTML = html;
     }
@@ -1014,9 +1031,13 @@
                     const folderList = document.getElementById('folderList');
                     folderList.innerHTML = '<li class="folder-item" data-folder="">📁 Root</li>';
 
+                    function displayName(name) {
+                        return name.replace(new RegExp(escapeRegExp(SPACE_CHAR), 'g'), ' ');
+                    }
+
                     (data.folders || []).forEach(folder => {
                         folderList.innerHTML += `
-                                <li class="folder-item" data-folder="${folder.name}">📁 ${folder.name}</li>
+                                <li class="folder-item" data-folder="${folder.name}">📁 ${displayName(folder.name)}</li>
                             `;
                     });
 

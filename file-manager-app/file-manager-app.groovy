@@ -116,6 +116,9 @@ def initialize() {
     log.info "access token: ${state.accessToken}"
 }
 
+// Used instead of spaces in filenames/folders for Hubitat compatibility
+def getSpaceChar() { return '.' }
+
 // Main method to get all files from Hubitat
 def getAllFiles() {
     try {
@@ -241,9 +244,12 @@ def deleteFolder(String folderName) {
 // Upload file with optional folder organization
 def uploadFileWithOrganization(String filename, byte[] content, String folder) {
     try {
-        def finalFilename = filename
-        if (folder) {
-            finalFilename = "${state.folderPrefix}${folder}_${filename}"
+        // Replace spaces with FILE_SAFE_CHAR in filename and folder
+        def safeFilename = filename?.replaceAll(' ', getSpaceChar())
+        def safeFolder = folder ? folder.replaceAll(' ', getSpaceChar()) : null
+        def finalFilename = safeFilename
+        if (safeFolder) {
+            finalFilename = "${state.folderPrefix}${safeFolder}_${safeFilename}"
         }
         // Check file size
         if (content.length > (state.maxFileSize * 1024 * 1024)) {
@@ -440,16 +446,18 @@ def createFolder() {
         render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing folder name"])
         return
     }
-    // Validation: no spaces, cannot start with period
-    if (folderName.contains(' ') || folderName.startsWith('.')) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Folder names cannot contain spaces or start with a period."])
+    // Validation: cannot start with period
+    if (folderName.startsWith('.')) {
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Folder names cannot start with a period."])
         return
     }
+    // Replace spaces with FILE_SAFE_CHAR
+    def safeFolderName = folderName.replaceAll(' ', getSpaceChar())
 
-    def success = createFolder(folderName)
+    def success = createFolder(safeFolderName)
 
     if (success) {
-        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder created successfully"])
+        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder created successfully", folderName: safeFolderName])
     } else {
         render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to create folder"])
     }
@@ -543,5 +551,3 @@ def getPublicUrl(String filename) {
 static String safeName(String filename) {
     return filename?.replaceAll("[^a-zA-Z0-9_.\\-]", "")
 }
-
-
