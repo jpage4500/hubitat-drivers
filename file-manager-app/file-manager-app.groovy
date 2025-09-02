@@ -222,9 +222,8 @@ def deleteFolder(String folderName) {
 
         def deletedCount = 0
         folderFiles.each { file ->
-            if (deleteHubFile(file.name)) {
-                deletedCount++
-            }
+            deleteHubFile(file.name) // returns void
+            deletedCount++
         }
 
         log.info "Deleted folder ${folderName} with ${deletedCount} files"
@@ -360,7 +359,7 @@ def uploadFile() {
     log.debug "Uploading file: ${filename} to folder: ${folder ?: 'default'}"
 
     if (!filename || !content) {
-        render status: 400, contentType: "application/json", data: [error: "Missing filename or content"]
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename or content"])
         return
     }
 
@@ -369,7 +368,7 @@ def uploadFile() {
     try {
         fileContent = content.decodeBase64()
     } catch (Exception e) {
-        render status: 400, contentType: "application/json", data: [error: "Invalid content encoding"]
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Invalid content encoding"])
         return
     }
 
@@ -381,9 +380,9 @@ def uploadFile() {
     def success = uploadFileWithOrganization(filename, fileContent)
 
     if (success) {
-        render contentType: "application/json", data: [success: true, message: "File uploaded successfully"]
+        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File uploaded successfully"])
     } else {
-        render status: 500, contentType: "application/json", data: [error: "Failed to upload file"]
+        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to upload file"])
     }
 }
 
@@ -393,17 +392,27 @@ def deleteFile() {
     def filename = params.filename
 
     if (!filename) {
-        render status: 400, contentType: "application/json", data: [error: "Missing filename"]
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename"])
         return
     }
 
     log.debug "Deleting file: ${filename}"
+    def allFiles = getAllFiles()
+    def allFileNames = allFiles.collect { it.name }
+    log.debug "All files: ${allFileNames}"
+
+    if (!allFileNames.contains(filename)) {
+        log.error "File not found: ${filename}"
+        render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found", files: allFileNames])
+        return
+    }
+
     try {
-        deleteHubFile(filename)
-        render contentType: "application/json", data: [success: true, message: "File deleted successfully"]
+        deleteHubFile(filename) // returns void
+        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File deleted successfully"])
     } catch (Exception e) {
         log.error "Error deleting file ${filename}: ${e.message}"
-        render status: 500, contentType: "application/json", data: [error: "Failed to delete file"]
+        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to delete file", exception: e.message])
     }
 }
 
@@ -450,16 +459,21 @@ def createFolder() {
     def folderName = params.folderName
 
     if (!folderName) {
-        render status: 400, contentType: "application/json", data: [error: "Missing folder name"]
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing folder name"])
+        return
+    }
+    // Validation: no spaces, cannot start with period
+    if (folderName.contains(' ') || folderName.startsWith('.')) {
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Folder names cannot contain spaces or start with a period."])
         return
     }
 
     def success = createFolder(folderName)
 
     if (success) {
-        render contentType: "application/json", data: [success: true, message: "Folder created successfully"]
+        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder created successfully"])
     } else {
-        render status: 500, contentType: "application/json", data: [error: "Failed to create folder"]
+        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to create folder"])
     }
 }
 
@@ -469,16 +483,16 @@ def deleteFolder() {
     def folderName = params.folderName
 
     if (!folderName) {
-        render status: 400, contentType: "application/json", data: [error: "Missing folder name"]
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing folder name"])
         return
     }
 
     def deletedCount = deleteFolder(folderName)
 
     if (deletedCount >= 0) {
-        render contentType: "application/json", data: [success: true, message: "Folder deleted successfully", deletedCount: deletedCount]
+        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder deleted successfully", deletedCount: deletedCount])
     } else {
-        render status: 500, contentType: "application/json", data: [error: "Failed to delete folder"]
+        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to delete folder"])
     }
 }
 
@@ -489,7 +503,7 @@ def moveFile() {
     def targetFolder = params.targetFolder
 
     if (!filename) {
-        render status: 400, contentType: "application/json", data: [error: "Missing filename"]
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename"])
         return
     }
 
@@ -497,7 +511,7 @@ def moveFile() {
         // Download the file
         byte[] content = downloadHubFile(filename)
         if (!content) {
-            render status: 404, contentType: "application/json", data: [error: "File not found"]
+            render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found"])
             return
         }
 
@@ -513,11 +527,11 @@ def moveFile() {
         // Delete original file
         deleteHubFile(filename)
 
-        render contentType: "application/json", data: [success: true, message: "File moved successfully"]
+        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File moved successfully"])
 
     } catch (Exception e) {
         log.error "Error moving file ${filename}: ${e.message}"
-        render status: 500, contentType: "application/json", data: [error: "Failed to move file"]
+        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to move file"])
     }
 }
 

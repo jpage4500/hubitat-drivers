@@ -520,6 +520,7 @@
                     <span class="breadcrumb-item" data-folder="">Home</span>
                 </div>
                 <div class="actions">
+                    <input type="text" id="fileFilterInput" placeholder="Filter files..." style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;" oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
                     <button class="btn btn-secondary" onclick="changeAccessToken()">🔑 Token</button>
                     <button class="btn btn-secondary" onclick="changeAppId()"># App ID</button>
@@ -610,6 +611,7 @@
     let appId = localStorage.getItem('fileManagerAppId') || '';
     let accessToken = localStorage.getItem('fileManagerAccessToken') || '';
     let API_BASE = appId ? `/apps/api/${appId}` : '';
+    let fileFilter = '';
 
     // Initialize the dashboard
     document.addEventListener('DOMContentLoaded', function () {
@@ -796,14 +798,17 @@
     // Display files in list
     function displayFiles(files) {
         const fileList = document.getElementById('fileList');
-
-        if (files.length === 0) {
+        let filteredFiles = files;
+        if (fileFilter && fileFilter.trim() !== '') {
+            const filterLower = fileFilter.trim().toLowerCase();
+            filteredFiles = files.filter(file => file.name.toLowerCase().includes(filterLower));
+        }
+        if (filteredFiles.length === 0) {
             fileList.innerHTML = '<div class="loading"><p>No files found</p></div>';
             updateSelectAllCheckbox();
             return;
         }
-
-        fileList.innerHTML = files.map(file => {
+        fileList.innerHTML = filteredFiles.map(file => {
             const dateStr = formatFileDate(file.lastModified);
             const sizeAndDate = file.isFolder ?
                 (dateStr ? `Folder • ${dateStr}` : 'Folder') :
@@ -1266,6 +1271,11 @@
         if (event.target.classList.contains('modal')) {
             event.target.style.display = 'none';
         }
+    }
+
+    function onFileFilterInput() {
+        fileFilter = document.getElementById('fileFilterInput').value;
+        displayFiles(currentFiles);
     }
 </script>
 </body>
