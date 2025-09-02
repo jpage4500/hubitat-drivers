@@ -51,4 +51,19 @@ hpm manifest-add-driver packageManifest.json --location=https://raw.githubuserco
 
 hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/orbit-bhyve/packageManifest.json --name="Orbit Bhyve+" --category="Integrations" --description="Orbit Bhyve Integration"
 
+
+-------------------------------------------------------------------------------
+-- File Manager+ --
+-------------------------------------------------------------------------------
+
+# create package for app and driver(s)
+hpm manifest-create packageManifest.json --name="File Manager+" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2025-09-02
+hpm manifest-add-app packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/file-manager-app.groovy --required=true --oauth=true
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/file-manager-device.groovy --required=true
+hpm manifest-add-file packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/file-manager-dashboard.html --name=file-manager-dashboard.html
+
+# add package to repository
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/packageManifest.json --name="File Manager+" --category="Utility" --description="File Manager with multiple file uploads, folders and more"
+
+
 # NOTE: add tags to repository.json from list here: https://raw.githubusercontent.com/HubitatCommunity/hubitat-packagerepositories/master/settings.json
