@@ -173,25 +173,6 @@
             border-radius: 8px;
         }
 
-        .breadcrumb {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .breadcrumb-item {
-            color: #4facfe;
-            cursor: pointer;
-        }
-
-        .breadcrumb-item:hover {
-            text-decoration: underline;
-        }
-
-        .breadcrumb-separator {
-            color: #6c757d;
-        }
-
         .actions {
             display: flex;
             gap: 10px;
@@ -481,6 +462,35 @@
                 margin-top: 8px;
             }
         }
+
+        .breadcrumb-item {
+            color: #007bff;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .breadcrumb-item:hover {
+            color: #0056b3;
+        }
+
+        .breadcrumb-separator {
+            color: #6c757d;
+            margin: 0 0.4em;
+        }
+
+        .sort-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .sort-controls select {
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            font-size: 0.95em;
+            min-width: 100px;
+        }
     </style>
 </head>
 <body>
@@ -516,9 +526,6 @@
 
         <div class="content-area">
             <div class="toolbar">
-                <div class="breadcrumb" id="breadcrumb">
-                    <span class="breadcrumb-item" data-folder="">Home</span>
-                </div>
                 <div class="actions">
                     <input type="text" id="fileFilterInput" placeholder="Filter files..." style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;" oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
@@ -532,7 +539,19 @@
                     </button>
                 </div>
             </div>
-
+            <div class="breadcrumb-bar" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: #f8f9fa; border-radius: 8px;">
+                <div class="breadcrumb" id="breadcrumb" style="display: flex; align-items: center; gap: 0.5em; font-size: 1.05em;">
+                    <!-- Breadcrumb items will be rendered here -->
+                </div>
+                <div class="sort-controls" style="display: flex; align-items: center; gap: 6px;">
+                    <select id="sortSelect" style="padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 100px;" onchange="onSortChange()">
+                        <option value="name">Sort: Name</option>
+                        <option value="date">Sort: Date</option>
+                        <option value="size">Sort: Size</option>
+                    </select>
+                    <button id="sortDirBtn" onclick="toggleSortDirection()" title="Toggle sort direction" style="background: none; border: none; font-size: 1.2em; cursor: pointer; padding: 0 6px;">▲</button>
+                </div>
+            </div>
             <div id="fileListToolbar" style="display: flex; align-items: center; padding: 8px 12px; background: #f8f9fa; border-bottom: 1px solid #e9ecef;">
                 <input type="checkbox" id="selectAllCheckbox" style="margin-right: 8px;" onclick="toggleSelectAllFiles(this.checked)">
                 <label for="selectAllCheckbox" style="user-select: none; cursor: pointer;">Select All</label>
@@ -612,6 +631,19 @@
     let accessToken = localStorage.getItem('fileManagerAccessToken') || '';
     let API_BASE = appId ? `/apps/api/${appId}` : '';
     let fileFilter = '';
+    let sortOrder = 'name';
+    let sortDirection = 'asc';
+
+    function updateSortArrow() {
+        const btn = document.getElementById('sortDirBtn');
+        if (btn) btn.textContent = sortDirection === 'asc' ? '▲' : '▼';
+    }
+
+    function toggleSortDirection() {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+        updateSortArrow();
+        displayFiles(currentFiles);
+    }
 
     // Initialize the dashboard
     document.addEventListener('DOMContentLoaded', function () {
@@ -622,6 +654,7 @@
         } else {
             initializeApp();
         }
+        updateSortArrow();
     });
 
     // Prompt for app ID
@@ -798,21 +831,45 @@
     // Display files in list
     function displayFiles(files) {
         const fileList = document.getElementById('fileList');
-        let filteredFiles = files;
+        // Filter out 0-byte files (except folders)
+        let filteredFiles = files.filter(file => file.isFolder || (file.size && file.size > 0));
         if (fileFilter && fileFilter.trim() !== '') {
             const filterLower = fileFilter.trim().toLowerCase();
-            filteredFiles = files.filter(file => file.name.toLowerCase().includes(filterLower));
+            filteredFiles = filteredFiles.filter(file => file.name.toLowerCase().includes(filterLower));
         }
+        // Sort files: always folders at the top, then sort within folders/files
+        filteredFiles = filteredFiles.slice(); // clone array
+        filteredFiles.sort((a, b) => {
+            if (a.isFolder && !b.isFolder) return -1;
+            if (!a.isFolder && b.isFolder) return 1;
+            let cmp = 0;
+            if (sortOrder === 'name') {
+                cmp = a.name.localeCompare(b.name, undefined, {sensitivity: 'base'});
+            } else if (sortOrder === 'date') {
+                cmp = (a.lastModified || 0) - (b.lastModified || 0);
+            } else if (sortOrder === 'size') {
+                cmp = (a.size || 0) - (b.size || 0);
+            }
+            return sortDirection === 'desc' ? -cmp : cmp;
+        });
         if (filteredFiles.length === 0) {
             fileList.innerHTML = '<div class="loading"><p>No files found</p></div>';
             updateSelectAllCheckbox();
             return;
         }
         fileList.innerHTML = filteredFiles.map(file => {
-            const dateStr = formatFileDate(file.lastModified);
+            // Robust date/size display
+            let dateStr = '';
+            if (file.lastModified && !isNaN(Number(file.lastModified))) {
+                dateStr = formatFileDate(file.lastModified);
+            }
+            let sizeStr = '';
+            if (!file.isFolder && file.size && !isNaN(Number(file.size))) {
+                sizeStr = formatFileSize(file.size);
+            }
             const sizeAndDate = file.isFolder ?
                 (dateStr ? `Folder • ${dateStr}` : 'Folder') :
-                `${formatFileSize(file.size)}${dateStr ? ' • ' + dateStr : ''}`;
+                `${sizeStr}${dateStr ? ' • ' + dateStr : ''}`;
             if (file.isFolder) {
                 return `
                         <div class="file-item" data-filename="${file.fullName}">
@@ -882,12 +939,14 @@
     // Update breadcrumb
     function updateBreadcrumb() {
         const breadcrumb = document.getElementById('breadcrumb');
-        breadcrumb.innerHTML = '<span class="breadcrumb-item" data-folder="">Home</span>';
-
+        // Render as segments with separator
+        let html = '';
+        html += `<span class="breadcrumb-item" data-folder="">Home</span>`;
         if (currentFolder) {
-            breadcrumb.innerHTML += '<span class="breadcrumb-separator">/</span>';
-            breadcrumb.innerHTML += `<span class="breadcrumb-item" data-folder="${currentFolder}">${currentFolder}</span>`;
+            html += `<span class="breadcrumb-separator" style="color:#bbb; margin:0 0.4em;">›</span>`;
+            html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${currentFolder}</span>`;
         }
+        breadcrumb.innerHTML = html;
     }
 
     // Navigate to folder
@@ -1275,6 +1334,11 @@
 
     function onFileFilterInput() {
         fileFilter = document.getElementById('fileFilterInput').value;
+        displayFiles(currentFiles);
+    }
+
+    function onSortChange() {
+        sortOrder = document.getElementById('sortSelect').value;
         displayFiles(currentFiles);
     }
 </script>
