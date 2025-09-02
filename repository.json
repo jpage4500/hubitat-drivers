@@ -43,6 +43,16 @@
       "category": "Integrations",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/packageManifest.json",
       "description": "Quick way to create virtual HD+ Tiles (ie: image/video/calendar)"
+    },
+    {
+      "id": "4c7902e3-c9e2-4d3c-aea0-94e046ca5545",
+      "name": "File Manager+",
+      "category": "Utility",
+      "tags": [
+        "Tools & Utilities"
+      ],
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/packageManifest.json",
+      "description": "File Manager with multiple file uploads, folders and more"
     }
   ]
 }
