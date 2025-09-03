@@ -12,7 +12,7 @@
  * INSTALL:
  * - Add a new Virtual Device
  *   > Devices -> Add Device -> Virtual
- *   > Open the "Type" dropdown and search for "HD+ Tile" to find the new driver
+ *   > Open the "Type" dropdown and search for "Govee Pool Thermostat" to find the new driver
  *   > Enter anything for the driver name and hit Save Device
  * CONFIGURE:
  *   >
@@ -29,7 +29,6 @@ metadata {
         capability "TemperatureMeasurement"
 
         attribute "temperature", "number"
-        attribute "refreshInterval", "number"
         attribute "lastUpdatedMs", "number"
     }
 }
