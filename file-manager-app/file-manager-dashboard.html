@@ -686,6 +686,8 @@
     function updateSortArrow() {
         const btn = document.getElementById('sortDirBtn');
         if (btn) btn.textContent = sortDirection === 'asc' ? '▲' : '▼';
+        // Save sort direction to localStorage
+        localStorage.setItem('fileManagerSortDirection', sortDirection);
     }
 
     function toggleSortDirection() {
@@ -696,6 +698,12 @@
 
     // Initialize the dashboard
     document.addEventListener('DOMContentLoaded', function () {
+        // Restore sort order and direction from localStorage if available
+        sortOrder = localStorage.getItem('fileManagerSortOrder') || 'name';
+        sortDirection = localStorage.getItem('fileManagerSortDirection') || 'asc';
+        document.getElementById('sortSelect').value = sortOrder;
+        updateSortArrow();
+
         if (!appId) {
             promptForAppId();
         } else if (!accessToken) {
@@ -703,7 +711,6 @@
         } else {
             initializeApp();
         }
-        updateSortArrow();
     });
 
     // Prompt for app ID
@@ -1334,7 +1341,19 @@
         if (selectedFiles.size === 0) return;
 
         const fileList = Array.from(selectedFiles);
-        const confirmMessage = `Are you sure you want to delete ${selectedFiles.size} item(s)?`;
+        // Check if any selected item is a folder
+        let hasFolder = false;
+        for (const filename of fileList) {
+            const fileObj = currentFiles.find(f => f.fullName === filename);
+            if (fileObj && fileObj.isFolder) {
+                hasFolder = true;
+                break;
+            }
+        }
+        let confirmMessage = `Are you sure you want to delete ${selectedFiles.size} item(s)?`;
+        if (hasFolder) {
+            confirmMessage += `\n\nNOTE: Deleting a folder will also delete all files inside it.`;
+        }
 
         if (confirm(confirmMessage)) {
             let deletedCount = 0;
@@ -1436,6 +1455,8 @@
 
     function onSortChange() {
         sortOrder = document.getElementById('sortSelect').value;
+        // Save sort order to localStorage
+        localStorage.setItem('fileManagerSortOrder', sortOrder);
         displayFiles(currentFiles);
     }
 </script>
