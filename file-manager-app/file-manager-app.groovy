@@ -5,6 +5,7 @@
 // hubitat end
 
 import groovy.json.JsonOutput
+import groovy.transform.Field
 
 definition(
     name: "File Manager+",
@@ -23,11 +24,6 @@ preferences {
             if (!state.accessToken) {
                 paragraph "Please click 'Done' to initialize the app and create an access token.\n\nThen re-open the app to view File Manager+ link"
             } else {
-                //input "showHiddenFiles", "bool", title: "Show hidden files (starting with .)", defaultValue: false, submitOnChange: true
-                //input "maxFileSize", "number", title: "Maximum file size (MB)", defaultValue: 10, required: false, submitOnChange: true
-                //input "sortOrder", "enum", title: "Sort order", options: ["name", "size", "date"], defaultValue: "name", submitOnChange: true
-                //input "sortDirection", "enum", title: "Sort direction", options: ["asc", "desc"], defaultValue: "asc", submitOnChange: true
-
                 href(
                     title: 'View File Manager+',
                     url: "${getFullLocalApiServerUrl()}/dashboard?access_token=${state.accessToken}"
@@ -86,7 +82,13 @@ mappings {
         action:
         [POST: "moveFile"]
     }
+    path("/rename") {
+        action: [POST: "renameFile"]
+    }
 }
+
+@Field static String FOLDER_PREFIX = "folder_"
+@Field static String FOLDER_NAME_SUFFIX = "_folder.marker"
 
 def installed() {
     log.debug "File Manager App installed"
@@ -99,21 +101,13 @@ def updated() {
 }
 
 def initialize() {
-    log.debug "Initializing File Manager App"
-    state.folderPrefix = "folder_"
     state.showHiddenFiles = showHiddenFiles ?: false
     state.fileTypes = fileTypes ?: ""
     state.maxFileSize = maxFileSize ?: 10
     state.sortOrder = "name"
     state.sortDirection = "asc"
 
-    // Create child device if it doesn't exist
-    if (!getChildDevice("FileManager+Device")) {
-        addChildDevice("jpage4500", "File Manager+ Device", "FileManager+Device", [label: "File Manager+", name: "FileManagerDevice"])
-    }
-
-    createAccessToken()
-    log.info "access token: ${state.accessToken}"
+    if (state.accessToken == null) createAccessToken()
 }
 
 // Used instead of spaces in filenames/folders for Hubitat compatibility
@@ -171,12 +165,12 @@ def sortFiles(files) {
 def getFolders() {
     def allFiles = getAllFiles()
     def folders = allFiles.findAll {
-        it.name.startsWith(state.folderPrefix) && it.name.endsWith('_folder.marker')
+        it.name.startsWith(FOLDER_PREFIX) && it.name.endsWith(FOLDER_NAME_SUFFIX)
     }
     return folders.collect { file ->
-        def folderName = file.name.substring(state.folderPrefix.length())
-        // Remove the _folder.marker suffix
-        folderName = folderName.replace('_folder.marker', '')
+        def folderName = file.name.substring(FOLDER_PREFIX.length())
+        // Remove the marker suffix
+        folderName = folderName.replace(FOLDER_NAME_SUFFIX, '')
         [
             name        : folderName,
             fullName    : file.name,
@@ -190,8 +184,8 @@ def getFolders() {
 // Get files in a specific folder
 def getFilesInFolder(String folderName) {
     def allFiles = getAllFiles()
-    def folderPrefix = "${state.folderPrefix}${folderName}_"
-    def folderFiles = allFiles.findAll { it.name.startsWith(folderPrefix) && !it.name.endsWith('_folder.marker') }
+    def folderPrefix = "${FOLDER_PREFIX}${folderName}_"
+    def folderFiles = allFiles.findAll { it.name.startsWith(folderPrefix) && !it.name.endsWith(FOLDER_NAME_SUFFIX) }
 
     return folderFiles.collect { file ->
         def fileName = file.name.substring(folderPrefix.length())
@@ -209,7 +203,7 @@ def getFilesInFolder(String folderName) {
 // Create a folder (creates a marker file)
 def createFolder(String folderName) {
     try {
-        def folderMarkerName = "${state.folderPrefix}${folderName}_folder.marker"
+        def folderMarkerName = "${FOLDER_PREFIX}${folderName}${FOLDER_NAME_SUFFIX}"
         def markerContent = "Folder created: ${new Date()}"
         uploadHubFile(folderMarkerName, markerContent.getBytes("UTF-8"))
         log.info "Created folder: ${folderName}"
@@ -225,7 +219,7 @@ def createFolder(String folderName) {
 def deleteFolder(String folderName) {
     try {
         def allFiles = getAllFiles()
-        def folderPrefix = "${state.folderPrefix}${folderName}_"
+        def folderPrefix = "${FOLDER_PREFIX}${folderName}_"
         // Find all files in the folder, including the marker file
         def folderFiles = allFiles.findAll { it.name.startsWith(folderPrefix) }
 
@@ -252,7 +246,7 @@ def uploadFileWithOrganization(String filename, byte[] content, String folder) {
         def safeFolder = folder ? folder.replaceAll(' ', getSpaceChar()) : null
         def finalFilename = safeFilename
         if (safeFolder) {
-            finalFilename = "${state.folderPrefix}${safeFolder}_${safeFilename}"
+            finalFilename = "${FOLDER_PREFIX}${safeFolder}_${safeFilename}"
         }
         // Check file size
         if (content.length > (state.maxFileSize * 1024 * 1024)) {
@@ -277,7 +271,7 @@ def dashboard() {
             render status: 404, text: "File not found: ${filename}"
             return
         }
-        log.debug "Viewing dashboard file: ${filename}, size: ${bytes.length} bytes"
+        //log.debug "Viewing dashboard file: ${filename}, size: ${bytes.length} bytes"
         render contentType: "text/html", data: bytes
     } catch (Exception e) {
         log.error "Error viewing dashboard ${filename}: ${e.message}"
@@ -311,7 +305,7 @@ def listFiles() {
         }
         // Add only files that are not in any folder and not marker files
         allFiles.each { file ->
-            if (!file.name.startsWith(state.folderPrefix) && !file.name.endsWith('_folder.marker')) {
+            if (!file.name.startsWith(FOLDER_PREFIX) && !file.name.endsWith(FOLDER_NAME_SUFFIX)) {
                 files << [
                     name        : file.name,
                     fullName    : file.name,
@@ -506,12 +500,12 @@ def moveFile() {
         }
 
         // Always remove any existing folder prefix from filename
-        def baseFilename = filename.replaceFirst(/^${state.folderPrefix}[^_]+_/, '')
+        def baseFilename = filename.replaceFirst(/^${FOLDER_PREFIX}[^_]+_/, '')
         log.debug "moveFile: computed baseFilename: ${baseFilename} from filename: ${filename}"
 
         def newFilename
         if (targetFolder) {
-            newFilename = "${state.folderPrefix}${targetFolder}_${baseFilename}"
+            newFilename = "${FOLDER_PREFIX}${targetFolder}_${baseFilename}"
         } else {
             newFilename = baseFilename
         }
@@ -537,6 +531,62 @@ def moveFile() {
     }
 }
 
+// API endpoint: Rename file or folder
+def renameFile() {
+    def params = request.JSON ?: [:]
+    def oldName = params.oldName
+    def newName = params.newName
+    def isFolder = params.isFolder
+
+    if (!oldName || !newName) {
+        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing oldName or newName"])
+        return
+    }
+
+    log.debug "Renaming ${isFolder ? 'folder' : 'file'}: ${oldName} to ${newName}"
+
+    try {
+        if (isFolder) {
+            // Rename folder marker file
+            def oldMarker = "${FOLDER_PREFIX}${oldName}${FOLDER_NAME_SUFFIX}"
+            def newMarker = "${FOLDER_PREFIX}${newName}${FOLDER_NAME_SUFFIX}"
+            byte[] markerContent = downloadHubFile(oldMarker)
+            if (markerContent) {
+                uploadHubFile(newMarker, markerContent)
+                deleteHubFile(oldMarker)
+            }
+            // Rename all files in the folder
+            def folderPrefixOld = "${FOLDER_PREFIX}${oldName}_"
+            def folderPrefixNew = "${FOLDER_PREFIX}${newName}_"
+            def allFiles = getAllFiles()
+            def filesToRename = allFiles.findAll { it.name.startsWith(folderPrefixOld) && !it.name.endsWith(FOLDER_NAME_SUFFIX) }
+            log.debug "Renaming ${filesToRename.size()} files in folder ${oldName}"
+            filesToRename.each { file ->
+                def newFileName = file.name.replaceFirst(folderPrefixOld, folderPrefixNew)
+                byte[] content = downloadHubFile(file.name)
+                if (content) {
+                    uploadHubFile(newFileName, content)
+                    deleteHubFile(file.name)
+                }
+            }
+            render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder and contents renamed successfully"])
+        } else {
+            // Rename a file
+            byte[] content = downloadHubFile(oldName)
+            if (!content) {
+                render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found"])
+                return
+            }
+            uploadHubFile(newName, content)
+            deleteHubFile(oldName)
+            render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File renamed successfully"])
+        }
+    } catch (Exception e) {
+        log.error "Error renaming: ${oldName} to ${newName}: ${e.message}"
+        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to rename", exception: e.message])
+    }
+}
+
 // Utility method to get file statistics
 def getFileStats() {
     def allFiles = getAllFiles()
@@ -559,8 +609,7 @@ def getFileStats() {
 // Method to get public URLs for files
 def getPublicUrl(String filename) {
     def safeName = safeName(filename)
-    def token = state.accessToken ?: createAccessToken()
-    return "${fullApiServerUrl("download/${safeName}")}" + "?access_token=${token}"
+    return "${fullApiServerUrl("download/${safeName}")}" + "?access_token=${state.accessToken}"
 }
 
 // Safe filename utility
