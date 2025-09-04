@@ -161,7 +161,8 @@ private Boolean login()
 
 def Boolean updateDevices()
 {
-    // Immediately schedule the next update -- this will keep the 
+    log.debug "updateDevices: interval: ${settings.refreshInterval}"
+    // Immediately schedule the next update -- this will keep the
     // referesh interval as close to constant as possible.
     runIn((int)settings.refreshInterval, updateDevices)
 
@@ -453,6 +454,7 @@ def checkHttpResponse(action, resp) {
 }
 
 def timeOutLevoit() {
+    log.debug "timeOutLevoit: interval: ${settings.refreshInterval}"
     //If the timeout expires before being reset, mark this Parent Device as 'not present' to allow action to be taken
     sendEvent(name: "heartbeat", value: "not synced", isStateChange: true, descriptionText: "No update received from VeSync servers in a long time.")
 }

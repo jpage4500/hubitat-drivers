@@ -540,7 +540,7 @@
             </div>
 
             <div style="margin-top: 20px;">
-                <button class="btn btn-success" onclick="createFolder()">📁 New Folder</button>
+                <button class="btn btn-success" onclick="showCreateFolder()">📁 New Folder</button>
             </div>
         </div>
 
@@ -610,7 +610,7 @@
         </div>
         <div style="text-align: right;">
             <button class="btn" onclick="closeModal('folderModal')">Cancel</button>
-            <button class="btn btn-primary" onclick="confirmCreateFolder()">Create</button>
+            <button class="btn btn-primary" onclick="createFolder()">Create</button>
         </div>
     </div>
 </div>
@@ -653,8 +653,31 @@
 </div>
 
 <script>
-    // Used instead of spaces in filenames/folders for Hubitat compatibility
-    const SPACE_CHAR = '.';
+    // Convert storage name to display name (global)
+    function toDisplayName(name, isFolder) {
+        if (isFolder) {
+            return name.replace(/\./g, ' ');
+        } else {
+            const lastDot = name.lastIndexOf('.');
+            if (lastDot === -1) return name;
+            const base = name.substring(0, lastDot).replace(/\./g, ' ');
+            const ext = name.substring(lastDot + 1);
+            return base + '.' + ext;
+        }
+    }
+    // Convert display name to storage name (global)
+    function toStorageName(name, isFolder) {
+        if (isFolder) {
+            return name.replace(/ /g, '.');
+        } else {
+            const lastDot = name.lastIndexOf('.');
+            if (lastDot === -1) return name.replace(/ /g, '.');
+            const base = name.substring(0, lastDot).replace(/ /g, '.');
+            const ext = name.substring(lastDot + 1);
+            return base + '.' + ext;
+        }
+    }
+
     let currentFolder = '';
     let currentFiles = [];
     let deleteTarget = null;
@@ -686,6 +709,8 @@
     function updateSortArrow() {
         const btn = document.getElementById('sortDirBtn');
         if (btn) btn.textContent = sortDirection === 'asc' ? '▲' : '▼';
+        // Save sort direction to localStorage
+        localStorage.setItem('fileManagerSortDirection', sortDirection);
     }
 
     function toggleSortDirection() {
@@ -696,6 +721,12 @@
 
     // Initialize the dashboard
     document.addEventListener('DOMContentLoaded', function () {
+        // Restore sort order and direction from localStorage if available
+        sortOrder = localStorage.getItem('fileManagerSortOrder') || 'name';
+        sortDirection = localStorage.getItem('fileManagerSortDirection') || 'asc';
+        document.getElementById('sortSelect').value = sortOrder;
+        updateSortArrow();
+
         if (!appId) {
             promptForAppId();
         } else if (!accessToken) {
@@ -703,7 +734,6 @@
         } else {
             initializeApp();
         }
-        updateSortArrow();
     });
 
     // Prompt for app ID
@@ -914,8 +944,8 @@
         }
 
         // --- Replace FILE_SAFE_CHAR with space for display ---
-        function displayName(name) {
-            return name.replace(new RegExp(escapeRegExp(SPACE_CHAR), 'g'), ' ');
+        function displayName(name, isFolder) {
+            return toDisplayName(name, isFolder);
         }
 
         fileList.innerHTML = filteredFiles.map(file => {
@@ -937,10 +967,11 @@
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon folder">📁</div>
                             <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${displayName(file.name)}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${displayName(file.name, true)}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
+                                <button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
                                 <button class="btn btn-sm btn-clear" onclick="deleteFolder('${file.name}')">🗑️</button>
                             </div>
                         </div>
@@ -951,10 +982,11 @@
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon ${getFileIconClass(file.name)}">${getFileIcon(file.name)}</div>
                             <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="downloadFile('${file.fullName}')">${displayName(file.name)}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="downloadFile('${file.fullName}')">${displayName(file.name, false)}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
+                                <button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', false)">✏️</button>
                                 <button class="btn btn-sm btn-clear" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>
                             </div>
                         </div>
@@ -1001,14 +1033,14 @@
         // Render as segments with separator
         let html = '';
 
-        function displayName(name) {
-            return name.replace(new RegExp(escapeRegExp(SPACE_CHAR), 'g'), ' ');
+        function displayName(name, isFolder) {
+            return toDisplayName(name, isFolder);
         }
 
         html += `<span class="breadcrumb-item" data-folder="" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('')">Home</span>`;
         if (currentFolder) {
             html += `<span class="breadcrumb-separator" style="color:#bbb; margin:0 0.4em;">›</span>`;
-            html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${displayName(currentFolder)}</span>`;
+            html += `<span class="breadcrumb-item" data-folder="${currentFolder}">${displayName(currentFolder, true)}</span>`;
         }
 
         // Calculate total items and total size for current folder
@@ -1045,13 +1077,13 @@
                     const folderList = document.getElementById('folderList');
                     folderList.innerHTML = '<li class="folder-item" data-folder="">📁 Root</li>';
 
-                    function displayName(name) {
-                        return name.replace(new RegExp(escapeRegExp(SPACE_CHAR), 'g'), ' ');
+                    function displayName(name, isFolder) {
+                        return toDisplayName(name, isFolder);
                     }
 
                     (data.folders || []).forEach(folder => {
                         folderList.innerHTML += `
-                                <li class="folder-item" data-folder="${folder.name}">📁 ${displayName(folder.name)}</li>
+                                <li class="folder-item" data-folder="${folder.name}">📁 ${displayName(folder.name, true)}</li>
                             `;
                     });
 
@@ -1081,18 +1113,33 @@
             });
     }
 
-    // Create folder
-    function createFolder() {
+    // show create folder dialog
+    function showCreateFolder() {
         document.getElementById('folderModal').style.display = 'block';
     }
 
-    // Confirm create folder
-    function confirmCreateFolder() {
-        const folderName = document.getElementById('folderName').value.trim();
-        if (!folderName) {
+    // check valid file/folder name:
+    // - not empty
+    // - can't start with "."
+    function validateFileName(filename) {
+        console.log('validateFolderName ', filename);
+        if (!filename) {
             showAlert('Please enter a folder name', 'error');
-            return;
+            return false;
         }
+        // do not allow periods at the start
+        if (filename.startsWith('.')) {
+            showAlert('Folder names cannot start with a period.', 'error');
+            return false;
+        }
+        return true;
+    }
+
+    // create folder
+    function createFolder() {
+        const folderName = document.getElementById('folderName').value.trim();
+        if (!validateFileName(folderName)) return;
+        console.log('Creating folder:', folderName);
 
         fetch(`${API_BASE}/create-folder?access_token=${accessToken}`, {
             method: 'POST',
@@ -1256,7 +1303,7 @@
                         const option = document.createElement('option');
                         option.value = folder.name;
                         // Display folder name with spaces instead of dots
-                        option.textContent = folder.name.replace(/\./g, ' ');
+                        option.textContent = toDisplayName(folder.name, true);
                         folderSelect.appendChild(option);
                     });
                 } catch (e) {
@@ -1334,15 +1381,22 @@
         if (selectedFiles.size === 0) return;
 
         const fileList = Array.from(selectedFiles);
-        const confirmMessage = `Are you sure you want to delete ${selectedFiles.size} item(s)?`;
+        // Check if any selected item is a folder
+        let hasFolder = false;
+        for (const filename of fileList) {
+            const fileObj = currentFiles.find(f => f.fullName === filename);
+            if (fileObj && fileObj.isFolder) {
+                hasFolder = true;
+                break;
+            }
+        }
+        let confirmMessage = `Are you sure you want to delete ${selectedFiles.size} item(s)?`;
+        if (hasFolder) {
+            confirmMessage += `\n\nNOTE: Deleting a folder will also delete all files inside it.`;
+        }
 
         if (confirm(confirmMessage)) {
-            let deletedCount = 0;
-            let errorCount = 0;
-            let totalCount = fileList.length;
-
-            fileList.forEach(filename => {
-                // Find the file object to determine if it's a folder
+            const deletePromises = fileList.map(filename => {
                 const fileObj = currentFiles.find(f => f.fullName === filename);
                 let isFolder = fileObj && fileObj.isFolder;
                 let endpoint, body;
@@ -1353,7 +1407,7 @@
                     endpoint = `${API_BASE}/delete?access_token=${accessToken}`;
                     body = {filename: filename};
                 }
-                fetch(endpoint, {
+                return fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1364,37 +1418,28 @@
                     .then(text => {
                         try {
                             const data = JSON.parse(text);
-                            if (data.success) {
-                                deletedCount++;
-                            } else {
-                                errorCount++;
-                            }
+                            return data.success ? {success: true} : {success: false, error: data.error};
                         } catch (e) {
-                            errorCount++;
-                        }
-                        // Check if all operations are complete
-                        if (deletedCount + errorCount === totalCount) {
-                            if (errorCount > 0) {
-                                showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
-                            } else {
-                                showAlert(`Successfully deleted ${deletedCount} items`, 'success');
-                            }
-                            selectedFiles.clear();
-                            updateDeleteButton();
-                            refreshFiles();
-                            updateFolderList();
+                            return {success: false, error: 'Invalid response'};
                         }
                     })
                     .catch(error => {
-                        errorCount++;
-                        if (deletedCount + errorCount === totalCount) {
-                            showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
-                            selectedFiles.clear();
-                            updateDeleteButton();
-                            refreshFiles();
-                            updateFolderList();
-                        }
+                        return {success: false, error: error.message};
                     });
+            });
+
+            Promise.all(deletePromises).then(results => {
+                const deletedCount = results.filter(r => r.success).length;
+                const errorCount = results.length - deletedCount;
+                if (errorCount > 0) {
+                    showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
+                } else {
+                    showAlert(`Successfully deleted ${deletedCount} items`, 'success');
+                }
+                selectedFiles.clear();
+                updateDeleteButton();
+                refreshFiles();
+                updateFolderList();
             });
         }
     }
@@ -1436,7 +1481,52 @@
 
     function onSortChange() {
         sortOrder = document.getElementById('sortSelect').value;
+        // Save sort order to localStorage
+        localStorage.setItem('fileManagerSortOrder', sortOrder);
         displayFiles(currentFiles);
+    }
+
+    // prompt rename file or folder
+    function promptRename(fullName, storageName, isFolder) {
+        const displayName = toDisplayName(storageName, isFolder);
+        let promptMsg = isFolder
+            ? `Enter a new name for the folder "${displayName}".\n\nNOTE: All files in this folder will also be renamed.`
+            : `Enter a new name for the file "${displayName}".`;
+        let newDisplayName = prompt(promptMsg, displayName);
+        if (!validateFileName(newDisplayName)) return;
+        console.log('Renaming ', displayName, ' to:', newDisplayName);
+        // Convert new name to storage format
+        const newStorageName = toStorageName(newDisplayName, isFolder);
+        // Call backend
+        fetch(`${API_BASE}/rename?access_token=${accessToken}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                oldName: isFolder ? storageName : fullName,
+                newName: newStorageName,
+                isFolder: isFolder
+            })
+        })
+            .then(response => response.text())
+            .then(text => {
+                try {
+                    const data = JSON.parse(text);
+                    if (data.success) {
+                        showAlert('Renamed successfully!', 'success');
+                        refreshFiles();
+                        updateFolderList();
+                    } else {
+                        showAlert('Rename failed: ' + (data.error || 'Unknown error'), 'error');
+                    }
+                } catch (e) {
+                    showAlert('Rename error: Invalid response', 'error');
+                }
+            })
+            .catch(error => {
+                showAlert('Rename error: ' + error.message, 'error');
+            });
     }
 </script>
 </body>

@@ -493,7 +493,7 @@ private void handleEvent(name, val) {
 }
 
 private void updateAQIandFilter(BigDecimal pm, filter) {
-    logDebug "updateAQIandFilter: pm: ${pm}, filter: ${filter}"
+    log.debug "updateAQIandFilter: pm: ${pm}, filter: ${filter}"
 
     //
     // Conversions based on https://en.wikipedia.org/wiki/Air_quality_index
