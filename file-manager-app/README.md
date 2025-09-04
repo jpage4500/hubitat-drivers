@@ -63,3 +63,39 @@ curl -X POST "http://HUB_IP/apps/api/APP_ID/create-folder?access_token=APP_TOKEN
   -d '{"folderName":"my_folder"}'
 
 ```
+
+### Bash Script
+
+A bash script is include ([fm.sh](fm.sh)) which wraps the API calls
+
+```
+Usage: fm.sh [--app-id ID] [--access-token TOKEN] [--hub-ip IP] [command] [args...]
+Commands:
+list [folder]          List files (optionally in folder)
+folders                List folders
+upload <file> [folder] Upload file (optionally to folder)
+delete <file>          Delete file
+download <file>        Download file
+create-folder <name>   Create folder
+delete-folder <name>   Delete folder and its contents
+
+--help                 Show this help message
+--config               Prompt to view/change IP/App ID/Access Token
+--hub-ip IP            Override Hubitat Hub IP
+--app-id ID            Override App ID
+--access-token TOKEN   Override Access Token
+```
+
+The first time you run the script it will prompt you for your Hub IP, App ID and Access Token and save for future use. 
+
+You can later use the `--config` option to view/change these settings.
+
+Examples:
+
+```
+# List all files
+./fm.sh list
+
+# Upload a file
+./fm.sh upload myfile.txt
+```
