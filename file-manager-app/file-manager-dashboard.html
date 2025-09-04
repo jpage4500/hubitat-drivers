@@ -3,7 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hubitat File Manager</title>
+    <title>Hubitat File Manager+</title>
+    <!-- set favicon dynamically -->
+    <link rel="icon"
+          href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📁</text></svg>">
+
     <style>
         * {
             margin: 0;
@@ -43,40 +47,6 @@
         .header p {
             font-size: 1.1em;
             opacity: 0.9;
-        }
-
-        .stats-bar {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            padding: 20px;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 10px;
-            text-align: center;
-            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
-            transition: transform 0.2s;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-2px);
-        }
-
-        .stat-number {
-            font-size: 2em;
-            font-weight: bold;
-            color: #4facfe;
-            margin-bottom: 5px;
-        }
-
-        .stat-label {
-            color: #6c757d;
-            font-size: 0.9em;
         }
 
         .main-content {
@@ -551,8 +521,7 @@
                            style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;"
                            oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
-                    <button class="btn btn-secondary" onclick="changeAppId()">🆔 App ID</button>
-                    <button class="btn btn-secondary" onclick="changeAccessToken()">🔑 Token</button>
+                    <button class="btn btn-secondary" id="tokenBtn" onclick="showTokenModal()">🔑 Token</button>
                     <button class="btn btn-success" onclick="moveSelectedToFolder()" id="moveSelectedBtn"
                             style="display: none;">📁 Move to Folder
                     </button>
@@ -641,13 +610,56 @@
 <div id="deleteModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3>Confirm Delete</h3>
+            <h3 id="deleteModalTitle">Confirm Delete</h3>
             <span class="close" onclick="closeModal('deleteModal')">&times;</span>
         </div>
-        <p>Are you sure you want to delete <strong id="deleteItemName"></strong>?</p>
+        <p id="deleteModalMessage">Are you sure you want to delete <strong id="deleteItemName"></strong>?</p>
+        <div id="deleteModalDetails"
+             style="display: none; margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 6px; font-size: 0.9em;">
+            <div id="deleteItemList"></div>
+        </div>
         <div style="text-align: right; margin-top: 20px;">
             <button class="btn" onclick="closeModal('deleteModal')">Cancel</button>
             <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+        </div>
+    </div>
+</div>
+
+<!-- Rename Modal -->
+<div id="renameModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="renameModalTitle">Rename</h3>
+            <span class="close" onclick="closeModal('renameModal')">&times;</span>
+        </div>
+        <div class="form-group">
+            <label for="renameInput">New Name:</label>
+            <input type="text" id="renameInput" placeholder="Enter new name">
+        </div>
+        <div style="text-align: right;">
+            <button class="btn" onclick="closeModal('renameModal')">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmRename()">Rename</button>
+        </div>
+    </div>
+</div>
+<!-- Combined Token Modal -->
+<div id="tokenModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Enter App ID & Access Token</h3>
+            <span class="close" onclick="closeModal('tokenModal')">&times;</span>
+        </div>
+        <div class="form-group">
+            <label for="tokenAppIdInput">App ID:</label>
+            <input type="text" id="tokenAppIdInput" placeholder="Enter App ID">
+        </div>
+        <div class="form-group">
+            <label for="tokenAccessTokenInput">Access Token:</label>
+            <input type="text" id="tokenAccessTokenInput" placeholder="Enter Access Token">
+        </div>
+        <div style="text-align: right;">
+            <button class="btn" onclick="closeModal('tokenModal')">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmToken()">Save</button>
         </div>
     </div>
 </div>
@@ -665,6 +677,7 @@
             return base + '.' + ext;
         }
     }
+
     // Convert display name to storage name (global)
     function toStorageName(name, isFolder) {
         if (isFolder) {
@@ -702,10 +715,6 @@
     let accessToken = getUrlParam('access_token') || localStorage.getItem('fileManagerAccessToken') || '';
     let API_BASE = appId ? `/apps/api/${appId}` : '';
 
-    function escapeRegExp(string) {
-        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    }
-
     function updateSortArrow() {
         const btn = document.getElementById('sortDirBtn');
         if (btn) btn.textContent = sortDirection === 'asc' ? '▲' : '▼';
@@ -727,78 +736,21 @@
         document.getElementById('sortSelect').value = sortOrder;
         updateSortArrow();
 
-        if (!appId) {
-            promptForAppId();
-        } else if (!accessToken) {
-            promptForAccessToken();
+        if (!appId || !accessToken) {
+            showTokenModal(() => initializeApp());
         } else {
             initializeApp();
         }
+
+        // Hide token button if appId and accessToken are in the URL
+        hideTokenButtonIfInUrl();
     });
-
-    // Prompt for app ID
-    function promptForAppId() {
-        const id = prompt('Please enter your Hubitat App ID:');
-        if (id && !isNaN(id)) {
-            appId = id.trim();
-            localStorage.setItem('fileManagerAppId', appId);
-            API_BASE = `/apps/api/${appId}`;
-            if (!accessToken) {
-                promptForAccessToken();
-            } else {
-                initializeApp();
-            }
-        } else {
-            alert('App ID is required to use the file manager.');
-        }
-    }
-
-    // Prompt for access token
-    function promptForAccessToken() {
-        const token = prompt('Please enter your Hubitat access token:');
-        if (token) {
-            accessToken = token.trim();
-            localStorage.setItem('fileManagerAccessToken', accessToken);
-            if (!appId) {
-                promptForAppId();
-            } else {
-                initializeApp();
-            }
-        } else {
-            alert('Access token is required to use the file manager.');
-        }
-    }
 
     // Initialize the app after getting access token
     function initializeApp() {
         refreshFiles();
         setupUploadArea();
         updateFolderList();
-    }
-
-    // Change access token
-    function changeAccessToken() {
-        const newToken = prompt('Enter File Manager+ Access Token:', accessToken);
-        if (newToken && newToken.trim() !== '') {
-            accessToken = newToken.trim();
-            localStorage.setItem('fileManagerAccessToken', accessToken);
-            showAlert('Access token updated successfully!', 'success');
-            refreshFiles();
-            updateFolderList();
-        }
-    }
-
-    // Change app ID
-    function changeAppId() {
-        const newId = prompt('Enter File Manager+ App ID:', appId);
-        if (newId && !isNaN(newId)) {
-            appId = newId.trim();
-            localStorage.setItem('fileManagerAppId', appId);
-            API_BASE = `/apps/api/${appId}`;
-            showAlert('App ID updated successfully!', 'success');
-            refreshFiles();
-            updateFolderList();
-        }
     }
 
     // Setup drag and drop upload area
@@ -860,7 +812,6 @@
                         }
                     } catch (e) {
                         showAlert('Upload error: Invalid JSON response', 'error');
-                        return;
                     }
                 })
                 .catch(error => {
@@ -962,17 +913,18 @@
                 (dateStr ? `Folder • ${dateStr}` : 'Folder') :
                 `${sizeStr}${dateStr ? ' • ' + dateStr : ''}`;
             if (file.isFolder) {
+                const folderDisplayName = displayName(file.name, true);
                 return `
                         <div class="file-item" data-filename="${file.fullName}">
                             <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
                             <div class="file-icon folder">📁</div>
                             <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${displayName(file.name, true)}</div>
+                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${folderDisplayName}</div>
                                 <div class="file-size">${sizeAndDate}</div>
                             </div>
                             <div class="file-actions">
-                                <button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
-                                <button class="btn btn-sm btn-clear" onclick="deleteFolder('${file.name}')">🗑️</button>
+                                <button class="btn btn-sm btn-clear" title="Rename folder and ALL files inside it" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
+                                <button class="btn btn-sm btn-clear" title="Delete folder and ALL files inside it" onclick="deleteFolder('${file.name}')">🗑️</button>
                             </div>
                         </div>
                     `;
@@ -1073,18 +1025,19 @@
             .then(text => {
                 try {
                     const data = JSON.parse(text);
-                    //console.log('Folders API response:', data);
                     const folderList = document.getElementById('folderList');
-                    folderList.innerHTML = '<li class="folder-item" data-folder="">📁 Root</li>';
+                    folderList.innerHTML = '<li class="folder-item active" data-folder="">📁 Root</li>';
 
                     function displayName(name, isFolder) {
                         return toDisplayName(name, isFolder);
                     }
 
+                    // Indent subfolders under Root
                     (data.folders || []).forEach(folder => {
+                        const folderDisplayName = displayName(folder.name, true);
                         folderList.innerHTML += `
-                                <li class="folder-item" data-folder="${folder.name}">📁 ${displayName(folder.name, true)}</li>
-                            `;
+                            <li class="folder-item" data-folder="${folder.name}" style="padding-left: 20px;">📁 ${folderDisplayName}</li>
+                        `;
                     });
 
                     // Add click handlers
@@ -1175,15 +1128,29 @@
 
     // Delete file
     function deleteFile(filename, displayName) {
-        deleteTarget = {type: 'file', name: filename, displayName: displayName};
-        document.getElementById('deleteItemName').textContent = displayName;
+        // Use toDisplayName for display
+        const display = toDisplayName(displayName, false);
+        deleteTarget = {type: 'file', name: filename, displayName: display};
+
+        // Reset modal for single item deletion
+        document.getElementById('deleteModalTitle').textContent = 'Confirm Delete';
+        document.getElementById('deleteItemName').textContent = display;
+        document.getElementById('deleteModalDetails').style.display = 'none';
+
         document.getElementById('deleteModal').style.display = 'block';
     }
 
     // Delete folder
     function deleteFolder(folderName) {
-        deleteTarget = {type: 'folder', name: folderName, displayName: folderName};
-        document.getElementById('deleteItemName').textContent = folderName;
+        // Use toDisplayName for display
+        const folderDisplayName = toDisplayName(folderName, true);
+        deleteTarget = {type: 'folder', name: folderName, displayName: folderDisplayName};
+
+        // Reset modal for single item deletion
+        document.getElementById('deleteModalTitle').textContent = 'Confirm Delete';
+        document.getElementById('deleteItemName').textContent = folderDisplayName;
+        document.getElementById('deleteModalDetails').style.display = 'none';
+
         document.getElementById('deleteModal').style.display = 'block';
     }
 
@@ -1191,6 +1158,59 @@
     function confirmDelete() {
         if (!deleteTarget) return;
 
+        // Handle multiple file deletion
+        if (deleteTarget.type === 'multiple') {
+            const fileList = deleteTarget.files;
+            const deletePromises = fileList.map(filename => {
+                const fileObj = currentFiles.find(f => f.fullName === filename);
+                let isFolder = fileObj && fileObj.isFolder;
+                let endpoint, body;
+                if (isFolder) {
+                    endpoint = `${API_BASE}/delete-folder?access_token=${accessToken}`;
+                    body = {folderName: fileObj.name};
+                } else {
+                    endpoint = `${API_BASE}/delete?access_token=${accessToken}`;
+                    body = {filename: filename};
+                }
+                return fetch(endpoint, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(body)
+                })
+                    .then(response => response.text())
+                    .then(text => {
+                        try {
+                            const data = JSON.parse(text);
+                            return data.success ? {success: true} : {success: false, error: data.error};
+                        } catch (e) {
+                            return {success: false, error: 'Invalid response'};
+                        }
+                    })
+                    .catch(error => {
+                        return {success: false, error: error.message};
+                    });
+            });
+
+            Promise.all(deletePromises).then(results => {
+                const deletedCount = results.filter(r => r.success).length;
+                const errorCount = results.length - deletedCount;
+                if (errorCount > 0) {
+                    showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
+                } else {
+                    showAlert(`Successfully deleted ${deletedCount} items`, 'success');
+                }
+                selectedFiles.clear();
+                updateDeleteButton();
+                refreshFiles();
+                updateFolderList();
+                closeModal('deleteModal');
+            });
+            return;
+        }
+
+        // Handle single file/folder deletion (existing logic)
         const endpoint = deleteTarget.type === 'file' ? `${API_BASE}/delete?access_token=${accessToken}` : `${API_BASE}/delete-folder?access_token=${accessToken}`;
         const body = deleteTarget.type === 'file' ?
             {filename: deleteTarget.name} :
@@ -1222,6 +1242,91 @@
             .catch(error => {
                 showAlert(`Error deleting ${deleteTarget.type}: ` + error.message, 'error');
             });
+    }
+
+    // State for rename modal
+    let renameTarget = null;
+
+    // Show modal helpers
+    function showRenameModal(fullName, storageName, isFolder) {
+        renameTarget = {fullName, storageName, isFolder};
+        const displayName = toDisplayName(storageName, isFolder);
+        document.getElementById('renameModalTitle').textContent = isFolder ? 'Rename Folder' : 'Rename File';
+        document.getElementById('renameInput').value = displayName;
+        document.getElementById('renameModal').style.display = 'block';
+        setTimeout(() => document.getElementById('renameInput').focus(), 100);
+    }
+
+    function showTokenModal(callback) {
+        document.getElementById('tokenAppIdInput').value = appId || '';
+        document.getElementById('tokenAccessTokenInput').value = accessToken || '';
+        document.getElementById('tokenModal').style.display = 'block';
+        setTimeout(() => document.getElementById('tokenAppIdInput').focus(), 100);
+        window.tokenModalCallback = callback;
+    }
+
+    // Confirm modal actions
+    function confirmRename() {
+        if (!renameTarget) return closeModal('renameModal');
+        const newDisplayName = document.getElementById('renameInput').value.trim();
+        if (!validateFileName(newDisplayName)) return;
+        const {fullName, storageName, isFolder} = renameTarget;
+        const newStorageName = toStorageName(newDisplayName, isFolder);
+        fetch(`${API_BASE}/rename?access_token=${accessToken}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                oldName: isFolder ? storageName : fullName,
+                newName: newStorageName,
+                isFolder: isFolder
+            })
+        })
+            .then(response => response.text())
+            .then(text => {
+                try {
+                    const data = JSON.parse(text);
+                    if (data.success) {
+                        showAlert('Renamed successfully!', 'success');
+                        refreshFiles();
+                        updateFolderList();
+                    } else {
+                        showAlert('Rename failed: ' + (data.error || 'Unknown error'), 'error');
+                    }
+                } catch (e) {
+                    showAlert('Rename error: Invalid response', 'error');
+                }
+            })
+            .catch(error => {
+                showAlert('Rename error: ' + error.message, 'error');
+            });
+        closeModal('renameModal');
+    }
+
+    function confirmToken() {
+        const newAppId = document.getElementById('tokenAppIdInput').value.trim();
+        const newAccessToken = document.getElementById('tokenAccessTokenInput').value.trim();
+        if (!newAppId || isNaN(newAppId)) {
+            showAlert('App ID is required and must be a number.', 'error');
+            return;
+        }
+        if (!newAccessToken) {
+            showAlert('Access token is required to use the file manager.', 'error');
+            return;
+        }
+        appId = newAppId;
+        accessToken = newAccessToken;
+        localStorage.setItem('fileManagerAppId', appId);
+        localStorage.setItem('fileManagerAccessToken', accessToken);
+        API_BASE = `/apps/api/${appId}`;
+        showAlert('Token updated successfully!', 'success');
+        closeModal('tokenModal');
+        if (typeof window.tokenModalCallback === 'function') window.tokenModalCallback();
+        refreshFiles();
+        updateFolderList();
+    }
+
+    function promptRename(fullName, storageName, isFolder) {
+        showRenameModal(fullName, storageName, isFolder);
     }
 
     // Select All logic
@@ -1274,11 +1379,24 @@
     function updateDeleteButton() {
         const deleteBtn = document.getElementById('deleteSelectedBtn');
         const moveBtn = document.getElementById('moveSelectedBtn');
+        let hasFolder = false;
+        for (const filename of selectedFiles) {
+            const fileObj = currentFiles.find(f => f.fullName === filename);
+            if (fileObj && fileObj.isFolder) {
+                hasFolder = true;
+                break;
+            }
+        }
         if (selectedFiles.size > 0) {
             deleteBtn.style.display = 'inline-block';
             deleteBtn.textContent = `🗑️ Delete Selected (${selectedFiles.size})`;
-            moveBtn.style.display = 'inline-block';
-            moveBtn.textContent = `📁 Move Selected (${selectedFiles.size})`;
+            // Hide Move Selected if any folder is selected
+            if (hasFolder) {
+                moveBtn.style.display = 'none';
+            } else {
+                moveBtn.style.display = 'inline-block';
+                moveBtn.textContent = `📁 Move Selected (${selectedFiles.size})`;
+            }
         } else {
             deleteBtn.style.display = 'none';
             moveBtn.style.display = 'none';
@@ -1390,58 +1508,39 @@
                 break;
             }
         }
-        let confirmMessage = `Are you sure you want to delete ${selectedFiles.size} item(s)?`;
+
+        // Set up the modal for multiple file deletion
+        deleteTarget = {type: 'multiple', files: fileList, hasFolder: hasFolder};
+
+        // Update modal title and message
+        document.getElementById('deleteModalTitle').textContent = 'Confirm Delete Multiple Items';
+        document.getElementById('deleteItemName').textContent = `${selectedFiles.size} item(s)`;
+
+        // Show details section for multiple items
+        const detailsDiv = document.getElementById('deleteModalDetails');
+        const itemListDiv = document.getElementById('deleteItemList');
+        detailsDiv.style.display = 'block';
+
+        // Build the list of items to delete
+        let itemListHtml = '<strong>Items to be deleted:</strong><ul style="margin: 8px 0 0 20px; max-height: 200px; overflow-y: auto;">';
+        fileList.forEach(filename => {
+            const fileObj = currentFiles.find(f => f.fullName === filename);
+            if (fileObj) {
+                const displayName = toDisplayName(fileObj.name, fileObj.isFolder);
+                const icon = fileObj.isFolder ? '📁' : getFileIcon(fileObj.name);
+                itemListHtml += `<li style="margin: 2px 0;">${icon} ${displayName}</li>`;
+            }
+        });
+        itemListHtml += '</ul>';
+
         if (hasFolder) {
-            confirmMessage += `\n\nNOTE: Deleting a folder will also delete all files inside it.`;
+            itemListHtml += '<div style="margin-top: 10px; padding: 8px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; color: #856404;"><strong>⚠️ Warning:</strong> Deleting a folder will also delete all files inside it.</div>';
         }
 
-        if (confirm(confirmMessage)) {
-            const deletePromises = fileList.map(filename => {
-                const fileObj = currentFiles.find(f => f.fullName === filename);
-                let isFolder = fileObj && fileObj.isFolder;
-                let endpoint, body;
-                if (isFolder) {
-                    endpoint = `${API_BASE}/delete-folder?access_token=${accessToken}`;
-                    body = {folderName: fileObj.name};
-                } else {
-                    endpoint = `${API_BASE}/delete?access_token=${accessToken}`;
-                    body = {filename: filename};
-                }
-                return fetch(endpoint, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(body)
-                })
-                    .then(response => response.text())
-                    .then(text => {
-                        try {
-                            const data = JSON.parse(text);
-                            return data.success ? {success: true} : {success: false, error: data.error};
-                        } catch (e) {
-                            return {success: false, error: 'Invalid response'};
-                        }
-                    })
-                    .catch(error => {
-                        return {success: false, error: error.message};
-                    });
-            });
+        itemListDiv.innerHTML = itemListHtml;
 
-            Promise.all(deletePromises).then(results => {
-                const deletedCount = results.filter(r => r.success).length;
-                const errorCount = results.length - deletedCount;
-                if (errorCount > 0) {
-                    showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
-                } else {
-                    showAlert(`Successfully deleted ${deletedCount} items`, 'success');
-                }
-                selectedFiles.clear();
-                updateDeleteButton();
-                refreshFiles();
-                updateFolderList();
-            });
-        }
+        // Show the modal
+        document.getElementById('deleteModal').style.display = 'block';
     }
 
     // Download file
@@ -1486,47 +1585,15 @@
         displayFiles(currentFiles);
     }
 
-    // prompt rename file or folder
-    function promptRename(fullName, storageName, isFolder) {
-        const displayName = toDisplayName(storageName, isFolder);
-        let promptMsg = isFolder
-            ? `Enter a new name for the folder "${displayName}".\n\nNOTE: All files in this folder will also be renamed.`
-            : `Enter a new name for the file "${displayName}".`;
-        let newDisplayName = prompt(promptMsg, displayName);
-        if (!validateFileName(newDisplayName)) return;
-        console.log('Renaming ', displayName, ' to:', newDisplayName);
-        // Convert new name to storage format
-        const newStorageName = toStorageName(newDisplayName, isFolder);
-        // Call backend
-        fetch(`${API_BASE}/rename?access_token=${accessToken}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                oldName: isFolder ? storageName : fullName,
-                newName: newStorageName,
-                isFolder: isFolder
-            })
-        })
-            .then(response => response.text())
-            .then(text => {
-                try {
-                    const data = JSON.parse(text);
-                    if (data.success) {
-                        showAlert('Renamed successfully!', 'success');
-                        refreshFiles();
-                        updateFolderList();
-                    } else {
-                        showAlert('Rename failed: ' + (data.error || 'Unknown error'), 'error');
-                    }
-                } catch (e) {
-                    showAlert('Rename error: Invalid response', 'error');
-                }
-            })
-            .catch(error => {
-                showAlert('Rename error: ' + error.message, 'error');
-            });
+    // Hide token button if appId and accessToken are in the URL
+    function hideTokenButtonIfInUrl() {
+        const url = new URL(window.location.href);
+        const appIdInPath = !!window.location.pathname.match(/\/apps\/api\/(\d+)/);
+        const accessTokenInUrl = !!url.searchParams.get('access_token');
+        if (appIdInPath && accessTokenInUrl) {
+            const tokenBtn = document.getElementById('tokenBtn');
+            if (tokenBtn) tokenBtn.style.display = 'none';
+        }
     }
 </script>
 </body>

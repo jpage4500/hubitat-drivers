@@ -83,7 +83,8 @@ mappings {
         [POST: "moveFile"]
     }
     path("/rename") {
-        action: [POST: "renameFile"]
+        action:
+        [POST: "renameFile"]
     }
 }
 
@@ -178,7 +179,7 @@ def getFolders() {
             lastModified: file.date,
             isFolder    : true
         ]
-    }.sort { it.name }
+    }.sort { it.name.toLowerCase() }
 }
 
 // Get files in a specific folder
@@ -501,8 +502,6 @@ def moveFile() {
 
         // Always remove any existing folder prefix from filename
         def baseFilename = filename.replaceFirst(/^${FOLDER_PREFIX}[^_]+_/, '')
-        log.debug "moveFile: computed baseFilename: ${baseFilename} from filename: ${filename}"
-
         def newFilename
         if (targetFolder) {
             newFilename = "${FOLDER_PREFIX}${targetFolder}_${baseFilename}"
