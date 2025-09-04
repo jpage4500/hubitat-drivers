@@ -107,7 +107,7 @@ def initialize() {
     state.sortOrder = "name"
     state.sortDirection = "asc"
 
-    createAccessToken()
+    if (state.accessToken == null) createAccessToken()
 }
 
 // Used instead of spaces in filenames/folders for Hubitat compatibility
@@ -609,8 +609,7 @@ def getFileStats() {
 // Method to get public URLs for files
 def getPublicUrl(String filename) {
     def safeName = safeName(filename)
-    def token = state.accessToken ?: createAccessToken()
-    return "${fullApiServerUrl("download/${safeName}")}" + "?access_token=${token}"
+    return "${fullApiServerUrl("download/${safeName}")}" + "?access_token=${state.accessToken}"
 }
 
 // Safe filename utility
