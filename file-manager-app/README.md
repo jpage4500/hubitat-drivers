@@ -66,7 +66,7 @@ curl -X POST "http://HUB_IP/apps/api/APP_ID/create-folder?access_token=APP_TOKEN
 
 ### Bash Script
 
-A bash script is include ([fm.sh](fm.sh)) which wraps the API calls
+A bash script is included ([fm.sh](fm.sh)) which wraps the API calls
 
 ```
 Usage: fm.sh [--app-id ID] [--access-token TOKEN] [--hub-ip IP] [command] [args...]
@@ -98,4 +98,9 @@ Examples:
 
 # Upload a file
 ./fm.sh upload myfile.txt
+```
+
+I add an alias to my `.profile` so I can run it from anywhere (`fm upload myfile.txt`):
+```
+alias fm='$WORKING/hubitat-drivers/file-manager-app/fm.sh'
 ```
