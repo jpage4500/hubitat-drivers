@@ -1,11 +1,11 @@
 {
   "packageName": "File Manager+",
   "author": "Joe Page",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2025-09-02",
   "communityLink": "https://community.hubitat.com/t/file-manager-beta/156586",
-  "releaseNotes": "- change rename dialog to look like other app dialogs\n- combine app id and token fields into 1 dialog, which is only visible when not present in the URL\n- add bash script (fm.sh) which can be used to list/upload/create files from command line\n- case insensitve folder sorting\n- UI improvements",
+  "releaseNotes": "- add font size buttons\n- converting files to table format\n- remove select all and use checkbox in table\n- move sort controls to table headers\n- alternate background row colors",
   "apps": [
     {
       "id": "764e673c-d27e-44e2-be98-70def8ea9d66",

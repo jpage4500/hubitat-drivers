@@ -1,0 +1,204 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Google Picker – Select Images</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://apis.google.com/js/api.js"></script>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+            margin: 16px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 10px 14px;
+            border-radius: 10px;
+            border: 1px solid #ddd;
+            text-decoration: none;
+        }
+
+        #log {
+            white-space: pre-wrap;
+            font-size: 13px;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body onload="onGapiLoad()">
+<h2>Google Picker – Select Images</h2>
+<p>Signed in as: <span id="userEmail">unknown</span>.</p>
+<button class="btn" onclick="openPicker()">Open Picker</button>
+<button class="btn" onclick="clearLog()" style="margin-left: 10px;">Clear Log</button>
+<div id="log"
+     style="border: 1px solid #ccc; padding: 10px; margin-top: 10px; background-color: #f9f9f9; max-height: 300px; overflow-y: auto;"></div>
+
+<script>
+    // Global error handler
+    window.addEventListener('error', function (e) {
+        logError('Global error: ' + e.message, e.error);
+    });
+
+    // Unhandled promise rejection handler
+    window.addEventListener('unhandledrejection', function (e) {
+        logError('Unhandled promise rejection: ' + e.reason, e.reason);
+    });
+
+    function clearLog() {
+        document.getElementById('log').textContent = '';
+        log('Log cleared');
+    }
+</script>
+
+<script>
+    let oauthToken = null;
+    let developerKey = null;
+    let importUrl = "";
+    let saveFolder = "";
+
+    function log(msg) {
+        const timestamp = new Date().toLocaleTimeString();
+        const logMsg = `[${timestamp}] ${msg}`;
+        console.log('Picker Debug:', logMsg);
+        document.getElementById('log').textContent += (logMsg + "\n");
+    }
+
+    function logError(msg, error) {
+        const timestamp = new Date().toLocaleTimeString();
+        const logMsg = `[${timestamp}] ERROR: ${msg}`;
+        console.error('Picker Error:', logMsg, error);
+        document.getElementById('log').textContent += (logMsg + "\n");
+        if (error) {
+            document.getElementById('log').textContent += (`Error details: ${error.message || error}\n`);
+        }
+    }
+
+    function onGapiLoad() {
+        log("Page loaded, starting initialization...");
+        log("Configuration check:");
+        log("  oauthToken: " + (oauthToken ? "present (" + oauthToken.substring(0, 10) + "...)" : "missing"));
+        log("  developerKey: " + (developerKey ? "present (" + developerKey.substring(0, 10) + "...)" : "missing"));
+        log("  importUrl: " + importUrl);
+        log("  saveFolder: " + saveFolder);
+        try {
+            log("Loading Google API modules...");
+            gapi.load('auth', {'callback': onAuthLoad});
+            gapi.load('picker');
+            log("Google API load calls initiated");
+        } catch (error) {
+            logError("Failed to load Google API modules", error);
+        }
+    }
+
+    function onAuthLoad() {
+        log("Google Auth module loaded successfully");
+        // No longer auto-opening picker on load
+    }
+
+    function openPicker() {
+        log("openPicker() called");
+        if (!oauthToken) {
+            logError("No OAuth token available. Please reconnect to Google.");
+            return;
+        }
+        if (!developerKey) {
+            logError("No Developer Key available. Please configure in the app.");
+            return;
+        }
+        log("Configuration validated, loading picker components...");
+        try {
+            gapi.load('picker', {
+                'callback': function () {
+                    log("Picker component loaded, creating picker...");
+                    try {
+                        // Only reference google.picker.* here, after picker is loaded
+                        const viewImages = new google.picker.View(google.picker.ViewId.DOCS_IMAGES);
+                        const viewPhotos = new google.picker.PhotosView()
+                            .setType(google.picker.PhotosViewType.PHOTOS);
+                        log("Creating picker with views: Images and Photos");
+                        const picker = new google.picker.PickerBuilder()
+                            .setAppId("") // optional
+                            .setOAuthToken(oauthToken)
+                            .setDeveloperKey(developerKey)
+                            .addView(viewImages)
+                            .addView(viewPhotos)
+                            .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+                            .setTitle("Select images to import")
+                            .setCallback(pickerCallback)
+                            .build();
+                        log("Picker created successfully, making visible...");
+                        picker.setVisible(true);
+                        log("Picker should now be visible!");
+                    } catch (error) {
+                        logError("Failed to create picker", error);
+                    }
+                }
+            });
+        } catch (error) {
+            logError("Failed to load picker component", error);
+        }
+    }
+
+    async function pickerCallback(data) {
+        log("Picker callback triggered");
+        log("Callback data: " + JSON.stringify(data, null, 2));
+
+        if (data.action === google.picker.Action.PICKED) {
+            log("Items were picked, processing...");
+            const docs = (data.docs || []).map(d => ({
+                id: d.id,
+                name: d.name || d.description || (d.id + ".jpg"),
+                mimeType: d.mimeType || "",
+                serviceId: d.serviceId || "", // 'photos' for Google Photos
+                url: d.url || "",
+                sizeBytes: d.sizeBytes || null
+            }));
+
+            log("Processed " + docs.length + " item(s) for upload");
+            log("Upload details:");
+            log("  importUrl: " + importUrl);
+            log("  saveFolder: " + saveFolder);
+            log("  items: " + JSON.stringify(docs, null, 2));
+
+            try {
+                log("Sending upload request...");
+                const res = await fetch(importUrl, {
+                    method: "POST",
+                    headers: {"Content-Type": "application/json"},
+                    body: JSON.stringify({items: docs, saveFolder})
+                });
+
+                log("Upload response received:");
+                log("  Status: " + res.status);
+                log("  Status Text: " + res.statusText);
+
+                const text = await res.text();
+                log("Response body: " + text);
+
+                if (res.ok) {
+                    log("Upload successful!");
+                } else {
+                    logError("Upload failed with status " + res.status, text);
+                }
+            } catch (e) {
+                logError("Upload request failed", e);
+            }
+        } else if (data.action === google.picker.Action.CANCEL) {
+            log("Picker was cancelled by user");
+        } else {
+            log("Unknown picker action: " + data.action);
+        }
+    }
+
+    // Function to set configuration values (to be called by the app)
+    function setConfig(config) {
+        oauthToken = config.oauthToken || null;
+        developerKey = config.developerKey || null;
+        importUrl = config.importUrl || "";
+        saveFolder = config.saveFolder || "";
+        document.getElementById('userEmail').textContent = config.userEmail || "unknown";
+    }
+</script>
+</body>
+</html>
