@@ -636,7 +636,8 @@
 
         <div class="content-area">
             <div class="toolbar">
-                <div class="actions" style="display: flex; gap: 10px; justify-content: flex-end; width: 100%; flex-wrap: nowrap;">
+                <div class="actions"
+                     style="display: flex; gap: 10px; justify-content: flex-end; width: 100%; flex-wrap: nowrap;">
                     <input type="text" id="fileFilterInput" placeholder="Filter files..."
                            style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;"
                            oninput="onFileFilterInput()">
@@ -673,12 +674,6 @@
                     <span class="font-size-display" id="fontSizeDisplay">100%</span>
                     <button id="increaseFontSize" onclick="increaseFontSize()" title="Increase font size">➕</button>
                 </div>
-            </div>
-            <div id="fileListToolbar"
-                 style="display: flex; align-items: center; padding: 8px 12px; background: #f8f9fa; border-bottom: 1px solid #e9ecef;">
-                <input type="checkbox" id="selectAllCheckbox" style="margin-right: 8px;"
-                       onclick="toggleSelectAllFiles(this.checked)">
-                <label for="selectAllCheckbox" style="user-select: none; cursor: pointer;">Select All</label>
             </div>
             <div id="fileList" class="file-list">
                 <div class="loading">
@@ -1051,30 +1046,6 @@
         updateDeleteButton();
     }
 
-    // Update Select All checkbox state
-    function updateSelectAllCheckbox() {
-        const fileCheckboxes = document.querySelectorAll('.file-checkbox');
-        const checkedCheckboxes = Array.from(fileCheckboxes).filter(cb => cb.checked);
-        const selectAllCheckbox = document.getElementById('selectAllCheckbox');
-
-        if (fileCheckboxes.length === 0) {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = false;
-            selectAllCheckbox.disabled = true;
-        } else if (checkedCheckboxes.length === fileCheckboxes.length) {
-            selectAllCheckbox.checked = true;
-            selectAllCheckbox.indeterminate = false;
-            selectAllCheckbox.disabled = false;
-        } else if (checkedCheckboxes.length === 0) {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = false;
-            selectAllCheckbox.disabled = false;
-        } else {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = true;
-            selectAllCheckbox.disabled = false;
-        }
-    }
 
     // Ensure the table rows have a dataset attribute for filenames
     function displayFiles(files) {
@@ -1090,7 +1061,7 @@
             if (!a.isFolder && b.isFolder) return 1;
             let cmp = 0;
             if (sortOrder === 'name') {
-                cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+                cmp = a.name.localeCompare(b.name, undefined, {sensitivity: 'base'});
             } else if (sortOrder === 'date') {
                 cmp = (a.lastModified || 0) - (b.lastModified || 0);
             } else if (sortOrder === 'size') {
@@ -1101,7 +1072,6 @@
 
         if (filteredFiles.length === 0) {
             fileList.innerHTML = '<div class="loading"><p>No files found</p></div>';
-            updateSelectAllCheckbox();
             return;
         }
 
@@ -1143,7 +1113,6 @@
 
         const tableFooter = '</tbody></table>';
         fileList.innerHTML = tableHeader + tableRows + tableFooter;
-        updateSelectAllCheckbox();
     }
 
     // Get file icon class
@@ -1537,31 +1506,6 @@
         updateDeleteButton();
     }
 
-    // Update Select All checkbox state
-    function updateSelectAllCheckbox() {
-        const fileCheckboxes = document.querySelectorAll('.file-checkbox');
-        const checkedCheckboxes = Array.from(fileCheckboxes).filter(cb => cb.checked);
-        const selectAllCheckbox = document.getElementById('selectAllCheckbox');
-
-        if (fileCheckboxes.length === 0) {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = false;
-            selectAllCheckbox.disabled = true;
-        } else if (checkedCheckboxes.length === fileCheckboxes.length) {
-            selectAllCheckbox.checked = true;
-            selectAllCheckbox.indeterminate = false;
-            selectAllCheckbox.disabled = false;
-        } else if (checkedCheckboxes.length === 0) {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = false;
-            selectAllCheckbox.disabled = false;
-        } else {
-            selectAllCheckbox.checked = false;
-            selectAllCheckbox.indeterminate = true;
-            selectAllCheckbox.disabled = false;
-        }
-    }
-
     // Toggle file selection
     function toggleFileSelection(filename, isSelected) {
         if (isSelected) {
@@ -1570,7 +1514,6 @@
             selectedFiles.delete(filename);
         }
         updateDeleteButton();
-        updateSelectAllCheckbox();
     }
 
     // Update delete button visibility
