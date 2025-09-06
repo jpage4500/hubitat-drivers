@@ -559,7 +559,9 @@
 
         .file-table th, .file-table td {
             padding: 10px;
-            border: 1px solid #e9ecef;
+            /* Remove vertical lines */
+            border-left: none;
+            border-right: none;
             text-align: left;
         }
 
@@ -574,7 +576,20 @@
         }
 
         .file-table tr:hover {
-            background: #f1f3f5;
+            background: #d1e7fd; /* Highlight color for hovered rows */
+        }
+
+        /* Increase specificity to ensure hover effect is applied */
+        .container .content-area .file-table tr:hover {
+            background: #d1e7fd !important; /* Ensure hover color is applied */
+        }
+
+        .file-table tr:nth-child(odd) {
+            background-color: #ffffff; /* White for even rows */
+        }
+
+        .file-table tr:nth-child(even) {
+            background-color: #f8f9fa; /* Light gray for odd rows */
         }
 
         .file-table .btn {
