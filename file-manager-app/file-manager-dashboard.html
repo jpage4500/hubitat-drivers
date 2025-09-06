@@ -147,6 +147,7 @@
             gap: 10px;
             justify-content: flex-end;
             width: 100%;
+            flex-wrap: nowrap; /* Prevent wrapping */
         }
 
         .btn {
@@ -530,6 +531,7 @@
             --file-size-font-size: 0.75em;
             --folder-item-font-size: 0.9em;
             --breadcrumb-font-size: 1.05em;
+            --table-font-size: 1em; /* Default table font size */
         }
 
         .file-name {
@@ -546,6 +548,58 @@
 
         .breadcrumb {
             font-size: var(--breadcrumb-font-size);
+        }
+
+        .file-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            table-layout: auto; /* Change from fixed to auto */
+        }
+
+        .file-table th, .file-table td {
+            padding: 10px;
+            border: 1px solid #e9ecef;
+            text-align: left;
+        }
+
+        .file-table th {
+            background: #f8f9fa;
+            color: #495057;
+            font-weight: 500;
+        }
+
+        .file-table td {
+            vertical-align: middle;
+        }
+
+        .file-table tr:hover {
+            background: #f1f3f5;
+        }
+
+        .file-table .btn {
+            padding: 4px 8px;
+            font-size: 0.8em;
+        }
+
+        .file-table th:nth-child(2),
+        .file-table td:nth-child(2) {
+            width: 60%; /* Allocate most space to the Name column */
+        }
+
+        .file-table th:nth-child(3),
+        .file-table td:nth-child(3),
+        .file-table th:nth-child(4),
+        .file-table td:nth-child(4),
+        .file-table th:nth-child(5),
+        .file-table td:nth-child(5) {
+            white-space: nowrap; /* Prevent wrapping */
+        }
+
+        .file-table td:nth-child(5) {
+            display: flex;
+            justify-content: flex-start;
+            gap: 5px;
         }
     </style>
 </head>
@@ -582,14 +636,14 @@
 
         <div class="content-area">
             <div class="toolbar">
-                <div class="actions" style="display: flex; gap: 10px; justify-content: flex-end; width: 100%;">
+                <div class="actions" style="display: flex; gap: 10px; justify-content: flex-end; width: 100%; flex-wrap: nowrap;">
                     <input type="text" id="fileFilterInput" placeholder="Filter files..."
                            style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;"
                            oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
                     <button class="btn btn-secondary" id="tokenBtn" onclick="showTokenModal()">🔑 Token</button>
                     <button class="btn btn-success" onclick="moveSelectedToFolder()" id="moveSelectedBtn"
-                            style="display: none;">📁 Move to Folder
+                            style="display: none;">���� Move to Folder
                     </button>
                     <button class="btn btn-danger" onclick="deleteSelected()" id="deleteSelectedBtn"
                             style="display: none;">🗑️ Delete Selected
@@ -615,9 +669,9 @@
                     </button>
                 </div>
                 <div class="font-size-controls">
-                    <button onclick="decreaseFontSize()" title="Decrease font size">➖</button>
+                    <button id="decreaseFontSize" onclick="decreaseFontSize()" title="Decrease font size">➖</button>
                     <span class="font-size-display" id="fontSizeDisplay">100%</span>
-                    <button onclick="increaseFontSize()" title="Increase font size">➕</button>
+                    <button id="increaseFontSize" onclick="increaseFontSize()" title="Increase font size">➕</button>
                 </div>
             </div>
             <div id="fileListToolbar"
@@ -802,12 +856,12 @@
 
     // Font size control functions
     function increaseFontSize() {
-        currentFontSize = Math.min(currentFontSize + 10, 200); // Max 200%
+        currentFontSize = Math.min(currentFontSize + 10, 200); // Increment by 10
         updateFontSize();
     }
 
     function decreaseFontSize() {
-        currentFontSize = Math.max(currentFontSize - 10, 50); // Min 50%
+        currentFontSize = Math.max(currentFontSize - 10, 50); // Decrement by 10
         updateFontSize();
     }
 
@@ -820,9 +874,21 @@
         root.style.setProperty('--file-size-font-size', `${0.75 * multiplier}em`);
         root.style.setProperty('--folder-item-font-size', `${0.9 * multiplier}em`);
         root.style.setProperty('--breadcrumb-font-size', `${1.05 * multiplier}em`);
+        root.style.setProperty('--table-font-size', `${1 * multiplier}em`); // Added for table text
 
         // Update display
         document.getElementById('fontSizeDisplay').textContent = `${currentFontSize}%`;
+
+        // Apply changes to file list dynamically
+        const fileNames = document.querySelectorAll('.file-name');
+        const fileSizes = document.querySelectorAll('.file-size');
+        const folderItems = document.querySelectorAll('.folder-item');
+        const tableCells = document.querySelectorAll('.file-table td, .file-table th'); // Added for table cells
+
+        fileNames.forEach(el => el.style.fontSize = `${0.9 * multiplier}em`);
+        fileSizes.forEach(el => el.style.fontSize = `${0.75 * multiplier}em`);
+        folderItems.forEach(el => el.style.fontSize = `${0.9 * multiplier}em`);
+        tableCells.forEach(el => el.style.fontSize = `${1 * multiplier}em`); // Apply font size to table cells
 
         // Save to localStorage
         localStorage.setItem('fileManagerFontSize', currentFontSize.toString());
@@ -944,7 +1010,7 @@
             .then(text => {
                 try {
                     const data = JSON.parse(text);
-                    console.log('Files API response:', data);
+                    //console.log('Files API response:', data);
                     currentFiles = data.files || [];
                     displayFiles(currentFiles);
                     updateBreadcrumb();
@@ -975,23 +1041,56 @@
         });
     }
 
-    // Display files in list
+    // Toggle Select All logic
+    function toggleSelectAllFiles(isChecked) {
+        const fileCheckboxes = document.querySelectorAll('.file-checkbox');
+        fileCheckboxes.forEach(checkbox => {
+            checkbox.checked = isChecked;
+            toggleFileSelection(checkbox.closest('tr').dataset.filename, isChecked);
+        });
+        updateDeleteButton();
+    }
+
+    // Update Select All checkbox state
+    function updateSelectAllCheckbox() {
+        const fileCheckboxes = document.querySelectorAll('.file-checkbox');
+        const checkedCheckboxes = Array.from(fileCheckboxes).filter(cb => cb.checked);
+        const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+
+        if (fileCheckboxes.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.disabled = true;
+        } else if (checkedCheckboxes.length === fileCheckboxes.length) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.disabled = false;
+        } else if (checkedCheckboxes.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.disabled = false;
+        } else {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+            selectAllCheckbox.disabled = false;
+        }
+    }
+
+    // Ensure the table rows have a dataset attribute for filenames
     function displayFiles(files) {
         const fileList = document.getElementById('fileList');
-        // Filter out 0-byte files (except folders)
         let filteredFiles = files.filter(file => file.isFolder || (file.size && file.size > 0));
         if (fileFilter && fileFilter.trim() !== '') {
             const filterLower = fileFilter.trim().toLowerCase();
             filteredFiles = filteredFiles.filter(file => file.name.toLowerCase().includes(filterLower));
         }
-        // Sort files: always folders at the top, then sort within folders/files
-        filteredFiles = filteredFiles.slice(); // clone array
+
         filteredFiles.sort((a, b) => {
             if (a.isFolder && !b.isFolder) return -1;
             if (!a.isFolder && b.isFolder) return 1;
             let cmp = 0;
             if (sortOrder === 'name') {
-                cmp = a.name.localeCompare(b.name, undefined, {sensitivity: 'base'});
+                cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
             } else if (sortOrder === 'date') {
                 cmp = (a.lastModified || 0) - (b.lastModified || 0);
             } else if (sortOrder === 'size') {
@@ -999,63 +1098,51 @@
             }
             return sortDirection === 'desc' ? -cmp : cmp;
         });
+
         if (filteredFiles.length === 0) {
             fileList.innerHTML = '<div class="loading"><p>No files found</p></div>';
             updateSelectAllCheckbox();
             return;
         }
 
-        // --- Replace FILE_SAFE_CHAR with space for display ---
-        function displayName(name, isFolder) {
-            return toDisplayName(name, isFolder);
-        }
+        const tableHeader = `
+        <table class="file-table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="selectAllCheckbox" onclick="toggleSelectAllFiles(this.checked)"></th>
+                    <th>Name</th>
+                    <th>Size</th>
+                    <th>Date</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+        `;
 
-        fileList.innerHTML = filteredFiles.map(file => {
-            // Robust date/size display
-            let dateStr = '';
-            if (file.lastModified && !isNaN(Number(file.lastModified))) {
-                dateStr = formatFileDate(file.lastModified);
-            }
-            let sizeStr = '';
-            if (!file.isFolder && file.size && !isNaN(Number(file.size))) {
-                sizeStr = formatFileSize(file.size);
-            }
-            const sizeAndDate = file.isFolder ?
-                (dateStr ? `Folder • ${dateStr}` : 'Folder') :
-                `${sizeStr}${dateStr ? ' • ' + dateStr : ''}`;
-            if (file.isFolder) {
-                const folderDisplayName = displayName(file.name, true);
-                return `
-                        <div class="file-item" data-filename="${file.fullName}">
-                            <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
-                            <div class="file-icon folder">📁</div>
-                            <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="navigateToFolder('${file.name}')">${folderDisplayName}</div>
-                                <div class="file-size">${sizeAndDate}</div>
-                            </div>
-                            <div class="file-actions">
-                                <button class="btn btn-sm btn-clear" title="Rename folder and ALL files inside it" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
-                                <button class="btn btn-sm btn-clear" title="Delete folder and ALL files inside it" onclick="deleteFolder('${file.name}')">🗑️</button>
-                            </div>
-                        </div>
-                    `;
-            } else {
-                return `
-                        <div class="file-item" data-filename="${file.fullName}">
-                            <input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)">
-                            <div class="file-icon ${getFileIconClass(file.name)}">${getFileIcon(file.name)}</div>
-                            <div class="file-info">
-                                <div class="file-name" style="color:#007bff; cursor:pointer; text-decoration:underline;" onclick="downloadFile('${file.fullName}')">${displayName(file.name, false)}</div>
-                                <div class="file-size">${sizeAndDate}</div>
-                            </div>
-                            <div class="file-actions">
-                                <button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', false)">✏️</button>
-                                <button class="btn btn-sm btn-clear" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>
-                            </div>
-                        </div>
-                    `;
-            }
+        const tableRows = filteredFiles.map(file => {
+            const displayName = toDisplayName(file.name, file.isFolder);
+            const dateStr = file.lastModified ? formatFileDate(file.lastModified) : '';
+            const sizeStr = file.isFolder ? 'Folder' : formatFileSize(file.size || 0);
+            const icon = file.isFolder ? '📁' : getFileIcon(file.name);
+            const actions = file.isFolder
+                ? `<button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
+                   <button class="btn btn-sm btn-clear" onclick="deleteFolder('${file.name}')">🗑️</button>`
+                : `<button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', false)">✏️</button>
+                   <button class="btn btn-sm btn-clear" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>`;
+
+            return `
+            <tr data-filename="${file.fullName}">
+                <td><input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)"></td>
+                <td>${file.isFolder ? `<span style="cursor:pointer;" onclick="navigateToFolder('${file.name}')">${icon} ${displayName}</span>` : `<span style="cursor:pointer;" onclick="downloadFile('${file.fullName}')">${icon} ${displayName}</span>`}</td>
+                <td>${sizeStr}</td>
+                <td>${dateStr}</td>
+                <td>${actions}</td>
+            </tr>
+        `;
         }).join('');
+
+        const tableFooter = '</tbody></table>';
+        fileList.innerHTML = tableHeader + tableRows + tableFooter;
         updateSelectAllCheckbox();
     }
 
@@ -1442,36 +1529,36 @@
 
     // Select All logic
     function toggleSelectAllFiles(isChecked) {
-        const fileItems = document.querySelectorAll('#fileList .file-item input[type=checkbox]');
-        fileItems.forEach(cb => {
-            if (cb.checked !== isChecked) {
-                cb.checked = isChecked;
-                cb.dispatchEvent(new Event('change'));
-            }
+        const fileCheckboxes = document.querySelectorAll('.file-checkbox');
+        fileCheckboxes.forEach(checkbox => {
+            checkbox.checked = isChecked;
+            toggleFileSelection(checkbox.closest('tr').dataset.filename, isChecked);
         });
+        updateDeleteButton();
     }
 
     // Update Select All checkbox state
     function updateSelectAllCheckbox() {
-        const fileItems = document.querySelectorAll('#fileList .file-item input[type=checkbox]');
-        const checkedItems = Array.from(fileItems).filter(cb => cb.checked);
-        const selectAll = document.getElementById('selectAllCheckbox');
-        if (fileItems.length === 0) {
-            selectAll.checked = false;
-            selectAll.indeterminate = false;
-            selectAll.disabled = true;
-        } else if (checkedItems.length === fileItems.length) {
-            selectAll.checked = true;
-            selectAll.indeterminate = false;
-            selectAll.disabled = false;
-        } else if (checkedItems.length === 0) {
-            selectAll.checked = false;
-            selectAll.indeterminate = false;
-            selectAll.disabled = false;
+        const fileCheckboxes = document.querySelectorAll('.file-checkbox');
+        const checkedCheckboxes = Array.from(fileCheckboxes).filter(cb => cb.checked);
+        const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+
+        if (fileCheckboxes.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.disabled = true;
+        } else if (checkedCheckboxes.length === fileCheckboxes.length) {
+            selectAllCheckbox.checked = true;
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.disabled = false;
+        } else if (checkedCheckboxes.length === 0) {
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = false;
+            selectAllCheckbox.disabled = false;
         } else {
-            selectAll.checked = false;
-            selectAll.indeterminate = true;
-            selectAll.disabled = false;
+            selectAllCheckbox.checked = false;
+            selectAllCheckbox.indeterminate = true;
+            selectAllCheckbox.disabled = false;
         }
     }
 
