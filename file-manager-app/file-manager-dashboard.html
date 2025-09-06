@@ -585,11 +585,11 @@
         }
 
         .file-table tr:nth-child(odd) {
-            background-color: #ffffff; /* White for even rows */
+            background-color: #ffffff; /* White for odd rows */
         }
 
         .file-table tr:nth-child(even) {
-            background-color: #f8f9fa; /* Light gray for odd rows */
+            background-color: #f8f9fa; /* Light gray for even rows */
         }
 
         .file-table .btn {
@@ -620,6 +620,10 @@
             display: flex;
             justify-content: flex-start;
             gap: 5px;
+        }
+
+        .file-table thead tr {
+            border-bottom: 2px solid #e9ecef; /* Add a divider line under the table header */
         }
     </style>
 </head>
