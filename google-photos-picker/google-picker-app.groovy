@@ -34,7 +34,6 @@ definition(
 preferences {
     page(name: "pgMain")
     page(name: "pgConnect")
-    page(name: "pgPicker")
 }
 
 @Field static String SCOPE_DRIVE = "https://www.googleapis.com/auth/drive.readonly"
@@ -50,10 +49,14 @@ def pgMain() {
             input "saveFolder", "text", title: "File Manager folder (optional, e.g. 'picker')", required: false
         }
         section("Connection") {
-            if (state.oauth?.access_token) {
-                paragraph "✅ Connected to Google (token expires: ${state.oauth.expiryHuman ?: 'unknown'})"
-                href url: getPickerUrl(), style: "external", required: false, title: "Open Google Picker", description: "Opens in new tab"
-//                href name: "toPicker", title: "Open Google Picker", page: "pgPicker"
+            def oauth = getOAuthState()
+            log.info "Main page: OAuth state = ${oauth}"
+            log.info "Main page: access_token exists = ${!!oauth?.access_token}"
+
+            if (oauth?.access_token) {
+                paragraph "✅ Connected to Google (token expires: ${oauth.expiryHuman ?: 'unknown'})"
+                href url: getPickerUrl(), style: "external", required: false, title: "Open Google Picker", description: "Opens picker in new tab"
+                paragraph "<a target=_blank href=${getPickerUrl()}>Open in new tab</a>"
                 href name: "toConnect", title: "Reconnect / Change Google Account", page: "pgConnect"
             } else {
                 paragraph "❌ Not connected to Google yet."
@@ -66,7 +69,8 @@ def pgMain() {
         }
         section("About & Tips") {
             paragraph "• Make sure Drive API and Photos Library API are enabled in your Google project.\n" +
-                "• Add this exact OAuth redirect URI to your Google OAuth Client settings."
+                "• Add this exact OAuth redirect URI to your Google OAuth Client settings:\n" +
+                "<b>https://cloud.hubitat.com/oauth/stateredirect</b>"
         }
     }
 }
@@ -77,11 +81,32 @@ def pgConnect() {
     dynamicPage(name: "pgConnect", title: "Connect to Google") {
         section("Authorize") {
             paragraph "Click the button below to start Google sign-in and grant read-only access to Drive and Photos."
-            href url: authUrl, style: "external", required: false, title: "Authorize with Google", description: authUrl
+            paragraph """
+                <button onclick="openOAuthPopup()" style="padding: 10px 20px; font-size: 16px; background-color: #4285f4; color: white; border: none; border-radius: 5px; cursor: pointer;">
+                    Authorize with Google
+                </button>
+                <script>
+                    function openOAuthPopup() {
+                        var popup = window.open('${authUrl}', 'oauth', 'width=600,height=600,scrollbars=yes,resizable=yes');
+                        // Check if popup is closed
+                        var checkClosed = setInterval(function() {
+                            if (popup.closed) {
+                                clearInterval(checkClosed);
+                                // Refresh the page to update the status
+                                window.location.reload();
+                            }
+                        }, 1000);
+                    }
+                </script>
+            """
         }
         section("Current Status") {
-            if (state.oauth?.access_token) {
-                paragraph "✅ Connected as: ${state.profileEmail ?: '(unknown)'}\nToken expires: ${state.oauth.expiryHuman ?: 'unknown'}"
+            def oauth = getOAuthState()
+            log.info "Connect page: OAuth state = ${oauth}"
+            log.info "Connect page: access_token exists = ${!!oauth?.access_token}"
+
+            if (oauth?.access_token) {
+                paragraph "✅ Connected as: ${state.profileEmail ?: '(unknown)'}\nToken expires: ${oauth.expiryHuman ?: 'unknown'}"
             } else {
                 paragraph "❌ Not connected."
             }
@@ -89,44 +114,36 @@ def pgConnect() {
     }
 }
 
-private void showPicker() {
+private def showPicker() {
+    log.info "showPicker: called"
     // Hubitat already validated the app endpoint access_token
-    if (!state.oauth?.access_token) {
-        log.debug "showPicker: no Google token"
+    def oauth = getOAuthState()
+    log.info "showPicker: OAuth state = ${oauth}"
+    if (!oauth?.access_token) {
+        log.warn "showPicker: no Google token available"
         render contentType: "text/html",
-            data: "<html><body>Not connected to Google. Return to the app and connect.</body></html>"
+            data: "<html><body><h2>Not connected to Google</h2><p>Return to the app and connect first.</p></body></html>"
         return
     }
     // Refresh Google token if near expiry
-    ensureGoogleToken()
-    log.debug "showPicker: rendering picker page"
+    log.info "showPicker: ensuring Google token is valid"
+    //ensureGoogleToken()
+    log.info "showPicker: rendering picker page"
     try {
-        render contentType: "text/html", data: buildPickerHtml(), status: 200
+//        byte[] bytes = downloadHubFile("google-photos-picker.html")
+//        render contentType: "text/html", data: bytes
+        def htmlContent = buildPickerHtml()
+        log.info "showPicker: HTML content generated (${htmlContent.length()} characters)"
+        render contentType: "text/html", data: htmlContent.getBytes("UTF-8"), status: 200
     } catch (e) {
         log.error "showPicker render error: ${e}"
+        log.error "showPicker render error stack: ${e.stackTrace}"
         render contentType: "text/html",
-            data: "<html><body>Error generating picker page. See logs.</body></html>",
+            data: "<html><body><h2>Error generating picker page</h2><p>Check app logs for details.</p><p>Error: ${e.message}</p></body></html>",
             status: 500
     }
 }
 
-def pgPicker() {
-    if (!state.oauth?.access_token) {
-        // If not connected, show a standard Hubitat page with an error.
-        // This part returns a dynamicPage object, which is correct for this case.
-        return dynamicPage(name: "pgPicker", title: "Open Google Picker") {
-            section { paragraph "You are not connected. Go back and connect first." }
-        }
-    } else {
-        // If connected, render the custom HTML.
-        // The 'render' method handles the response directly.
-        // The page method should not return a value in this case.
-        def html = buildPickerHtml()
-        render contentType: "text/html", data: html
-        // Return null or have no return statement to prevent issues.
-        return null
-    }
-}
 
 /* =====================  OAuth Flow  ===================== */
 
@@ -142,6 +159,43 @@ def updated() {
 
 def initialize() {
     ensureAccessToken()
+    // Reset OAuth state if it's corrupted
+    if (state.oauth && !(state.oauth instanceof Map)) {
+        log.warn "initialize: OAuth state was corrupted, resetting"
+        state.oauth = [:]
+    }
+}
+
+// Safe method to get OAuth state
+private Map getOAuthState() {
+    try {
+        if (!state.oauth) {
+            return [:]
+        }
+        if (state.oauth instanceof Map) {
+            return state.oauth
+        } else {
+            log.warn "getOAuthState: OAuth state was corrupted (${state.oauth}), resetting"
+            state.oauth = [:]
+            return [:]
+        }
+    } catch (Exception e) {
+        log.error "getOAuthState: Error accessing OAuth state: ${e.message}"
+        state.oauth = [:]
+        return [:]
+    }
+}
+
+// Safe method to set OAuth state
+private void setOAuthState(Map oauthData) {
+    try {
+        state.oauth = oauthData
+        log.info "setOAuthState: OAuth state updated successfully"
+    } catch (Exception e) {
+        log.error "setOAuthState: Error setting OAuth state: ${e.message}"
+        // Try to reset state
+        state.oauth = [:]
+    }
 }
 
 private ensureAccessToken() {
@@ -166,8 +220,7 @@ private String getLocalEndpoint() {
 private String appApiPath() { "/apps/api/${app.id}" }
 
 private String getCallbackUrl() {
-    "https://cloud.hubitat.com/oauth/stateredirect" +
-        '&state=' + getHubUID() + '/apps/' + app.id + '/handleAuth?access_token=' + state.accessToken
+    "https://cloud.hubitat.com/oauth/stateredirect"
 }
 
 private String getImportUrl() { "${getBaseEndpoint()}${appApiPath()}/import?access_token=${state.accessToken}" }
@@ -181,23 +234,27 @@ private String buildAuthUrl() {
     return "https://accounts.google.com/o/oauth2/v2/auth?" +
         "response_type=code&access_type=offline&prompt=consent&" +
         "client_id=${URLEncoder.encode(settings.googleClientId ?: '', 'UTF-8')}" +
-        "&redirect_uri=${getCallbackUrl()}" +
-        "&scope=${scopes}"
+        "&redirect_uri=${URLEncoder.encode(getCallbackUrl(), 'UTF-8')}" +
+        "&scope=${scopes}" +
+        "&state=${getHubUID()}/apps/${app.id}/handleAuth?access_token=${state.accessToken}"
 }
 
 private boolean tokenExpiredSoon() {
-    if (!state.oauth?.expires_at) return true
-    return (now() >= (state.oauth.expires_at as Long) - 60_000L) // refresh 60s early
+    def oauth = getOAuthState()
+    if (!oauth?.expires_at) return true
+    return (now() >= (oauth.expires_at as Long) - 60_000L) // refresh 60s early
 }
 
 private boolean ensureGoogleToken() {
-    if (!state.oauth?.access_token) return false
+    def oauth = getOAuthState()
+    if (!oauth?.access_token) return false
     if (!tokenExpiredSoon()) return true
     return refreshToken()
 }
 
 private boolean refreshToken() {
-    def rt = state.oauth?.refresh_token
+    def oauth = getOAuthState()
+    def rt = oauth?.refresh_token
     if (!rt) return false
     try {
         log.debug "Refreshing Google token..."
@@ -226,15 +283,24 @@ private boolean refreshToken() {
 }
 
 private void storeTokenResponse(data) {
+    log.info "storeTokenResponse: storing token data: ${data}"
+
+    def currentOAuth = getOAuthState()
+    log.info "storeTokenResponse: current OAuth state: ${currentOAuth}"
+
     def expiresIn = (data.expires_in ?: 3600) as Long
-    state.oauth = [
+    def existingRefreshToken = currentOAuth?.refresh_token
+
+    def newOAuthState = [
         access_token : data.access_token as String,
         token_type   : data.token_type ?: "Bearer",
-        refresh_token: (data.refresh_token ?: state.oauth?.refresh_token),
+        refresh_token: (data.refresh_token ?: existingRefreshToken),
         expires_at   : now() + (expiresIn * 1000L),
         expiryHuman  : new Date(now() + (expiresIn * 1000L)).toString()
     ]
-    log.debug "OAUTH: ${state.oauth}, data: ${data}"
+
+    setOAuthState(newOAuthState)
+    log.info "storeTokenResponse: OAuth state updated successfully"
 }
 
 /* =====================  Endpoints  ===================== */
@@ -267,13 +333,49 @@ def health() {
 
 def handleAuthRedirect() {
     // params: [access_token:TOKEN, code:CODE, state:HUB_ID/apps/APP_ID/handleAuth?access_token=TOKEN]
+    log.info "=== OAuth Callback Started ==="
+    log.info "handleAuthRedirect: params = ${params}"
+    log.info "handleAuthRedirect: request headers = ${request.headers}"
+    log.info "handleAuthRedirect: request URI = ${request.uri}"
+
     def code = params.code
+    def state = params.state
+
     if (!code) {
-        render contentType: "text/html", data: "<html><body>OAuth failed: no code provided.</body></html>"
+        log.error "OAuth failed: no code provided. Params: ${params}"
+        render contentType: "text/html", data: """
+<html><body>
+    <h2>❌ OAuth Failed</h2>
+    <p>No authorization code provided.</p>
+    <p>Params: ${params}</p>
+    <p>Check app logs for more details.</p>
+</body></html>
+"""
         return
     }
-    log.debug "handleAuthRedirect: got code: ${code}"
+
+    // Verify state parameter contains our app path
+    if (!state || !state.contains("/apps/${app.id}/handleAuth")) {
+        log.error "OAuth failed: invalid state parameter. Expected to contain /apps/${app.id}/handleAuth, Got: ${state}"
+        render contentType: "text/html", data: """
+<html><body>
+    <h2>❌ OAuth Failed</h2>
+    <p>Invalid state parameter.</p>
+    <p>Expected to contain: /apps/${app.id}/handleAuth</p>
+    <p>Got: ${state}</p>
+    <p>Check app logs for more details.</p>
+</body></html>
+"""
+        return
+    }
+
+    log.info "handleAuthRedirect: got code: ${code}, state: ${state}"
+    log.info "handleAuthRedirect: about to exchange code for token"
     try {
+        log.info "handleAuthRedirect: making token exchange request to ${TOKEN_URL}"
+        log.info "handleAuthRedirect: client_id = ${settings.googleClientId}"
+        log.info "handleAuthRedirect: redirect_uri = https://cloud.hubitat.com/oauth/stateredirect"
+
         httpPost([
             uri : TOKEN_URL,
             body: [
@@ -284,38 +386,116 @@ def handleAuthRedirect() {
                 grant_type   : "authorization_code"
             ]
         ]) { response ->
-            log.debug "Token response: ${response?.status} ${response?.data}"
+            log.info "Token exchange response: ${response?.status}"
+            log.info "Token exchange data: ${response?.data}"
+
             if (response.status == 200) {
+                log.info "Token exchange successful, storing response"
                 storeTokenResponse(response.data)
-                render contentType: "text/html", data: "<html><body>✅ Google connected. You can close this tab and return to the app.</body></html>"
+                log.info "OAuth successful! Google connected. State after: ${state.oauth}"
+
+                render contentType: "text/html", data: """
+<html>
+<head>
+    <title>OAuth Success</title>
+    <script>
+        console.log('OAuth success page loaded');
+        console.log('window.opener exists:', !!window.opener);
+        
+        // Try to close the popup window and refresh the parent
+        if (window.opener) {
+            console.log('This is a popup window, refreshing parent and closing');
+            // This is a popup window
+            window.opener.location.reload();
+            window.close();
+        } else {
+            console.log('This is not a popup, showing success message');
+            // This is not a popup, just show success message
+            document.body.innerHTML = '<h2>✅ Google connected successfully!</h2><p>You can close this tab and return to the app.</p>';
+        }
+    </script>
+</head>
+<body>
+    <h2>✅ Google connected successfully!</h2>
+    <p>This window should close automatically. If it doesn't, you can close it manually and return to the app.</p>
+    <p>Check browser console for debug info.</p>
+</body>
+</html>
+"""
             } else {
-                log.warn "Token exchange failed: ${response?.status} ${response?.data}"
-                log.warn "access_token: ${response?.data?.access_token}"
-                render contentType: "text/html", data: "<html><body>Token exchange failed. Check logs.</body></html>"
+                log.error "Token exchange failed: ${response?.status} ${response?.data}"
+                render contentType: "text/html", data: """
+<html><body>
+    <h2>❌ Token Exchange Failed</h2>
+    <p>Status: ${response?.status}</p>
+    <p>Response: ${response?.data}</p>
+    <p>Check app logs for more details.</p>
+</body></html>
+"""
             }
         }
     } catch (e) {
         log.error "OAuth callback error: ${e}"
-        render contentType: "text/html", data: "<html><body>OAuth error. See logs.</body></html>"
+        log.error "OAuth callback error stack: ${e.stackTrace}"
+        render contentType: "text/html", data: """
+<html><body>
+    <h2>❌ OAuth Error</h2>
+    <p>Error: ${e}</p>
+    <p>Check app logs for more details.</p>
+</body></html>
+"""
     }
 }
 
 /* =====================  Picker HTML  ===================== */
 
 private String buildPickerHtml() {
-    def accessToken = state.oauth?.access_token ?: ""
+    def oauth = getOAuthState()
+    def accessToken = oauth?.access_token ?: ""
     def apiKey = settings.googleApiKey ?: ""
-    def appToken = state.accessToken
     def importUrl = getPickerPostUrl()
     def saveFolder = (settings.saveFolder ?: "").replaceAll("[^A-Za-z0-9_\\-\\/]", "_")
-    def title = "Google Picker – Select Images"
+    def userEmail = state.profileEmail ?: "unknown"
 
+    // Load HTML from file manager and inject configuration
+    def filename = "google-photos-picker.html"
+    def htmlContent = ""
+
+    try {
+        log.info "buildPickerHtml: attempting to load ${filename} from file manager"
+        byte[] htmlBytes = downloadHubFile(filename)
+        if (!htmlBytes) {
+            log.warn "buildPickerHtml: file ${filename} not found in file manager, using fallback"
+            htmlContent = getFallbackHtml()
+        } else {
+            log.info "buildPickerHtml: loaded ${filename} from file manager (${htmlBytes.length} bytes)"
+            htmlContent = new String(htmlBytes, "UTF-8")
+        }
+    } catch (Exception e) {
+        log.error "buildPickerHtml: error loading ${filename}: ${e.message}, using fallback"
+        htmlContent = getFallbackHtml()
+    }
+
+    // Replace placeholder values with actual configuration
+    log.info "buildPickerHtml: injecting configuration - accessToken: ${accessToken ? 'present' : 'missing'}, apiKey: ${apiKey ? 'present' : 'missing'}"
+    htmlContent = htmlContent.replace('let oauthToken = null;', "let oauthToken = ${accessToken ? "'" + accessToken.replace("'", "\\'") + "'" : "null"};")
+    htmlContent = htmlContent.replace('let developerKey = null;', "let developerKey = ${apiKey ? "'" + apiKey.replace("'", "\\'") + "'" : "null"};")
+    htmlContent = htmlContent.replace('let importUrl = "";', "let importUrl = \"${importUrl}\";")
+    htmlContent = htmlContent.replace('let saveFolder = "";', "let saveFolder = \"${saveFolder}\";")
+    htmlContent = htmlContent.replace('<span id="userEmail">unknown</span>', "<span id=\"userEmail\">${userEmail}</span>")
+
+    log.info "buildPickerHtml: HTML content prepared (${htmlContent.length()} characters)"
+    return htmlContent
+}
+
+private String getFallbackHtml() {
+    log.info "buildPickerHtml: using fallback HTML"
     return """
 <!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>${title}</title>
+<title>Google Picker – Select Images</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <script src="https://apis.google.com/js/api.js"></script>
 <style>
@@ -325,18 +505,19 @@ body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial
 </style>
 </head>
 <body onload="onGapiLoad()">
-    <h2>${title}</h2>
-    <p>Signed in as: ${state.profileEmail ?: "unknown"}.</p>
+    <h2>Google Picker – Select Images</h2>
+    <p>Signed in as: <span id="userEmail">unknown</span>.</p>
     <button class="btn" onclick="openPicker()">Open Picker</button>
     <div id="log"></div>
 
 <script>
-let oauthToken = ${accessToken ? "'" + accessToken.replace("'", "\\'") + "'" : "null"};
-let developerKey = ${apiKey ? "'" + apiKey.replace("'", "\\'") + "'" : "null"};
-let importUrl = "${importUrl}";
-let saveFolder = "${saveFolder}";
+let oauthToken = null;
+let developerKey = null;
+let importUrl = "";
+let saveFolder = "";
 
 function log(msg) {
+  console.log('Picker Debug:', msg);
   document.getElementById('log').textContent += (msg + "\\n");
 }
 
@@ -352,11 +533,19 @@ function onAuthLoad() {
 }
 
 function openPicker() {
+  log("openPicker called");
+  log("oauthToken: " + (oauthToken ? "present" : "missing"));
+  log("developerKey: " + (developerKey ? "present" : "missing"));
+  log("importUrl: " + importUrl);
+  log("saveFolder: " + saveFolder);
+  
   if (!oauthToken) { log("No OAuth token. Close and reconnect."); return; }
   if (!developerKey) { log("No Developer Key. Close and configure in app."); return; }
 
   gapi.load('auth', {'callback': function() {
+      log("Auth loaded, loading picker...");
       gapi.load('picker', {'callback': function() {
+        log("Picker loaded, creating picker...");
         const viewImages = new google.picker.View(google.picker.ViewId.DOCS_IMAGES);
         const viewPhotos = new google.picker.PhotosView()
                               .setType(google.picker.PhotosViewType.PHOTOS);
@@ -371,12 +560,15 @@ function openPicker() {
           .setTitle("Select images to import")
           .setCallback(pickerCallback)
           .build();
+        log("Picker created, making visible...");
         picker.setVisible(true);
+        log("Picker should now be visible");
       }});
   }});
 }
 
 async function pickerCallback(data) {
+  log("Picker callback triggered: " + JSON.stringify(data));
   if (data.action === google.picker.Action.PICKED) {
     const docs = (data.docs || []).map(d => ({
       id: d.id,
@@ -395,7 +587,7 @@ async function pickerCallback(data) {
         body: JSON.stringify({ items: docs, saveFolder })
       });
       const text = await res.text();
-      log(text);
+      log("Upload response: " + text);
     } catch (e) {
       log("POST failed: " + e);
     }
@@ -453,7 +645,7 @@ private boolean importFromDrive(String fileId, String filename, String folder) {
         httpGet([
             uri    : "https://www.googleapis.com/drive/v3/files/${URLEncoder.encode(fileId, 'UTF-8')}",
             query  : [fields: "id,name,mimeType,size"],
-            headers: ["Authorization": "Bearer ${state.oauth.access_token}"]
+            headers: ["Authorization": "Bearer ${getOAuthState().access_token}"]
         ]) { resp -> if (resp?.status == 200) meta = resp?.data }
 
         if (meta?.mimeType?.startsWith("image/")) {
@@ -465,7 +657,7 @@ private boolean importFromDrive(String fileId, String filename, String folder) {
         def bytes = null
         httpGet([
             uri            : url,
-            headers        : ["Authorization": "Bearer ${state.oauth.access_token}"],
+            headers        : ["Authorization": "Bearer ${getOAuthState().access_token}"],
             contentType    : 'application/octet-stream',
             ignoreSSLIssues: true
         ]) { resp -> bytes = resp?.data?.bytes }
@@ -493,7 +685,7 @@ private boolean importFromPhotos(String mediaItemId, String filename, String fol
         def item = null
         httpGet([
             uri    : "https://photoslibrary.googleapis.com/v1/mediaItems/${URLEncoder.encode(mediaItemId, 'UTF-8')}",
-            headers: ["Authorization": "Bearer ${state.oauth.access_token}"]
+            headers: ["Authorization": "Bearer ${getOAuthState().access_token}"]
         ]) { resp -> if (resp?.status == 200) item = resp?.data }
 
         if (!item?.baseUrl) {
@@ -511,7 +703,7 @@ private boolean importFromPhotos(String mediaItemId, String filename, String fol
         def bytes = null
         httpGet([
             uri            : downloadUrl,
-            headers        : ["Authorization": "Bearer ${state.oauth.access_token}"],
+            headers        : ["Authorization": "Bearer ${getOAuthState().access_token}"],
             contentType    : 'application/octet-stream',
             ignoreSSLIssues: true
         ]) { resp -> bytes = resp?.data?.bytes }
