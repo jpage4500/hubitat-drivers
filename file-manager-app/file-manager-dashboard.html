@@ -6,7 +6,7 @@
     <title>Hubitat File Manager+</title>
     <!-- set favicon dynamically -->
     <link rel="icon"
-          href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📁</text></svg>">
+          href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%22110%22>📁</text></svg>">
 
     <style>
         * {
@@ -81,7 +81,6 @@
             cursor: pointer;
             transition: all 0.2s;
             border-left: 3px solid transparent;
-            font-size: 0.9em;
         }
 
         .folder-item:hover {
@@ -284,12 +283,10 @@
             font-weight: 500;
             margin-bottom: 1px;
             word-break: break-word;
-            font-size: 0.9em;
         }
 
         .file-size {
             color: #6c757d;
-            font-size: 0.75em;
         }
 
         .file-actions {
@@ -451,6 +448,22 @@
                 margin-left: 0;
                 margin-top: 8px;
             }
+
+            .breadcrumb-bar {
+                flex-direction: column;
+                gap: 8px;
+                align-items: flex-start !important;
+            }
+
+            .font-size-controls {
+                margin-left: 0;
+                margin-top: 8px;
+            }
+
+            .font-size-controls button {
+                padding: 8px 12px;
+                font-size: 1em;
+            }
         }
 
         .breadcrumb-item {
@@ -480,6 +493,59 @@
             border: 1px solid #ccc;
             font-size: 0.95em;
             min-width: 100px;
+        }
+
+        .font-size-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: 10px;
+        }
+
+        .font-size-controls button {
+            padding: 6px 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            font-size: 0.9em;
+            transition: all 0.2s;
+        }
+
+        .font-size-controls button:hover {
+            background: #f8f9fa;
+            border-color: #4facfe;
+        }
+
+        .font-size-display {
+            font-size: 0.85em;
+            color: #6c757d;
+            min-width: 40px;
+            text-align: center;
+        }
+
+        /* CSS variables for font sizes */
+        :root {
+            --file-name-font-size: 0.9em;
+            --file-size-font-size: 0.75em;
+            --folder-item-font-size: 0.9em;
+            --breadcrumb-font-size: 1.05em;
+        }
+
+        .file-name {
+            font-size: var(--file-name-font-size);
+        }
+
+        .file-size {
+            font-size: var(--file-size-font-size);
+        }
+
+        .folder-item {
+            font-size: var(--folder-item-font-size);
+        }
+
+        .breadcrumb {
+            font-size: var(--breadcrumb-font-size);
         }
     </style>
 </head>
@@ -533,7 +599,7 @@
             <div class="breadcrumb-bar"
                  style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 8px 12px; background: #f8f9fa; border-radius: 8px;">
                 <div class="breadcrumb" id="breadcrumb"
-                     style="display: flex; align-items: center; gap: 0.5em; font-size: 1.05em;">
+                     style="display: flex; align-items: center; gap: 0.5em;">
                     <!-- Breadcrumb items will be rendered here -->
                 </div>
                 <div class="sort-controls" style="display: flex; align-items: center; gap: 6px;">
@@ -547,6 +613,11 @@
                     <button id="sortDirBtn" onclick="toggleSortDirection()" title="Toggle sort direction"
                             style="background: none; border: none; font-size: 1.2em; cursor: pointer; padding: 0 6px;">▲
                     </button>
+                </div>
+                <div class="font-size-controls">
+                    <button onclick="decreaseFontSize()" title="Decrease font size">➖</button>
+                    <span class="font-size-display" id="fontSizeDisplay">100%</span>
+                    <button onclick="increaseFontSize()" title="Increase font size">➕</button>
                 </div>
             </div>
             <div id="fileListToolbar"
@@ -698,6 +769,7 @@
     let fileFilter = '';
     let sortOrder = 'name';
     let sortDirection = 'asc';
+    let currentFontSize = 100; // Default font size percentage
 
     function getUrlParam(name) {
         const url = new URL(window.location.href);
@@ -728,6 +800,42 @@
         displayFiles(currentFiles);
     }
 
+    // Font size control functions
+    function increaseFontSize() {
+        currentFontSize = Math.min(currentFontSize + 10, 200); // Max 200%
+        updateFontSize();
+    }
+
+    function decreaseFontSize() {
+        currentFontSize = Math.max(currentFontSize - 10, 50); // Min 50%
+        updateFontSize();
+    }
+
+    function updateFontSize() {
+        const root = document.documentElement;
+        const multiplier = currentFontSize / 100;
+
+        // Update CSS variables
+        root.style.setProperty('--file-name-font-size', `${0.9 * multiplier}em`);
+        root.style.setProperty('--file-size-font-size', `${0.75 * multiplier}em`);
+        root.style.setProperty('--folder-item-font-size', `${0.9 * multiplier}em`);
+        root.style.setProperty('--breadcrumb-font-size', `${1.05 * multiplier}em`);
+
+        // Update display
+        document.getElementById('fontSizeDisplay').textContent = `${currentFontSize}%`;
+
+        // Save to localStorage
+        localStorage.setItem('fileManagerFontSize', currentFontSize.toString());
+    }
+
+    function loadFontSize() {
+        const savedFontSize = localStorage.getItem('fileManagerFontSize');
+        if (savedFontSize) {
+            currentFontSize = parseInt(savedFontSize, 10);
+            updateFontSize();
+        }
+    }
+
     // Initialize the dashboard
     document.addEventListener('DOMContentLoaded', function () {
         // Restore sort order and direction from localStorage if available
@@ -735,6 +843,9 @@
         sortDirection = localStorage.getItem('fileManagerSortDirection') || 'asc';
         document.getElementById('sortSelect').value = sortOrder;
         updateSortArrow();
+
+        // Load font size setting
+        loadFontSize();
 
         if (!appId || !accessToken) {
             showTokenModal(() => initializeApp());
@@ -952,22 +1063,22 @@
     function getFileIconClass(filename) {
         const ext = filename.split('.').pop().toLowerCase();
         if (['jpg', 'jpeg', 'png', 'gif', 'bmp'].includes(ext)) return 'image';
-        if (['pdf', 'doc', 'docx', 'txt'].includes(ext)) return 'document';
-        if (['mp3', 'wav', 'ogg'].includes(ext)) return 'audio';
-        if (['mp4', 'avi', 'mov'].includes(ext)) return 'video';
-        if (['zip', 'rar', '7z'].includes(ext)) return 'archive';
-        return 'other';
+        else if (['pdf', 'doc', 'docx', 'txt'].includes(ext)) return 'document';
+        else if (['mp3', 'wav', 'ogg'].includes(ext)) return 'audio';
+        else if (['mp4', 'avi', 'mov'].includes(ext)) return 'video';
+        else if (['zip', 'rar', '7z'].includes(ext)) return 'archive';
+        else return 'other';
     }
 
     // Get file icon
     function getFileIcon(filename) {
-        const ext = filename.split('.').pop().toLowerCase();
-        if (['jpg', 'jpeg', 'png', 'gif', 'bmp'].includes(ext)) return '🖼️';
-        if (['pdf', 'doc', 'docx', 'txt'].includes(ext)) return '📄';
-        if (['mp3', 'wav', 'ogg'].includes(ext)) return '🎵';
-        if (['mp4', 'avi', 'mov'].includes(ext)) return '🎬';
-        if (['zip', 'rar', '7z'].includes(ext)) return '📦';
-        return '📄';
+        const type = getFileIconClass(filename);
+        if (type === 'image') return '🖼️';
+        else if (type === 'document') return '📄';
+        else if (type === 'audio') return '🎵';
+        else if (type === 'video') return '🎬';
+        else if (type === 'archive') return '📦';
+        else return '📄';
     }
 
     // Format file size
@@ -1006,7 +1117,7 @@
         // Only sum sizes for files (not folders)
         const totalBytes = visibleFiles.filter(f => !f.isFolder && f.size && !isNaN(Number(f.size))).reduce((sum, f) => sum + Number(f.size), 0);
         const sizeStr = formatFileSize(totalBytes);
-        html += ` <span style='color:#888; font-size:0.95em;'>(` + itemCount + ` item` + (itemCount === 1 ? '' : 's') + `, ` + sizeStr + `)</span>`;
+        html += ` <span style='color:#888; font-size:var(--breadcrumb-font-size);'>(` + itemCount + ` item` + (itemCount === 1 ? '' : 's') + `, ` + sizeStr + `)</span>`;
 
         breadcrumb.innerHTML = html;
     }
