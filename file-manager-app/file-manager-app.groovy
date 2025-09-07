@@ -6,6 +6,7 @@
 
 import groovy.json.JsonOutput
 import groovy.transform.Field
+import java.nio.file.AccessDeniedException
 
 definition(
     name: "File Manager+",
@@ -206,7 +207,7 @@ def createFolder(String folderName) {
     try {
         def folderMarkerName = "${FOLDER_PREFIX}${folderName}${FOLDER_NAME_SUFFIX}"
         def markerContent = "Folder created: ${new Date()}"
-        uploadHubFile(folderMarkerName, markerContent.getBytes("UTF-8"))
+        safeUploadHubFile(folderMarkerName, markerContent.getBytes("UTF-8"))
         log.info "Created folder: ${folderName}"
         return true
     } catch (Exception e) {
@@ -227,7 +228,7 @@ def deleteFolder(String folderName) {
         def deletedCount = 0
         folderFiles.each { file ->
             log.debug "Deleting file: ${file.name}"
-            deleteHubFile(file.name) // returns void
+            safeDeleteHubFile(file.name) // returns void
             deletedCount++
         }
 
@@ -254,7 +255,7 @@ def uploadFileWithOrganization(String filename, byte[] content, String folder) {
             log.error "File ${filename} exceeds maximum size of ${state.maxFileSize}MB"
             return false
         }
-        uploadHubFile(finalFilename, content)
+        safeUploadHubFile(finalFilename, content)
         log.info "Uploaded file: ${finalFilename} (${content.length} bytes)"
         return true
     } catch (Exception e) {
@@ -267,7 +268,7 @@ def uploadFileWithOrganization(String filename, byte[] content, String folder) {
 def dashboard() {
     def filename = "file-manager-dashboard.html"
     try {
-        byte[] bytes = downloadHubFile(filename)
+        byte[] bytes = safeDownloadHubFile(filename)
         if (!bytes) {
             render status: 404, text: "File not found: ${filename}"
             return
@@ -390,7 +391,7 @@ def deleteFile() {
     }
 
     try {
-        deleteHubFile(filename) // returns void
+        safeDeleteHubFile(filename) // returns void
         render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File deleted successfully"])
     } catch (Exception e) {
         log.error "Error deleting file ${filename}: ${e.message}"
@@ -407,7 +408,7 @@ def downloadFile() {
     }
 
     try {
-        byte[] bytes = downloadHubFile(filename)
+        byte[] bytes = safeDownloadHubFile(filename)
         if (!bytes) {
             render status: 404, text: "File not found: ${filename}"
             return
@@ -494,7 +495,7 @@ def moveFile() {
 
     try {
         // Download the file
-        byte[] content = downloadHubFile(filename)
+        byte[] content = safeDownloadHubFile(filename)
         if (!content) {
             render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found"])
             return
@@ -518,10 +519,10 @@ def moveFile() {
         }
 
         // Upload to new location
-        uploadHubFile(newFilename, content)
+        safeUploadHubFile(newFilename, content)
 
         // Delete original file
-        deleteHubFile(filename)
+        safeDeleteHubFile(filename)
 
         render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File moved successfully"])
     } catch (Exception e) {
@@ -549,10 +550,10 @@ def renameFile() {
             // Rename folder marker file
             def oldMarker = "${FOLDER_PREFIX}${oldName}${FOLDER_NAME_SUFFIX}"
             def newMarker = "${FOLDER_PREFIX}${newName}${FOLDER_NAME_SUFFIX}"
-            byte[] markerContent = downloadHubFile(oldMarker)
+            byte[] markerContent = safeDownloadHubFile(oldMarker)
             if (markerContent) {
-                uploadHubFile(newMarker, markerContent)
-                deleteHubFile(oldMarker)
+                safeUploadHubFile(newMarker, markerContent)
+                safeDeleteHubFile(oldMarker)
             }
             // Rename all files in the folder
             def folderPrefixOld = "${FOLDER_PREFIX}${oldName}_"
@@ -562,22 +563,22 @@ def renameFile() {
             log.debug "Renaming ${filesToRename.size()} files in folder ${oldName}"
             filesToRename.each { file ->
                 def newFileName = file.name.replaceFirst(folderPrefixOld, folderPrefixNew)
-                byte[] content = downloadHubFile(file.name)
+                byte[] content = safeDownloadHubFile(file.name)
                 if (content) {
-                    uploadHubFile(newFileName, content)
-                    deleteHubFile(file.name)
+                    safeUploadHubFile(newFileName, content)
+                    safeDeleteHubFile(file.name)
                 }
             }
             render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder and contents renamed successfully"])
         } else {
             // Rename a file
-            byte[] content = downloadHubFile(oldName)
+            byte[] content = safeDownloadHubFile(oldName)
             if (!content) {
                 render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found"])
                 return
             }
-            uploadHubFile(newName, content)
-            deleteHubFile(oldName)
+            safeUploadHubFile(newName, content)
+            safeDeleteHubFile(oldName)
             render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File renamed successfully"])
         }
     } catch (Exception e) {
@@ -595,4 +596,48 @@ def getPublicUrl(String filename) {
 // Safe filename utility
 static String safeName(String filename) {
     return filename?.replaceAll("[^a-zA-Z0-9_.\\-]", "")
+}
+
+byte[] safeDownloadHubFile(String fileName) {
+    for (int i = 1; i <= 3; i++) {
+        try {
+            return downloadHubFile(fileName)
+        } catch (AccessDeniedException ex) {
+            log.warn "Failed to download ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
+            pauseExecution(500)
+        }
+    }
+
+    log.error "Failed to download ${fileName} after 3 attempts"
+    return null
+}
+
+
+void safeUploadHubFile(String fileName, byte[] bytes) {
+    for (int i = 1; i <= 3; i++) {
+        try {
+            uploadHubFile(fileName, bytes)
+            return
+        } catch (AccessDeniedException ex) {
+            log.warn "Failed to upload ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
+            pauseExecution(500)
+        }
+    }
+
+    log.error "Failed to upload ${fileName} after 3 attempts - possible data loss"
+}
+
+
+void safeDeleteHubFile(String fileName) {
+    for (int i = 1; i <= 3; i++) {
+        try {
+            deleteHubFile(fileName)
+            return
+        } catch (AccessDeniedException ex) {
+            log.warn "Failed to delete ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
+            pauseExecution(500)
+        }
+    }
+
+    log.error "Failed to delete ${fileName} after 3 attempts"
 }
