@@ -586,25 +586,6 @@ def renameFile() {
     }
 }
 
-// Utility method to get file statistics
-def getFileStats() {
-    def allFiles = getAllFiles()
-    def stats = [
-        totalFiles: allFiles.size(),
-        totalSize : allFiles.sum { it.size ?: 0 },
-        folders   : getFolders().size(),
-        fileTypes : [:]
-    ]
-
-    // Count file types
-    allFiles.each { file ->
-        def ext = file.name.tokenize('.').last().toLowerCase()
-        stats.fileTypes[ext] = (stats.fileTypes[ext] ?: 0) + 1
-    }
-
-    return stats
-}
-
 // Method to get public URLs for files
 def getPublicUrl(String filename) {
     def safeName = safeName(filename)
