@@ -664,7 +664,7 @@
                     <input type="text" id="fileFilterInput" placeholder="Filter files..."
                            style="margin-right: 10px; padding: 6px 10px; border-radius: 6px; border: 1px solid #ccc; font-size: 0.95em; min-width: 120px;"
                            oninput="onFileFilterInput()">
-                    <button class="btn btn-primary" onclick="refreshFiles()">🔄 Refresh</button>
+                    <button class="btn btn-primary" onclick="listFiles()">🔄 Refresh</button>
                     <button class="btn btn-secondary" id="tokenBtn" onclick="showTokenModal()">🔑 Token</button>
                     <button class="btn btn-success" onclick="moveSelectedToFolder()" id="moveSelectedBtn"
                             style="display: none;">���� Move to Folder
@@ -751,7 +751,7 @@
         </div>
         <div style="text-align: right; margin-top: 20px;">
             <button class="btn" onclick="closeModal('deleteModal')">Cancel</button>
-            <button class="btn btn-danger" onclick="confirmDelete()">Delete</button>
+            <button class="btn btn-danger" onclick="deleteFiles()">Delete</button>
         </div>
     </div>
 </div>
@@ -916,9 +916,9 @@
 
     // Initialize the app after getting access token
     function initializeApp() {
-        refreshFiles();
+        listFiles();
         setupUploadArea();
-        updateFolderList();
+        listFolders();
     }
 
     // Setup drag and drop upload area
@@ -937,60 +937,103 @@
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            handleFiles(e.dataTransfer.files);
+            handleUploadFiles(e.dataTransfer.files);
         });
         fileInput.addEventListener('change', (e) => {
-            handleFiles(e.target.files);
+            handleUploadFiles(e.target.files);
         });
     }
 
     // Handle file uploads
-    function handleFiles(files) {
-        Array.from(files).forEach(file => {
-            uploadFile(file);
-        });
-    }
+    function handleUploadFiles(files) {
+        const fileArray = Array.from(files);
+        if (fileArray.length === 0) return;
 
-    // Upload a single file
-    function uploadFile(file) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            const base64Content = e.target.result.split(',')[1];
+        // Show persistent alert for upload progress
+        let alert = document.createElement('div');
+        alert.className = 'alert alert-success';
+        alert.id = 'uploadProgressAlert';
+        alert.textContent = `Uploading ${fileArray.length} files...`;
+        document.body.appendChild(alert);
 
-            fetch(`${API_BASE}/upload?access_token=${accessToken}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    filename: file.name,
-                    content: base64Content,
-                    folder: currentFolder
+        let done = 0, failed = 0;
+
+        // Helper to update alert
+        function updateAlert() {
+            alert.textContent = `Uploading ${done} of ${fileArray.length} files...`;
+        }
+
+        // Helper to remove alert
+        function removeAlert() {
+            if (alert) alert.remove();
+        }
+
+        // Upload a single file, returns a Promise
+        function uploadFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    const base64Content = e.target.result.split(',')[1];
+                    fetch(`${API_BASE}/upload?access_token=${accessToken}`, {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({
+                            filename: file.name,
+                            content: base64Content,
+                            folder: currentFolder
+                        })
+                    })
+                        .then(response => response.text())
+                        .then(text => {
+                            try {
+                                const data = JSON.parse(text);
+                                if (data.success) {
+                                    resolve();
+                                } else {
+                                    reject(data.error || 'Unknown error');
+                                }
+                            } catch (e) {
+                                reject('Invalid JSON response');
+                            }
+                        })
+                        .catch(error => reject(error.message));
+                };
+                reader.onerror = () => reject('File read error');
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // Sequential upload logic
+        function uploadSequentially(index) {
+            if (index >= fileArray.length) {
+                setTimeout(removeAlert, 500);
+                if (failed === 0) {
+                    showAlert('All files uploaded successfully!', 'success');
+                } else {
+                    showAlert(`${fileArray.length - failed} uploaded, ${failed} failed.`, 'error');
+                }
+                listFiles();
+                return;
+            }
+            uploadFile(fileArray[index])
+                .then(() => {
+                    done++;
+                    updateAlert();
+                    uploadSequentially(index + 1);
                 })
-            })
-                .then(response => response.text())
-                .then(text => {
-                    try {
-                        const data = JSON.parse(text);
-                        if (data.success) {
-                            showAlert('File uploaded successfully!', 'success');
-                            refreshFiles();
-                        } else {
-                            showAlert('Upload failed: ' + (data.error || 'Unknown error'), 'error');
-                        }
-                    } catch (e) {
-                        showAlert('Upload error: Invalid JSON response', 'error');
-                    }
-                })
-                .catch(error => {
-                    showAlert('Upload error: ' + error.message, 'error');
+                .catch(() => {
+                    done++;
+                    failed++;
+                    updateAlert();
+                    uploadSequentially(index + 1);
                 });
-        };
-        reader.readAsDataURL(file);
+        }
+
+        uploadSequentially(0);
     }
 
     // Refresh file list
-    function refreshFiles() {
+    function listFiles() {
         const fileList = document.getElementById('fileList');
         fileList.innerHTML = '<div class="loading"><div class="spinner"></div><p>Loading files...</p></div>';
         selectedFiles.clear();
@@ -1098,9 +1141,9 @@
             const icon = file.isFolder ? '📁' : getFileIcon(file.name);
             const actions = file.isFolder
                 ? `<button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
-                   <button class="btn btn-sm btn-clear" onclick="deleteFolder('${file.name}')">🗑️</button>`
+                   <button class="btn btn-sm btn-clear" onclick="showDeleteFolderDialog('${file.name}')">🗑️</button>`
                 : `<button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', false)">✏️</button>
-                   <button class="btn btn-sm btn-clear" onclick="deleteFile('${file.fullName}', '${file.name}')">🗑️</button>`;
+                   <button class="btn btn-sm btn-clear" onclick="showDeleteFileDialog('${file.fullName}', '${file.name}')">🗑️</button>`;
 
             return `
             <tr data-filename="${file.fullName}">
@@ -1172,10 +1215,13 @@
             visibleFiles = currentFiles.filter(file => file.name.toLowerCase().includes(filterLower));
         }
         const itemCount = visibleFiles.length;
-        // Only sum sizes for files (not folders)
-        const totalBytes = visibleFiles.filter(f => !f.isFolder && f.size && !isNaN(Number(f.size))).reduce((sum, f) => sum + Number(f.size), 0);
-        const sizeStr = formatFileSize(totalBytes);
-        html += ` <span style='color:#888; font-size:var(--breadcrumb-font-size);'>(` + itemCount + ` item` + (itemCount === 1 ? '' : 's') + `, ` + sizeStr + `)</span>`;
+        let sizeStr = '';
+        if (itemCount > 0) {
+            // Only sum sizes for files (not folders)
+            const totalBytes = visibleFiles.filter(f => !f.isFolder && f.size && !isNaN(Number(f.size))).reduce((sum, f) => sum + Number(f.size), 0);
+            sizeStr = ', ' + formatFileSize(totalBytes);
+        }
+        html += ` <span style='color:#888; font-size:var(--breadcrumb-font-size);'>(` + itemCount + ` item` + (itemCount === 1 ? '' : 's') + sizeStr + `)</span>`;
 
         breadcrumb.innerHTML = html;
     }
@@ -1183,12 +1229,12 @@
     // Navigate to folder
     function navigateToFolder(folder) {
         currentFolder = folder;
-        refreshFiles();
-        updateFolderList();
+        listFiles();
+        listFolders();
     }
 
     // Update folder list
-    function updateFolderList() {
+    function listFolders() {
         fetch(`${API_BASE}/folders?access_token=${accessToken}`)
             .then(response => response.text())
             .then(text => {
@@ -1278,8 +1324,8 @@
                         showAlert('Folder created successfully!', 'success');
                         closeModal('folderModal');
                         document.getElementById('folderName').value = '';
-                        updateFolderList();
-                        refreshFiles();
+                        listFolders();
+                        listFiles();
                     } else {
                         showAlert('Failed to create folder: ' + (data.error || 'Unknown error'), 'error');
                     }
@@ -1294,9 +1340,8 @@
             });
     }
 
-
-    // Delete file
-    function deleteFile(filename, displayName) {
+    // show 'delete file' dialog
+    function showDeleteFileDialog(filename, displayName) {
         // Use toDisplayName for display
         const display = toDisplayName(displayName, false);
         deleteTarget = {type: 'file', name: filename, displayName: display};
@@ -1309,8 +1354,8 @@
         document.getElementById('deleteModal').style.display = 'block';
     }
 
-    // Delete folder
-    function deleteFolder(folderName) {
+    // show 'delete folder' dialog
+    function showDeleteFolderDialog(folderName) {
         // Use toDisplayName for display
         const folderDisplayName = toDisplayName(folderName, true);
         deleteTarget = {type: 'folder', name: folderName, displayName: folderDisplayName};
@@ -1323,14 +1368,46 @@
         document.getElementById('deleteModal').style.display = 'block';
     }
 
-    // Confirm delete
-    function confirmDelete() {
+    // delete selected file(s) or folder(s)
+    function deleteFiles() {
         if (!deleteTarget) return;
 
-        // Handle multiple file deletion
+        // Handle multiple file deletion sequentially with progress
         if (deleteTarget.type === 'multiple') {
             const fileList = deleteTarget.files;
-            const deletePromises = fileList.map(filename => {
+            let deletedCount = 0;
+            let errorCount = 0;
+            // Show persistent alert for delete progress
+            let alert = document.createElement('div');
+            alert.className = 'alert alert-success';
+            alert.id = 'deleteProgressAlert';
+            alert.textContent = `Deleting ${fileList.length} items...`;
+            document.body.appendChild(alert);
+
+            function updateAlert() {
+                alert.textContent = `Deleting ${deletedCount + errorCount} of ${fileList.length} items...`;
+            }
+
+            function removeAlert() {
+                if (alert) alert.remove();
+            }
+
+            function deleteNext(index) {
+                if (index >= fileList.length) {
+                    setTimeout(removeAlert, 500);
+                    if (errorCount > 0) {
+                        showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
+                    } else {
+                        showAlert(`Successfully deleted ${deletedCount} items`, 'success');
+                    }
+                    selectedFiles.clear();
+                    updateDeleteButton();
+                    listFiles();
+                    listFolders();
+                    closeModal('deleteModal');
+                    return;
+                }
+                const filename = fileList[index];
                 const fileObj = currentFiles.find(f => f.fullName === filename);
                 let isFolder = fileObj && fileObj.isFolder;
                 let endpoint, body;
@@ -1341,7 +1418,7 @@
                     endpoint = `${API_BASE}/delete?access_token=${accessToken}`;
                     body = {filename: filename};
                 }
-                return fetch(endpoint, {
+                fetch(endpoint, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -1352,30 +1429,26 @@
                     .then(text => {
                         try {
                             const data = JSON.parse(text);
-                            return data.success ? {success: true} : {success: false, error: data.error};
+                            if (data.success) {
+                                deletedCount++;
+                            } else {
+                                errorCount++;
+                            }
                         } catch (e) {
-                            return {success: false, error: 'Invalid response'};
+                            errorCount++;
                         }
+                        updateAlert();
+                        deleteNext(index + 1);
                     })
-                    .catch(error => {
-                        return {success: false, error: error.message};
+                    .catch(() => {
+                        errorCount++;
+                        updateAlert();
+                        deleteNext(index + 1);
                     });
-            });
+            }
 
-            Promise.all(deletePromises).then(results => {
-                const deletedCount = results.filter(r => r.success).length;
-                const errorCount = results.length - deletedCount;
-                if (errorCount > 0) {
-                    showAlert(`Deleted ${deletedCount} items, ${errorCount} failed`, 'error');
-                } else {
-                    showAlert(`Successfully deleted ${deletedCount} items`, 'success');
-                }
-                selectedFiles.clear();
-                updateDeleteButton();
-                refreshFiles();
-                updateFolderList();
-                closeModal('deleteModal');
-            });
+            updateAlert();
+            deleteNext(0);
             return;
         }
 
@@ -1399,8 +1472,8 @@
                     if (data.success) {
                         showAlert(`${deleteTarget.type} deleted successfully!`, 'success');
                         closeModal('deleteModal');
-                        refreshFiles();
-                        updateFolderList();
+                        listFiles();
+                        listFolders();
                     } else {
                         showAlert(`Failed to delete ${deleteTarget.type}: ` + data.error, 'error');
                     }
@@ -1456,8 +1529,8 @@
                     const data = JSON.parse(text);
                     if (data.success) {
                         showAlert('Renamed successfully!', 'success');
-                        refreshFiles();
-                        updateFolderList();
+                        listFiles();
+                        listFolders();
                     } else {
                         showAlert('Rename failed: ' + (data.error || 'Unknown error'), 'error');
                     }
@@ -1490,8 +1563,8 @@
         showAlert('Token updated successfully!', 'success');
         closeModal('tokenModal');
         if (typeof window.tokenModalCallback === 'function') window.tokenModalCallback();
-        refreshFiles();
-        updateFolderList();
+        listFiles();
+        listFolders();
     }
 
     function promptRename(fullName, storageName, isFolder) {
@@ -1620,7 +1693,7 @@
                         }
                         selectedFiles.clear();
                         updateDeleteButton();
-                        refreshFiles();
+                        listFiles();
                         closeModal('moveModal');
                     }
                 })
@@ -1630,7 +1703,7 @@
                         showAlert(`Moved ${movedCount} files, ${errorCount} failed`, 'error');
                         selectedFiles.clear();
                         updateDeleteButton();
-                        refreshFiles();
+                        listFiles();
                         closeModal('moveModal');
                     }
                 });
