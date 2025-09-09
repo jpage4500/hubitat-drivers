@@ -1003,19 +1003,23 @@
             });
         }
 
-        Promise.all(fileArray.map(file =>
-            uploadFile(file)
-                .then(() => { done++; updateAlert(); })
-                .catch(() => { done++; failed++; updateAlert(); })
-        )).then(() => {
-            setTimeout(removeAlert, 500);
-            if (failed === 0) {
-                showAlert('All files uploaded successfully!', 'success');
-            } else {
-                showAlert(`${fileArray.length - failed} uploaded, ${failed} failed.`, 'error');
+        // Sequential upload logic
+        function uploadSequentially(index) {
+            if (index >= fileArray.length) {
+                setTimeout(removeAlert, 500);
+                if (failed === 0) {
+                    showAlert('All files uploaded successfully!', 'success');
+                } else {
+                    showAlert(`${fileArray.length - failed} uploaded, ${failed} failed.`, 'error');
+                }
+                refreshFiles();
+                return;
             }
-            refreshFiles();
-        });
+            uploadFile(fileArray[index])
+                .then(() => { done++; updateAlert(); uploadSequentially(index + 1); })
+                .catch(() => { done++; failed++; updateAlert(); uploadSequentially(index + 1); });
+        }
+        uploadSequentially(0);
     }
 
     // Refresh file list
