@@ -1,11 +1,11 @@
 {
   "packageName": "File Manager+",
   "author": "Joe Page",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2025-09-02",
   "communityLink": "https://community.hubitat.com/t/file-manager-beta/156586",
-  "releaseNotes": "- re-try Hubitat API calls if they fail due to AccessDeniedException (PR from @iamtrep)",
+  "releaseNotes": "- better handling of multiple file uploads and deletes",
   "apps": [
     {
       "id": "764e673c-d27e-44e2-be98-70def8ea9d66",
