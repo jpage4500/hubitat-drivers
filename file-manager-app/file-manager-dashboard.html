@@ -235,7 +235,6 @@
         }
 
         .file-checkbox {
-            margin-right: 10px;
             transform: scale(1.1);
         }
 
@@ -554,7 +553,7 @@
             width: 100%;
             border-collapse: collapse;
             margin-top: 10px;
-            table-layout: auto; /* Change from fixed to auto */
+            table-layout: auto;
         }
 
         .file-table th, .file-table td {
@@ -584,12 +583,14 @@
             background: #d1e7fd !important; /* Ensure hover color is applied */
         }
 
+        /* odd rows */
         .file-table tr:nth-child(odd) {
-            background-color: #ffffff; /* White for odd rows */
+            background-color: #ffffff;
         }
 
+        /* even rows */
         .file-table tr:nth-child(even) {
-            background-color: #f8f9fa; /* Light gray for even rows */
+            background-color: #f8f9fa;
         }
 
         .file-table .btn {
@@ -597,33 +598,9 @@
             font-size: 0.8em;
         }
 
-        .file-table th:nth-child(2),
-        .file-table td:nth-child(2) {
-            width: 60%; /* Allocate most space to the Name column */
-        }
-
-        .file-table th:nth-child(3),
-        .file-table td:nth-child(3),
-        .file-table th:nth-child(4),
-        .file-table td:nth-child(4),
-        .file-table th:nth-child(5),
-        .file-table td:nth-child(5) {
-            white-space: nowrap; /* Prevent wrapping */
-        }
-
-        .file-table td:nth-child(3),
-        .file-table td:nth-child(4) {
-            color: #6c757d; /* Lighter text color for size and date */
-        }
-
-        .file-table td:nth-child(5) {
-            display: flex;
-            justify-content: flex-start;
-            gap: 5px;
-        }
-
+        /* divider line under the table header */
         .file-table thead tr {
-            border-bottom: 2px solid #e9ecef; /* Add a divider line under the table header */
+            border-bottom: 2px solid #e9ecef;
         }
     </style>
 </head>
@@ -1099,7 +1076,12 @@
             if (a.isFolder && !b.isFolder) return -1;
             if (!a.isFolder && b.isFolder) return 1;
             let cmp = 0;
-            if (sortOrder === 'name') {
+            if (sortOrder === 'type') {
+                // Use getFileIconClass for type
+                const typeA = a.isFolder ? 'folder' : getFileIconClass(a.name);
+                const typeB = b.isFolder ? 'folder' : getFileIconClass(b.name);
+                cmp = typeA.localeCompare(typeB, undefined, {sensitivity: 'base'});
+            } else if (sortOrder === 'name') {
                 cmp = a.name.localeCompare(b.name, undefined, {sensitivity: 'base'});
             } else if (sortOrder === 'date') {
                 cmp = (a.lastModified || 0) - (b.lastModified || 0);
@@ -1118,17 +1100,18 @@
         <table class="file-table">
             <thead>
                 <tr>
-                    <th><input type="checkbox" id="selectAllCheckbox" onclick="toggleSelectAllFiles(this.checked)"></th>
+                    <th style="width:32px;min-width:32px;max-width:32px;text-align:center;padding-left:0;padding-right:0;"><input type="checkbox" id="selectAllCheckbox" onclick="toggleSelectAllFiles(this.checked)"></th>
+                    <th onclick="setSortOrder('type')" style="cursor: pointer; width:36px;min-width:36px;max-width:36px;text-align:center;padding-left:0;padding-right:0;">📎</th>
                     <th onclick="setSortOrder('name')" style="cursor: pointer; font-weight: ${sortOrder === 'name' ? 'bold' : 'normal'};">
-                        Name <span style="float: right;">${sortOrder === 'name' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}</span>
+                        Name <span style="float: right;">${sortOrder === 'name' ? (sortDirection === 'asc' ? '⏶' : '⏷') : ''}</span>
                     </th>
-                    <th onclick="setSortOrder('size')" style="cursor: pointer; font-weight: ${sortOrder === 'size' ? 'bold' : 'normal'};">
-                        Size <span style="float: right;">${sortOrder === 'size' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}</span>
+                    <th onclick="setSortOrder('size')" style="cursor: pointer; font-weight: ${sortOrder === 'size' ? 'bold' : 'normal'}; white-space:nowrap; width:1%; text-align:center;">
+                        Size <span style="float: right;">${sortOrder === 'size' ? (sortDirection === 'asc' ? '⏶' : '⏷') : ''}</span>
                     </th>
-                    <th onclick="setSortOrder('date')" style="cursor: pointer; font-weight: ${sortOrder === 'date' ? 'bold' : 'normal'};">
-                        Date <span style="float: right;">${sortOrder === 'date' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}</span>
+                    <th onclick="setSortOrder('date')" style="cursor: pointer; font-weight: ${sortOrder === 'date' ? 'bold' : 'normal'}; white-space:nowrap; width:1%;">
+                        Date <span style="float: right;">${sortOrder === 'date' ? (sortDirection === 'asc' ? '⏶' : '⏷') : ''}</span>
                     </th>
-                    <th>Actions</th>
+                    <th style="width:1%;white-space:nowrap;text-align:center;padding-left:0;padding-right:5px;">Actions</th>
                 </tr>
             </thead>
             <tbody>
@@ -1139,6 +1122,14 @@
             const dateStr = file.lastModified ? formatFileDate(file.lastModified) : '';
             const sizeStr = file.isFolder ? 'Folder' : formatFileSize(file.size || 0);
             const icon = file.isFolder ? '📁' : getFileIcon(file.name);
+            const isImage = icon === '🖼️';
+            // Only wrap the icon in a span for hover, not the filename
+            const iconSpan = file.isFolder
+                ? `<span style="display:inline-block;width:24px;text-align:center;">${icon}</span>`
+                : `<span class="file-icon-span${isImage ? ' image-hoverable' : ''}" data-filename="${file.fullName}"${isImage ? ` data-img-url=\"${API_BASE}/download/${encodeURIComponent(file.fullName)}?access_token=${accessToken}\"` : ''} style="display:inline-block;width:24px;text-align:center;cursor:pointer;">${icon}</span>`;
+            const nameSpan = file.isFolder
+                ? `<span style="cursor:pointer;" onclick="navigateToFolder('${file.name}')">${displayName}</span>`
+                : `<span style="cursor:pointer;" onclick="downloadFile('${file.fullName}')">${displayName}</span>`;
             const actions = file.isFolder
                 ? `<button class="btn btn-sm btn-clear" onclick="promptRename('${file.fullName}', '${file.name}', true)">✏️</button>
                    <button class="btn btn-sm btn-clear" onclick="showDeleteFolderDialog('${file.name}')">🗑️</button>`
@@ -1147,11 +1138,12 @@
 
             return `
             <tr data-filename="${file.fullName}">
-                <td><input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)"></td>
-                <td>${file.isFolder ? `<span style="cursor:pointer;" onclick="navigateToFolder('${file.name}')">${icon} ${displayName}</span>` : `<span style="cursor:pointer;" onclick="downloadFile('${file.fullName}')">${icon} ${displayName}</span>`}</td>
-                <td style="text-align: right;">${sizeStr}</td>
-                <td>${dateStr}</td>
-                <td>${actions}</td>
+                <td style="width:32px;min-width:32px;max-width:32px;text-align:center;padding-left:0;padding-right:0;"><input type="checkbox" class="file-checkbox" onchange="toggleFileSelection('${file.fullName}', this.checked)"></td>
+                <td style="width:36px;min-width:36px;max-width:36px;text-align:center;padding-left:0;padding-right:0;">${iconSpan}</td>
+                <td>${nameSpan}</td>
+                <td style="text-align: right; color: #888; white-space:nowrap; width:1%;">${sizeStr}</td>
+                <td style="color: #888; white-space:nowrap; width:1%;">${dateStr}</td>
+                <td style="width:1%;white-space:nowrap;text-align:center;padding-left:0;padding-right:5px;">${actions}</td>
             </tr>
         `;
         }).join('');
@@ -1164,7 +1156,7 @@
     function getFileIconClass(filename) {
         const ext = filename.split('.').pop().toLowerCase();
         if (['jpg', 'jpeg', 'png', 'gif', 'bmp'].includes(ext)) return 'image';
-        else if (['pdf', 'doc', 'docx', 'txt'].includes(ext)) return 'document';
+        else if (['pdf', 'doc', 'docx', 'txt', 'html', 'json'].includes(ext)) return 'document';
         else if (['mp3', 'wav', 'ogg'].includes(ext)) return 'audio';
         else if (['mp4', 'avi', 'mov'].includes(ext)) return 'video';
         else if (['zip', 'rar', '7z'].includes(ext)) return 'archive';
@@ -1175,7 +1167,7 @@
     function getFileIcon(filename) {
         const type = getFileIconClass(filename);
         if (type === 'image') return '🖼️';
-        else if (type === 'document') return '📄';
+        else if (type === 'document') return '📝';
         else if (type === 'audio') return '🎵';
         else if (type === 'video') return '🎬';
         else if (type === 'archive') return '📦';
@@ -1822,6 +1814,48 @@
             if (tokenBtn) tokenBtn.style.display = 'none';
         }
     }
+</script>
+<div id="imagePopover"
+     style="display:none;position:absolute;z-index:3000;background:white;border:1px solid #ccc;padding:4px;border-radius:6px;box-shadow:0 2px 8px rgba(0,0,0,0.15);max-width:220px;max-height:220px;pointer-events:none;"></div>
+<script>
+    // Image popover logic
+    (function () {
+        const popover = document.getElementById('imagePopover');
+        let hideTimeout = null;
+
+        function showPopover(imgUrl, target) {
+            popover.innerHTML = `<img src="${imgUrl}" style="max-width:200px;max-height:200px;display:block;">`;
+            popover.style.display = 'block';
+            // Position popover near the target
+            const rect = target.getBoundingClientRect();
+            popover.innerHTML = `<img src="${imgUrl}" alt="Image preview" style="max-width:200px;max-height:200px;display:block;">`;
+            const scrollX = window.scrollX || window.pageXOffset;
+            popover.style.top = (rect.bottom + scrollY + 6) + 'px';
+            popover.style.left = (rect.left + scrollX) + 'px';
+        }
+
+        function hidePopover() {
+            popover.style.display = 'none';
+            popover.innerHTML = '';
+        }
+
+        document.addEventListener('mouseover', function (e) {
+            const el = e.target.closest('.image-hoverable');
+            if (el && el.dataset.imgUrl) {
+                clearTimeout(hideTimeout);
+                showPopover(el.dataset.imgUrl, el);
+            }
+        });
+        document.addEventListener('mouseout', function (e) {
+            const el = e.target.closest('.image-hoverable');
+            if (el) {
+                hideTimeout = setTimeout(hidePopover, 100);
+            }
+        });
+        // Hide popover on scroll or resize
+        window.addEventListener('scroll', hidePopover);
+        window.addEventListener('resize', hidePopover);
+    })();
 </script>
 </body>
 </html>
