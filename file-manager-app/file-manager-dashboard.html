@@ -946,47 +946,76 @@
 
     // Handle file uploads
     function handleFiles(files) {
-        Array.from(files).forEach(file => {
-            uploadFile(file);
+        const fileArray = Array.from(files);
+        if (fileArray.length === 0) return;
+
+        // Show persistent alert for upload progress
+        let alert = document.createElement('div');
+        alert.className = 'alert alert-success';
+        alert.id = 'uploadProgressAlert';
+        alert.textContent = `Uploading 0 of ${fileArray.length} files...`;
+        document.body.appendChild(alert);
+
+        let done = 0, failed = 0;
+
+        // Helper to update alert
+        function updateAlert() {
+            alert.textContent = `Uploading ${done} of ${fileArray.length} files...`;
+        }
+
+        // Helper to remove alert
+        function removeAlert() {
+            if (alert) alert.remove();
+        }
+
+        // Upload a single file, returns a Promise
+        function uploadFile(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    const base64Content = e.target.result.split(',')[1];
+                    fetch(`${API_BASE}/upload?access_token=${accessToken}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            filename: file.name,
+                            content: base64Content,
+                            folder: currentFolder
+                        })
+                    })
+                        .then(response => response.text())
+                        .then(text => {
+                            try {
+                                const data = JSON.parse(text);
+                                if (data.success) {
+                                    resolve();
+                                } else {
+                                    reject(data.error || 'Unknown error');
+                                }
+                            } catch (e) {
+                                reject('Invalid JSON response');
+                            }
+                        })
+                        .catch(error => reject(error.message));
+                };
+                reader.onerror = () => reject('File read error');
+                reader.readAsDataURL(file);
+            });
+        }
+
+        Promise.all(fileArray.map(file =>
+            uploadFile(file)
+                .then(() => { done++; updateAlert(); })
+                .catch(() => { done++; failed++; updateAlert(); })
+        )).then(() => {
+            setTimeout(removeAlert, 500);
+            if (failed === 0) {
+                showAlert('All files uploaded successfully!', 'success');
+            } else {
+                showAlert(`${fileArray.length - failed} uploaded, ${failed} failed.`, 'error');
+            }
+            refreshFiles();
         });
-    }
-
-    // Upload a single file
-    function uploadFile(file) {
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            const base64Content = e.target.result.split(',')[1];
-
-            fetch(`${API_BASE}/upload?access_token=${accessToken}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    filename: file.name,
-                    content: base64Content,
-                    folder: currentFolder
-                })
-            })
-                .then(response => response.text())
-                .then(text => {
-                    try {
-                        const data = JSON.parse(text);
-                        if (data.success) {
-                            showAlert('File uploaded successfully!', 'success');
-                            refreshFiles();
-                        } else {
-                            showAlert('Upload failed: ' + (data.error || 'Unknown error'), 'error');
-                        }
-                    } catch (e) {
-                        showAlert('Upload error: Invalid JSON response', 'error');
-                    }
-                })
-                .catch(error => {
-                    showAlert('Upload error: ' + error.message, 'error');
-                });
-        };
-        reader.readAsDataURL(file);
     }
 
     // Refresh file list
