@@ -643,8 +643,8 @@
                            oninput="onFileFilterInput()">
                     <button class="btn btn-primary" onclick="listFiles()">🔄 Refresh</button>
                     <button class="btn btn-secondary" id="tokenBtn" onclick="showTokenModal()">🔑 Token</button>
-                    <button class="btn btn-success" onclick="moveSelectedToFolder()" id="moveSelectedBtn"
-                            style="display: none;">���� Move to Folder
+                    <button class="btn btn-success" onclick="showMoveDialog()" id="moveSelectedBtn"
+                            style="display: none;">🔀 Move Selected
                     </button>
                     <button class="btn btn-danger" onclick="deleteSelected()" id="deleteSelectedBtn"
                             style="display: none;">🗑️ Delete Selected
@@ -709,7 +709,7 @@
         </div>
         <div style="text-align: right; margin-top: 20px;">
             <button class="btn" onclick="closeModal('moveModal')">Cancel</button>
-            <button class="btn btn-success" onclick="confirmMove()">Move</button>
+            <button class="btn btn-success" onclick="moveFiles()">Move</button>
         </div>
     </div>
 </div>
@@ -1603,7 +1603,7 @@
                 moveBtn.style.display = 'none';
             } else {
                 moveBtn.style.display = 'inline-block';
-                moveBtn.textContent = `📁 Move Selected (${selectedFiles.size})`;
+                moveBtn.textContent = `🔀 Move Selected (${selectedFiles.size})`;
             }
         } else {
             deleteBtn.style.display = 'none';
@@ -1611,8 +1611,7 @@
         }
     }
 
-    // Move selected files to folder
-    function moveSelectedToFolder() {
+    function showMoveDialog() {
         if (selectedFiles.size === 0) return;
 
         // Populate folder dropdown
@@ -1644,22 +1643,50 @@
         document.getElementById('moveModal').style.display = 'block';
     }
 
-    // Confirm move operation
-    function confirmMove() {
+    function moveFiles() {
         const targetFolder = document.getElementById('moveFolderSelect').value;
         const fileList = Array.from(selectedFiles);
+        if (fileList.length === 0) return;
+
+        // Show persistent alert for move progress
+        let alert = document.createElement('div');
+        alert.className = 'alert alert-success';
+        alert.id = 'moveProgressAlert';
+        alert.textContent = `Moving ${fileList.length} files...`;
+        document.body.appendChild(alert);
 
         let movedCount = 0;
         let errorCount = 0;
 
-        fileList.forEach(filename => {
+        function updateAlert() {
+            alert.textContent = `Moving ${movedCount + errorCount} of ${fileList.length} files...`;
+        }
+
+        function removeAlert() {
+            if (alert) alert.remove();
+        }
+
+        function moveNext(index) {
+            if (index >= fileList.length) {
+                setTimeout(removeAlert, 500);
+                if (errorCount > 0) {
+                    showAlert(`Moved ${movedCount} files, ${errorCount} failed`, 'error');
+                } else {
+                    showAlert(`Successfully moved ${movedCount} files`, 'success');
+                }
+                selectedFiles.clear();
+                updateDeleteButton();
+                listFiles();
+                closeModal('moveModal');
+                return;
+            }
             fetch(`${API_BASE}/move-file?access_token=${accessToken}`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    filename: filename,
+                    filename: fileList[index],
                     targetFolder: targetFolder
                 })
             })
@@ -1675,31 +1702,18 @@
                     } catch (e) {
                         errorCount++;
                     }
-
-                    // Check if all operations are complete
-                    if (movedCount + errorCount === fileList.length) {
-                        if (errorCount > 0) {
-                            showAlert(`Moved ${movedCount} files, ${errorCount} failed`, 'error');
-                        } else {
-                            showAlert(`Successfully moved ${movedCount} files`, 'success');
-                        }
-                        selectedFiles.clear();
-                        updateDeleteButton();
-                        listFiles();
-                        closeModal('moveModal');
-                    }
+                    updateAlert();
+                    moveNext(index + 1);
                 })
-                .catch(error => {
+                .catch(() => {
                     errorCount++;
-                    if (movedCount + errorCount === fileList.length) {
-                        showAlert(`Moved ${movedCount} files, ${errorCount} failed`, 'error');
-                        selectedFiles.clear();
-                        updateDeleteButton();
-                        listFiles();
-                        closeModal('moveModal');
-                    }
+                    updateAlert();
+                    moveNext(index + 1);
                 });
-        });
+        }
+
+        updateAlert();
+        moveNext(0);
     }
 
     // Delete selected files and folders
