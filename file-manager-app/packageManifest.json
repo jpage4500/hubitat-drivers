@@ -1,11 +1,11 @@
 {
   "packageName": "File Manager+",
   "author": "Joe Page",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2025-09-02",
   "communityLink": "https://community.hubitat.com/t/file-manager-beta/156586",
-  "releaseNotes": "- better handling of multiple file uploads and deletes",
+  "releaseNotes": "- move icon to it's own sortable column \n- add popover (preview) window when hovering over icon for images\n- refactor move files to move 1 at a time\n- fix error handling \n- add max upload filesize setting (default: 10 MB)\n- show additional warning when deleting folder",
   "apps": [
     {
       "id": "764e673c-d27e-44e2-be98-70def8ea9d66",
