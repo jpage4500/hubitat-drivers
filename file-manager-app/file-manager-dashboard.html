@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hubitat File Manager+</title>
+    <title>File Manager+</title>
     <!-- set favicon dynamically -->
     <link rel="icon"
           href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%22110%22>📁</text></svg>">
@@ -646,7 +646,7 @@
                     <button class="btn btn-success" onclick="showMoveDialog()" id="moveSelectedBtn"
                             style="display: none;">🔀 Move Selected
                     </button>
-                    <button class="btn btn-danger" onclick="deleteSelected()" id="deleteSelectedBtn"
+                    <button class="btn btn-danger" onclick="showDeleteSelectedDialog()" id="deleteSelectedBtn"
                             style="display: none;">🗑️ Delete Selected
                     </button>
                 </div>
@@ -967,7 +967,7 @@
                                 if (data.success) {
                                     resolve();
                                 } else {
-                                    reject(data.error || 'Unknown error');
+                                    reject(data.message || 'Unknown error');
                                 }
                             } catch (e) {
                                 reject('Invalid JSON response');
@@ -1319,7 +1319,7 @@
                         listFolders();
                         listFiles();
                     } else {
-                        showAlert('Failed to create folder: ' + (data.error || 'Unknown error'), 'error');
+                        showAlert('Failed to create folder: ' + (data.message || 'Unknown error'), 'error');
                     }
                 } catch (e) {
                     console.error('Invalid JSON response:', text);
@@ -1355,9 +1355,11 @@
         // Reset modal for single item deletion
         document.getElementById('deleteModalTitle').textContent = 'Confirm Delete';
         document.getElementById('deleteItemName').textContent = folderDisplayName;
-        document.getElementById('deleteModalDetails').style.display = 'none';
-
+        document.getElementById('deleteModalDetails').style.display = 'block';
         document.getElementById('deleteModal').style.display = 'block';
+
+        const itemListDiv = document.getElementById('deleteItemList');
+        itemListDiv.innerHTML = '<div style="margin-top: 10px; padding: 8px; background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 4px; color: #856404;"><strong>⚠️ Warning:</strong> Deleting a folder will also delete all files inside it.</div>';
     }
 
     // delete selected file(s) or folder(s)
@@ -1467,9 +1469,10 @@
                         listFiles();
                         listFolders();
                     } else {
-                        showAlert(`Failed to delete ${deleteTarget.type}: ` + data.error, 'error');
+                        showAlert(`Error: ` + data.message, 'error');
                     }
                 } catch (e) {
+                    showAlert(`Failed to delete ${deleteTarget.type}: ` + e.message + ', text: ' + text, 'error');
                     console.error('Error parsing folders:', e);
                 }
             })
@@ -1524,7 +1527,7 @@
                         listFiles();
                         listFolders();
                     } else {
-                        showAlert('Rename failed: ' + (data.error || 'Unknown error'), 'error');
+                        showAlert('Rename failed: ' + (data.message || 'Unknown error'), 'error');
                     }
                 } catch (e) {
                     showAlert('Rename error: Invalid response', 'error');
@@ -1716,8 +1719,7 @@
         moveNext(0);
     }
 
-    // Delete selected files and folders
-    function deleteSelected() {
+    function showDeleteSelectedDialog() {
         if (selectedFiles.size === 0) return;
 
         const fileList = Array.from(selectedFiles);
