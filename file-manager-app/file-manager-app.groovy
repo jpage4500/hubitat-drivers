@@ -43,6 +43,10 @@ preferences {
                 paragraph "App ID: ${app.id}"
             }
         }
+        section("Preferences") {
+            input name: "maxFileSize", type: "number", title: "Max upload file size (MB)", defaultValue: 10, range: "1..100"
+            input name: "debugOutput", type: "bool", title: "Enable Debug Logging?", defaultValue: false, submitOnChange: true
+        }
     }
 }
 
@@ -91,21 +95,21 @@ mappings {
 
 @Field static String FOLDER_PREFIX = "folder_"
 @Field static String FOLDER_NAME_SUFFIX = "_folder.marker"
+@Field static String DASHBOARD_FILENAME = "file-manager-dashboard.html"
 
 def installed() {
-    log.debug "File Manager App installed"
+    logDebug("File Manager App installed")
     initialize()
 }
 
 def updated() {
-    log.debug "File Manager App updated"
+    logDebug("File Manager App updated")
     initialize()
 }
 
 def initialize() {
     state.showHiddenFiles = showHiddenFiles ?: false
     state.fileTypes = fileTypes ?: ""
-    state.maxFileSize = maxFileSize ?: 10
     state.sortOrder = "name"
     state.sortDirection = "asc"
 
@@ -119,7 +123,7 @@ def getSpaceChar() { return '.' }
 def getAllFiles() {
     try {
         def allFiles = getHubFiles()
-        //log.debug "getAllFiles: ${allFiles.size()} files"
+        //logDebug("getAllFiles: ${allFiles.size()} files"
         return allFiles
     } catch (Exception e) {
         log.error "Error getting files: ${e.message}"
@@ -227,8 +231,8 @@ def deleteFolder(String folderName) {
 
         def deletedCount = 0
         folderFiles.each { file ->
-            log.debug "Deleting file: ${file.name}"
-            safeDeleteHubFile(file.name) // returns void
+            logDebug("Deleting file: ${file.name}")
+            safeDeleteHubFile(file.name)
             deletedCount++
         }
 
@@ -251,8 +255,9 @@ def uploadFileWithOrganization(String filename, byte[] content, String folder) {
             finalFilename = "${FOLDER_PREFIX}${safeFolder}_${safeFilename}"
         }
         // Check file size
-        if (content.length > (state.maxFileSize * 1024 * 1024)) {
-            log.error "File ${filename} exceeds maximum size of ${state.maxFileSize}MB"
+        def maxFileSize = settings?.maxFileSize ? settings.maxFileSize : 10
+        if (content.length > (maxFileSize * 1024 * 1024)) {
+            log.error "File ${filename} exceeds maximum size of ${maxFileSize}MB"
             return false
         }
         safeUploadHubFile(finalFilename, content)
@@ -266,18 +271,15 @@ def uploadFileWithOrganization(String filename, byte[] content, String folder) {
 
 // API endpoint: view dashboard
 def dashboard() {
-    def filename = "file-manager-dashboard.html"
     try {
-        byte[] bytes = safeDownloadHubFile(filename)
+        byte[] bytes = safeDownloadHubFile(DASHBOARD_FILENAME)
         if (!bytes) {
-            render status: 404, text: "File not found: ${filename}"
-            return
+            return renderResponse(404, "File not found: ${DASHBOARD_FILENAME}")
         }
-        //log.debug "Viewing dashboard file: ${filename}, size: ${bytes.length} bytes"
         render contentType: "text/html", data: bytes
     } catch (Exception e) {
-        log.error "Error viewing dashboard ${filename}: ${e.message}"
-        render status: 500, text: "Error viewing dashboard"
+        log.error "Error viewing dashboard ${DASHBOARD_FILENAME}: ${e.message}"
+        return renderResponse(500, "Error viewing dashboard: ${DASHBOARD_FILENAME}")
     }
 }
 
@@ -285,7 +287,7 @@ def dashboard() {
 def listFiles() {
     // Accept folder param from either JSON body or query string
     def folder = (request.JSON?.folder) ?: params.folder
-    //log.debug "Listing files in folder: ${folder ?: 'all'}"
+    //logDebug("Listing files in folder: ${folder ?: 'all'}"
 
     def files
     if (folder) {
@@ -345,11 +347,11 @@ def uploadFile() {
     def content = params.content
     def folder = params.folder
 
-    log.debug "Uploading file: ${filename} to folder: ${folder ?: 'root'}"
+    logDebug("Uploading file: ${filename} to folder: ${folder ?: 'root'}")
 
     if (!filename || !content) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename or content"])
-        return
+        log.error "Missing filename: ${filename} or content"
+        return renderResponse(400, "Missing filename or content")
     }
 
     // Decode base64 content
@@ -357,16 +359,16 @@ def uploadFile() {
     try {
         fileContent = content.decodeBase64()
     } catch (Exception e) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Invalid content encoding"])
-        return
+        log.error "Invalid content encoding: ${e.message}"
+        return renderResponse(400, "Invalid content for ${filename}")
     }
 
     def success = uploadFileWithOrganization(filename, fileContent, folder)
 
     if (success) {
-        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File uploaded successfully"])
+        return renderResponse(200, "File uploaded successfully")
     } else {
-        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to upload file"])
+        return renderResponse(500, "Failed to upload file: ${filename}")
     }
 }
 
@@ -376,26 +378,28 @@ def deleteFile() {
     def filename = params.filename
 
     if (!filename) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename"])
-        return
+        log.error "Missing filename"
+        return renderResponse(400, "Missing filename")
+    } else if (filename == DASHBOARD_FILENAME) {
+        log.error "Cannot delete dashboard file: ${DASHBOARD_FILENAME}"
+        return renderResponse(400, "Cannot delete dashboard file: ${DASHBOARD_FILENAME}")
     }
 
-    log.debug "Deleting file: ${filename}"
+    logDebug("Deleting file: ${filename}")
     def allFiles = getAllFiles()
     def allFileNames = allFiles.collect { it.name }
 
     if (!allFileNames.contains(filename)) {
         log.error "File not found: ${filename}"
-        render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found", files: allFileNames])
-        return
+        return renderResponse(404, "file not found: ${filename}")
     }
 
     try {
-        safeDeleteHubFile(filename) // returns void
-        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File deleted successfully"])
+        safeDeleteHubFile(filename)
+        return renderResponse(200, "File deleted successfully")
     } catch (Exception e) {
         log.error "Error deleting file ${filename}: ${e.message}"
-        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to delete file", exception: e.message])
+        return renderResponse(500, "Failed to delete file: ${filename}: ${e.message}")
     }
 }
 
@@ -403,15 +407,13 @@ def deleteFile() {
 def downloadFile() {
     def filename = params.filename
     if (!filename) {
-        render status: 400, text: "Missing filename"
-        return
+        return renderResponse(400, "Missing filename")
     }
 
     try {
         byte[] bytes = safeDownloadHubFile(filename)
         if (!bytes) {
-            render status: 404, text: "File not found: ${filename}"
-            return
+            return renderResponse(404, "File not found: ${filename}")
         }
 
         def ext = filename.tokenize('.').last().toLowerCase()
@@ -432,7 +434,7 @@ def downloadFile() {
         render contentType: contentType, data: bytes
     } catch (Exception e) {
         log.error "Error downloading file ${filename}: ${e.message}"
-        render status: 500, text: "Error downloading file"
+        return renderResponse(500, "File not found: ${filename}, error: ${e.message}")
     }
 }
 
@@ -442,13 +444,11 @@ def createFolder() {
     def folderName = params.folderName
 
     if (!folderName) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing folder name"])
-        return
+        return renderResponse(400, "Missing folder name")
     }
     // Validation: cannot start with period
     if (folderName.startsWith('.')) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Folder names cannot start with a period."])
-        return
+        return renderResponse(400, "Folder names cannot start with a period")
     }
     // Replace spaces with FILE_SAFE_CHAR
     def safeFolderName = folderName.replaceAll(' ', getSpaceChar())
@@ -456,9 +456,9 @@ def createFolder() {
     def success = createFolder(safeFolderName)
 
     if (success) {
-        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder created successfully", folderName: safeFolderName])
+        return renderResponse(200, "Folder created successfully")
     } else {
-        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to create folder"])
+        return renderResponse(500, "Failed to create folder: ${folderName}")
     }
 }
 
@@ -468,16 +468,15 @@ def deleteFolder() {
     def folderName = params.folderName
 
     if (!folderName) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing folder name"])
-        return
+        return renderResponse(400, "Missing folder name")
     }
 
     def deletedCount = deleteFolder(folderName)
 
     if (deletedCount >= 0) {
-        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder deleted successfully", deletedCount: deletedCount])
+        return renderResponse(200, "Folder deleted successfully (${deletedCount} files)")
     } else {
-        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to delete folder"])
+        return renderResponse(500, "Failed to delete folder: ${folderName}")
     }
 }
 
@@ -489,16 +488,17 @@ def moveFile() {
 
     if (!filename) {
         log.error "moveFile: Missing filename"
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing filename"])
-        return
+        return renderResponse(400, "Missing filename")
+    } else if (filename == DASHBOARD_FILENAME) {
+        log.error "Cannot move dashboard file: ${DASHBOARD_FILENAME}"
+        return renderResponse(400, "Cannot move dashboard file: ${DASHBOARD_FILENAME}")
     }
 
     try {
         // Download the file
         byte[] content = safeDownloadHubFile(filename)
         if (!content) {
-            render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found"])
-            return
+            return renderResponse(404, "File not found: ${filename}")
         }
 
         // Always remove any existing folder prefix from filename
@@ -510,12 +510,11 @@ def moveFile() {
             newFilename = baseFilename
         }
 
-        log.debug "moveFile: file: ${filename} -> ${newFilename}"
+        logDebug("moveFile: file: ${filename} -> ${newFilename}")
 
         // If the new filename is the same as the old, just return success
         if (newFilename == filename) {
-            render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File already in target location"])
-            return
+            return renderResponse(200, "File already in target location")
         }
 
         // Upload to new location
@@ -524,10 +523,10 @@ def moveFile() {
         // Delete original file
         safeDeleteHubFile(filename)
 
-        render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File moved successfully"])
+        return renderResponse(200, "File moved successfully")
     } catch (Exception e) {
         log.error "Error moving file ${filename}: ${e.message}"
-        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to move file"])
+        return renderResponse(500, "Failed to move file: ${e.message}")
     }
 }
 
@@ -539,11 +538,13 @@ def renameFile() {
     def isFolder = params.isFolder
 
     if (!oldName || !newName) {
-        render status: 400, contentType: "application/json", data: JsonOutput.toJson([error: "Missing oldName or newName"])
-        return
+        return renderResponse(400, "Missing oldName or newName")
+    } else if (oldName == DASHBOARD_FILENAME) {
+        log.error "Cannot rename dashboard file: ${DASHBOARD_FILENAME}"
+        return renderResponse(400, "Cannot rename dashboard file: ${DASHBOARD_FILENAME}")
     }
 
-    log.debug "Renaming ${isFolder ? 'folder' : 'file'}: ${oldName} to ${newName}"
+    logDebug("Renaming ${isFolder ? 'folder' : 'file'}: ${oldName} to ${newName}")
 
     try {
         if (isFolder) {
@@ -560,7 +561,7 @@ def renameFile() {
             def folderPrefixNew = "${FOLDER_PREFIX}${newName}_"
             def allFiles = getAllFiles()
             def filesToRename = allFiles.findAll { it.name.startsWith(folderPrefixOld) && !it.name.endsWith(FOLDER_NAME_SUFFIX) }
-            log.debug "Renaming ${filesToRename.size()} files in folder ${oldName}"
+            logDebug("Renaming ${filesToRename.size()} files in folder ${oldName}")
             filesToRename.each { file ->
                 def newFileName = file.name.replaceFirst(folderPrefixOld, folderPrefixNew)
                 byte[] content = safeDownloadHubFile(file.name)
@@ -569,22 +570,28 @@ def renameFile() {
                     safeDeleteHubFile(file.name)
                 }
             }
-            render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "Folder and contents renamed successfully"])
+            return renderResponse(200, "Folder and contents renamed successfully")
         } else {
             // Rename a file
             byte[] content = safeDownloadHubFile(oldName)
             if (!content) {
-                render status: 404, contentType: "application/json", data: JsonOutput.toJson([error: "File not found"])
-                return
+                return renderResponse(404, "File not found")
             }
             safeUploadHubFile(newName, content)
             safeDeleteHubFile(oldName)
-            render contentType: "application/json", data: JsonOutput.toJson([success: true, message: "File renamed successfully"])
+            return renderResponse(200, "File renamed successfully")
         }
     } catch (Exception e) {
         log.error "Error renaming: ${oldName} to ${newName}: ${e.message}"
-        render status: 500, contentType: "application/json", data: JsonOutput.toJson([error: "Failed to rename", exception: e.message])
+        return renderResponse(500, "Failed to rename: ${e.message}")
     }
+}
+
+// return a consistent JSON response:
+// [success: true/false, message: "text"]
+def renderResponse(status, message) {
+    def json = [success: status == 200, message: message]
+    render status: status, contentType: "application/json", data: JsonOutput.toJson(json)
 }
 
 // Method to get public URLs for files
@@ -640,4 +647,10 @@ void safeDeleteHubFile(String fileName) {
     }
 
     log.error "Failed to delete ${fileName} after 3 attempts"
+}
+
+private logDebug(msg) {
+    if (settings?.debugOutput) {
+        log.debug("$msg")
+    }
 }
