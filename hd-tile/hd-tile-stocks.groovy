@@ -202,19 +202,28 @@ def refreshData() {
             httpGet(params) { resp ->
                 if (resp.status == 200) {
                     def quote = resp.data ?: [:]
-                    def cVal = (quote?.c != null) ? quote.c : null
-                    if (cVal != null) {
-                        logDebug("refreshData: ${sym}: val:${cVal}")
+                    def price = (quote?.c != null) ? quote.c : null
+                    def timestamp = (quote?.t != null) ? quote.t : null
+                    // Validate timestamp is from today
+                    if (timestamp != null) {
+                        def quoteDate = new Date(timestamp * 1000).format('yyyy-MM-dd', location?.timeZone)
+                        if (quoteDate != today) {
+                            logDebug("refreshData: ${sym}: Skipping quote with old date: ${quoteDate}")
+                            return
+                        }
+                    }
+                    if (price != null) {
+                        logDebug("refreshData: ${sym}: val:${price}")
                         // Ensure structure exists
                         if (!state.stockQuotes) state.stockQuotes = [:]
                         if (!state.stockQuotes[sym]) state.stockQuotes[sym] = []
 
                         // Append new entry
                         def existing = (state.stockQuotes[sym] as List) ?: []
-                        existing << [c: cVal, timestampMs: nowMs]
+                        existing << [c: price, t: timestamp]
                         // Only keep entries from today
                         existing = existing.findAll { entry ->
-                            def entryDate = new Date(entry.timestampMs).format('yyyy-MM-dd', location?.timeZone)
+                            def entryDate = new Date(entry.t * 1000).format('yyyy-MM-dd', location?.timeZone)
                             entryDate == today
                         }
                         state.stockQuotes[sym] = existing
