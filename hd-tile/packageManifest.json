@@ -1,7 +1,7 @@
 {
   "packageName": "HD+ Tile",
   "author": "Joe Page",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-24",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
@@ -13,6 +13,13 @@
       "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/hd-tile.groovy",
       "required": true
+    },
+    {
+      "id": "cdecd738-ec6a-4476-a4a3-d178479800c0",
+      "name": "HD+ Stock Ticker",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/hd-tile/hd-tile-stocks.groovy",
+      "required": false
     }
   ]
 }
