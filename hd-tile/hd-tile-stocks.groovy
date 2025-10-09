@@ -223,7 +223,12 @@ def refreshData() {
                     // Only keep entries from today
                     state.stockQuotes.each { sym2, quotes ->
                         state.stockQuotes[sym2] = (quotes as List).findAll { entry ->
-                            entry?.t && new Date(entry.t * 1000).format('yyyy-MM-dd', tz) == today
+                            Long compareTs = entry?.t as Long
+                            if (compareTs) {
+                                def entryDate = new Date(compareTs * 1000).format('yyyy-MM-dd', tz)
+                                return entryDate == today
+                            }
+                            return false
                         }
                     }
                 } else {
