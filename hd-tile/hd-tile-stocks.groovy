@@ -1,9 +1,3 @@
-// hubitat start
-// hub: 192.168.0.200
-// type: device
-// id: 1796
-// hubitat end
-
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * DESCRIPTION:
@@ -34,9 +28,9 @@ import groovy.json.JsonOutput
 
 metadata {
     definition(
-            name: "HD+ Stock Ticker",
-            namespace: "jpage4500",
-            author: "Joe Page"
+        name: "HD+ Stock Ticker",
+        namespace: "jpage4500",
+        author: "Joe Page"
     ) {
         // NOTE: capability is needed for driver to show up in MakerAPI list
         capability "Sensor"
@@ -53,14 +47,14 @@ preferences {
     input("symbols", "string", title: "Stock Symbols (comma-separated)", description: "e.g., AAPL, MSFT", required: true)
 
     input('refreshInterval', 'enum', title: 'Refresh Rate', required: true,
-            defaultValue: '900',
-            options: [
-                    "60"  : "1 Minute",
-                    "300" : "5 Minutes",
-                    "900" : "15 Minutes",
-                    "1800": "30 Minutes",
-                    "3600": "1 Hour"
-            ])
+        defaultValue: '900',
+        options: [
+            "60"  : "1 Minute",
+            "300" : "5 Minutes",
+            "900" : "15 Minutes",
+            "1800": "30 Minutes",
+            "3600": "1 Hour"
+        ])
 
     input name: "isLogging", type: "bool", title: "Enable Logging", description: "", required: true
 }
@@ -114,7 +108,7 @@ private List<String> getSymbolList() {
 
 private Map getAuthHeaders() {
     return [
-            'X-Finnhub-Token': settings?.apiToken
+        'X-Finnhub-Token': settings?.apiToken
     ]
 }
 
@@ -135,17 +129,17 @@ def fetchProfiles() {
 
     symbols.each { sym ->
         def params = [
-                uri    : "https://finnhub.io/api/v1/stock/profile2",
-                headers: headers,
-                query  : [symbol: sym]
+            uri    : "https://finnhub.io/api/v1/stock/profile2",
+            headers: headers,
+            query  : [symbol: sym]
         ]
         try {
             httpGet(params) { resp ->
                 if (resp.status == 200) {
                     def data = resp.data ?: [:]
                     profiles[sym] = [
-                            name: data?.name,
-                            logo: data?.logo
+                        name: data?.name,
+                        logo: data?.logo
                     ]
                     logDebug("fetchProfiles: ${sym}: ${profiles[sym]}")
                 } else {
@@ -187,15 +181,17 @@ def refreshData() {
     def symbols = getSymbolList()
     if (!symbols) return
 
+    def quoteMap = [:]
+
     def headers = getAuthHeaders()
-    def nowMs = now()
-    def today = todayString()
+    def tz = TimeZone.getTimeZone('America/New_York')
+    def today = new Date().format('yyyy-MM-dd', tz)
 
     symbols.each { sym ->
         def params = [
-                uri    : "https://finnhub.io/api/v1/quote",
-                headers: headers,
-                query  : [symbol: sym]
+            uri    : "https://finnhub.io/api/v1/quote",
+            headers: headers,
+            query  : [symbol: sym]
         ]
 
         try {
@@ -203,33 +199,32 @@ def refreshData() {
                 if (resp.status == 200) {
                     def quote = resp.data ?: [:]
                     def price = (quote?.c != null) ? quote.c : null
-                    def timestamp = (quote?.t != null) ? quote.t : null
-                    // Validate timestamp is from today
-                    if (timestamp != null) {
-                        def quoteDate = new Date(timestamp * 1000).format('yyyy-MM-dd', location?.timeZone)
-                        if (quoteDate != today) {
-                            logDebug("refreshData: ${sym}: Skipping quote with old date: ${quoteDate}")
-                            return
-                        }
+                    Long timestamp = (quote?.t != null) ? quote.t : null
+                    if (price == null || timestamp == null) {
+                        logDebug("refreshData: ${sym}: Incomplete quote data: ${quote}")
+                        return
                     }
-                    if (price != null) {
-                        logDebug("refreshData: ${sym}: val:${price}")
-                        // Ensure structure exists
-                        if (!state.stockQuotes) state.stockQuotes = [:]
-                        if (!state.stockQuotes[sym]) state.stockQuotes[sym] = []
+                    // Validate timestamp is from today
+                    def quoteDate = new Date(timestamp * 1000).format('yyyy-MM-dd', tz)
+                    if (quoteDate != today) {
+                        logDebug("refreshData: ${sym}: Skipping quote with old date: date:${quoteDate}, t:${timestamp}, today:${today}, quote:${quote}")
+                        return
+                    }
+                    logDebug("refreshData: ${sym}: val:${price}")
 
-                        // Append new entry
-                        def existing = (state.stockQuotes[sym] as List) ?: []
-                        existing << [c: price, t: timestamp]
-                        // Only keep entries from today
-                        existing = existing.findAll { entry ->
-                            def entryDate = new Date(entry.t * 1000).format('yyyy-MM-dd', location?.timeZone)
-                            entryDate == today
+                    // Track last full quote response per symbol
+                    quoteMap[sym] = quote
+
+                    // Append last quote value and timestamp
+                    def existing = (state.stockQuotes[sym] as List) ?: []
+                    existing << [c: price, t: timestamp]
+                    state.stockQuotes[sym] = existing
+
+                    // Only keep entries from today
+                    state.stockQuotes.each { sym2, quotes ->
+                        state.stockQuotes[sym2] = (quotes as List).findAll { entry ->
+                            entry?.t && new Date(entry.t * 1000).format('yyyy-MM-dd', tz) == today
                         }
-                        state.stockQuotes[sym] = existing
-                        // Track last full quote response per symbol
-                        if (!state.latestQuotes) state.latestQuotes = [:]
-                        state.latestQuotes[sym] = quote
                     }
                 } else {
                     log.error "refreshData(${sym}) failed with status ${resp.status}"
@@ -240,23 +235,18 @@ def refreshData() {
         }
     }
 
+    // save quotes
+    state.latestQuotes = quoteMap
+
     // Publish minimal quotes map: { SYMBOL: [c, c, ...] }
     def attrQuotes = [:]
-    try {
-        getSymbolList().each { sym ->
-            def list = (state.stockQuotes[sym] as List) ?: []
-            attrQuotes[sym] = list.collect { it?.c }
-        }
-        sendEvent(name: "stockQuotes", value: JsonOutput.toJson(attrQuotes))
-    } catch (e) {
-        sendEvent(name: "stockQuotes", value: "${attrQuotes}")
+    getSymbolList().each { sym ->
+        def list = (state.stockQuotes[sym] as List) ?: []
+        attrQuotes[sym] = list.collect { it?.c }
     }
+    sendEvent(name: "stockQuotes", value: JsonOutput.toJson(attrQuotes))
 
     // Publish latest full quote per symbol
-    try {
-        sendEvent(name: "latestQuotes", value: JsonOutput.toJson(state.latestQuotes ?: [:]))
-    } catch (e) {
-        sendEvent(name: "latestQuotes", value: "${state.latestQuotes ?: [:]}")
-    }
+    sendEvent(name: "latestQuotes", value: JsonOutput.toJson(state.latestQuotes))
     sendEvent(name: "lastUpdatedMs", value: now())
 }
