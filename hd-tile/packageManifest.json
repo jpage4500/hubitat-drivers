@@ -1,11 +1,11 @@
 {
   "packageName": "HD+ Tile",
   "author": "Joe Page",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-24",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "added support for AccuWeather Health",
+  "releaseNotes": "stock-ticker updates",
   "drivers": [
     {
       "id": "332d87f1-a671-4024-add8-99206881395f",
