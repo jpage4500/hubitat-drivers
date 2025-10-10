@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Google Photos Picker Example</title>
+    <script src="https://apis.google.com/js/api.js"></script>
+    <script src="https://accounts.google.com/gsi/client"></script>
+</head>
+<body>
+<h1>Google Photos Picker</h1>
+<button onclick="handleAuthClick()">Authorize and Pick Photos</button>
+<div id="content" style="margin-top: 20px;"></div>
+
+<script>
+    // Replace with your actual API Key, App ID, and Client ID
+    const API_KEY = 'YOUR_API_KEY';
+    const APP_ID = 'YOUR_APP_ID';
+    const CLIENT_ID = 'YOUR_CLIENT_ID.apps.googleusercontent.com';
+
+    let accessToken;
+
+    // Initialize Google API client
+    function gapiLoaded() {
+        gapi.load('client:picker', initializePicker);
+    }
+
+    // Initialize Google Identity Services
+    function gisLoaded() {
+        google.accounts.id.initialize({
+            client_id: CLIENT_ID,
+            callback: handleCredentialResponse
+        });
+        // You might want to prompt for a one-tap sign-in or a button
+        // google.accounts.id.prompt();
+    }
+
+    function handleCredentialResponse(response) {
+        accessToken = response.credential;
+        console.log('Access Token:', accessToken);
+        // Optionally, you can automatically create the picker here
+        // createPicker();
+    }
+
+    function handleAuthClick() {
+        if (!accessToken) {
+            // Request a new access token if not available
+            google.accounts.oauth2.initTokenClient({
+                client_id: CLIENT_ID,
+                scope: 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/photoslibrary.readonly',
+                callback: (tokenResponse) => {
+                    accessToken = tokenResponse.access_token;
+                    createPicker();
+                },
+            }).requestAccessToken();
+        } else {
+            createPicker();
+        }
+    }
+
+    function initializePicker() {
+        // Nothing specific to do here for picker initialization,
+        // as it's built when needed.
+    }
+
+    function createPicker() {
+        if (!accessToken) {
+            alert('Please authorize first.');
+            return;
+        }
+
+        const view = new google.picker.View(google.picker.ViewId.PHOTOS); // Use PHOTOS for Google Photos
+        view.setMimeTypes('image/png,image/jpeg,image/jpg'); // Filter for image types
+
+        const picker = new google.picker.PickerBuilder()
+            .enableFeature(google.picker.Feature.NAV_HIDDEN)
+            .enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+            .setDeveloperKey(API_KEY)
+            .setAppId(APP_ID)
+            .setOAuthToken(accessToken)
+            .addView(view)
+            .setCallback(pickerCallback)
+            .build();
+
+        picker.setVisible(true);
+    }
+
+    function pickerCallback(data) {
+        if (data.action === google.picker.Action.PICKED) {
+            const documents = data[google.picker.Response.DOCUMENTS];
+            if (documents && documents.length > 0) {
+                let output = 'Selected Photos:<br>';
+                documents.forEach(doc => {
+                    output += `ID: ${doc.id}, Name: ${doc.name}<br>`;
+                    // You can also get other details like thumbnailUrl, url etc.
+                });
+                document.getElementById('content').innerHTML = output;
+            } else {
+                document.getElementById('content').innerText = 'No photos selected.';
+            }
+        } else if (data.action === google.picker.Action.CANCEL) {
+            document.getElementById('content').innerText = 'Picker cancelled.';
+        }
+    }
+</script>
+</body>
+</html>
