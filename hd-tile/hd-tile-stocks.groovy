@@ -39,6 +39,9 @@ metadata {
         attribute "stockQuotes", "string"
         attribute "latestQuotes", "string"
         attribute "lastUpdatedMs", "number"
+
+        command "addSymbol", ["string"]
+        command "removeSymbol", ["string"]
     }
 }
 
@@ -92,8 +95,9 @@ def updated() {
     state.latestQuotes = state.latestQuotes ?: [:]
 
     // Fetch profiles immediately and then refresh quotes
-    fetchProfiles()
-    refreshData()
+    def symbolList = getSymbolList()
+    fetchProfiles(symbolList)
+    refreshData(symbolList)
 }
 
 def initialize() {
@@ -112,25 +116,15 @@ private Map getAuthHeaders() {
     ]
 }
 
-private String todayString() {
-    try {
-        return new Date().format('yyyy-MM-dd', location?.timeZone)
-    } catch (e) {
-        return new Date().format('yyyy-MM-dd')
-    }
-}
-
-def fetchProfiles() {
-    def symbols = getSymbolList()
+def fetchProfiles(def symbols) {
     if (!symbols) return
 
-    def headers = getAuthHeaders()
     def profiles = [:]
 
     symbols.each { sym ->
         def params = [
             uri    : "https://finnhub.io/api/v1/stock/profile2",
-            headers: headers,
+            headers: getAuthHeaders(),
             query  : [symbol: sym]
         ]
         try {
@@ -173,24 +167,22 @@ private boolean isMarketOpen() {
     }
 }
 
-def refreshData() {
+def refreshData(def symbols) {
+    if (!symbols) return
     if (!isMarketOpen()) {
         logDebug("Market is closed. Skipping quote fetch.")
         return
     }
-    def symbols = getSymbolList()
-    if (!symbols) return
 
     def quoteMap = [:]
 
-    def headers = getAuthHeaders()
     def tz = TimeZone.getTimeZone('America/New_York')
     def today = new Date().format('yyyy-MM-dd', tz)
 
     symbols.each { sym ->
         def params = [
             uri    : "https://finnhub.io/api/v1/quote",
-            headers: headers,
+            headers: getAuthHeaders(),
             query  : [symbol: sym]
         ]
 
@@ -199,7 +191,7 @@ def refreshData() {
                 if (resp.status == 200) {
                     def quote = resp.data ?: [:]
                     def price = (quote?.c != null) ? quote.c : null
-                    Long timestamp = (quote?.t != null) ? quote.t : null
+                    Long timestamp = (quote?.t != null) ? quote.t : null as Long
                     if (price == null || timestamp == null) {
                         logDebug("refreshData: ${sym}: Incomplete quote data: ${quote}")
                         return
@@ -254,4 +246,38 @@ def refreshData() {
     // Publish latest full quote per symbol
     sendEvent(name: "latestQuotes", value: JsonOutput.toJson(state.latestQuotes))
     sendEvent(name: "lastUpdatedMs", value: now())
+}
+
+def addSymbol(String symbol) {
+    symbol = symbol?.trim()?.toUpperCase()
+    if (!symbol) return
+    def symbolsList = getSymbolList()
+    if (!symbolsList.contains(symbol)) {
+        symbolsList << symbol
+        device.updateSetting("symbols", [value: symbolsList.join(", "), type: "string"])
+        logDebug("addSymbol: Added ${symbol}, symbols: ${symbolsList}")
+        fetchProfiles(symbolsList)
+        refreshData(symbolsList)
+    } else {
+        logDebug("addSymbol: Symbol ${symbol} already exists in ${symbolsList}.")
+    }
+}
+
+def removeSymbol(String symbol) {
+    symbol = symbol?.trim()?.toUpperCase()
+    if (!symbol) return
+    def symbolsList = getSymbolList()
+    if (symbolsList.contains(symbol)) {
+        symbolsList.removeAll { it == symbol }
+        device.updateSetting("symbols", [value: symbolsList.join(", "), type: "string"])
+        logDebug("removeSymbol: Removed ${symbol}, symbols: ${symbolsList}")
+        // remove state data
+        state.stockProfiles.remove(symbol)
+        state.stockQuotes.remove(symbol)
+        state.latestQuotes.remove(symbol)
+        fetchProfiles(symbolsList)
+        refreshData(symbolsList)
+    } else {
+        logDebug("removeSymbol: Symbol ${symbol} not found in ${symbolsList}.")
+    }
 }
