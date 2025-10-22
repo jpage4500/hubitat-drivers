@@ -1,9 +1,3 @@
-// hubitat start
-// hub: 192.168.0.200
-// type: device
-// id: 1782
-// hubitat end
-
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * DESCRIPTION:
@@ -130,6 +124,13 @@ def parseResponse(data) {
             }
         }
     } else {
-        log.error "No devices found in the response."
+        // [message:authorization token is invalid, status:401]
+        if (data?.status == 401) {
+            log.error "Authorization token is invalid: ${data}"
+            state.lastError = "Authorization token is invalid"
+            unschedule()
+        } else {
+            log.error "No devices found in the response: ${data}"
+        }
     }
 }

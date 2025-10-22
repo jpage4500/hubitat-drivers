@@ -79,10 +79,7 @@ def updated() {
     logDebug("updated: interval: ${updateInterval} seconds, symbols: ${settings?.symbols}")
 
     // Unschedule existing jobs before re-scheduling
-    try {
-        unschedule()
-    } catch (ignored) {
-    }
+    unschedule()
 
     if (updateInterval > 0) {
         def minutes = updateInterval / 60
@@ -167,8 +164,19 @@ private boolean isMarketOpen() {
     }
 }
 
+/**
+ * refresh stock data for given symbols
+ * @param symbols - will be null when called from schedule
+ */
 def refreshData(def symbols) {
-    if (!symbols) return
+    if (!symbols) {
+        symbols = getSymbolList()
+        if (!symbols) {
+            log.error("refreshData: No symbols")
+            return
+        }
+    }
+
     if (!isMarketOpen()) {
         logDebug("Market is closed. Skipping quote fetch.")
         return
@@ -248,6 +256,9 @@ def refreshData(def symbols) {
     sendEvent(name: "lastUpdatedMs", value: now())
 }
 
+/**
+ * command: add stock symbol to existing list
+ */
 def addSymbol(String symbol) {
     symbol = symbol?.trim()?.toUpperCase()
     if (!symbol) return
@@ -263,6 +274,9 @@ def addSymbol(String symbol) {
     }
 }
 
+/**
+ * command: remove existing stock symbol
+ */
 def removeSymbol(String symbol) {
     symbol = symbol?.trim()?.toUpperCase()
     if (!symbol) return
