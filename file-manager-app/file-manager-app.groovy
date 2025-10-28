@@ -1,9 +1,3 @@
-// hubitat start
-// hub: 192.168.0.200
-// type: app
-// id: 956
-// hubitat end
-
 import groovy.json.JsonOutput
 import groovy.transform.Field
 import java.nio.file.AccessDeniedException
