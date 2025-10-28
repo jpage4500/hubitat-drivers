@@ -649,6 +649,7 @@
                     <button class="btn btn-danger" onclick="showDeleteSelectedDialog()" id="deleteSelectedBtn"
                             style="display: none;">🗑️ Delete Selected
                     </button>
+                    <button class="btn btn-primary" id="downloadSelectedBtn" onclick="downloadSelectedFiles()" style="display: none;">⬇️ Download Selected</button>
                 </div>
             </div>
             <div class="breadcrumb-bar"
@@ -1590,12 +1591,15 @@
     function updateDeleteButton() {
         const deleteBtn = document.getElementById('deleteSelectedBtn');
         const moveBtn = document.getElementById('moveSelectedBtn');
+        const downloadBtn = document.getElementById('downloadSelectedBtn');
         let hasFolder = false;
+        let hasFile = false;
         for (const filename of selectedFiles) {
             const fileObj = currentFiles.find(f => f.fullName === filename);
             if (fileObj && fileObj.isFolder) {
                 hasFolder = true;
-                break;
+            } else if (fileObj && !fileObj.isFolder) {
+                hasFile = true;
             }
         }
         if (selectedFiles.size > 0) {
@@ -1608,9 +1612,17 @@
                 moveBtn.style.display = 'inline-block';
                 moveBtn.textContent = `🔀 Move Selected (${selectedFiles.size})`;
             }
+            // Show Download Selected if any file is selected
+            if (hasFile) {
+                downloadBtn.style.display = 'inline-block';
+                downloadBtn.textContent = `⬇️ Download Selected (${selectedFiles.size})`;
+            } else {
+                downloadBtn.style.display = 'none';
+            }
         } else {
             deleteBtn.style.display = 'none';
             moveBtn.style.display = 'none';
+            downloadBtn.style.display = 'none';
         }
     }
 
@@ -1770,6 +1782,23 @@
     // Download file
     function downloadFile(filename) {
         window.open(`${API_BASE}/download/${encodeURIComponent(filename)}?access_token=${accessToken}`, '_blank');
+    }
+
+    function downloadSelectedFiles() {
+        if (selectedFiles.size === 0) return;
+        for (const filename of selectedFiles) {
+            const fileObj = currentFiles.find(f => f.fullName === filename);
+            if (fileObj && !fileObj.isFolder) {
+                const url = `${API_BASE}/download/${encodeURIComponent(filename)}?access_token=${accessToken}`;
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = fileObj.name; // Suggests filename to browser
+                a.target = '_blank'; // fallback for browsers that don't support download
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+        }
     }
 
     // Close modal

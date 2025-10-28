@@ -40,6 +40,7 @@ metadata {
         attribute "latestQuotes", "string"
         attribute "lastUpdatedMs", "number"
 
+        command "setSymbol", ["string"]
         command "addSymbol", ["string"]
         command "removeSymbol", ["string"]
     }
@@ -113,8 +114,12 @@ private Map getAuthHeaders() {
     ]
 }
 
-def fetchProfiles(def symbols) {
-    if (!symbols) return
+def fetchProfiles(List<String> symbols) {
+    if (!symbols || symbols.isEmpty()) {
+        state.stockProfiles = [:]
+        sendEvent(name: "stockProfiles", value: JsonOutput.toJson(profiles))
+        return
+    }
 
     def profiles = [:]
 
@@ -168,7 +173,7 @@ private boolean isMarketOpen() {
  * refresh stock data for given symbols
  * @param symbols - will be null when called from schedule
  */
-def refreshData(def symbols) {
+def refreshData(List<String> symbols) {
     if (!symbols) {
         symbols = getSymbolList()
         if (!symbols) {
@@ -254,6 +259,22 @@ def refreshData(def symbols) {
     // Publish latest full quote per symbol
     sendEvent(name: "latestQuotes", value: JsonOutput.toJson(state.latestQuotes))
     sendEvent(name: "lastUpdatedMs", value: now())
+}
+
+/**
+ * command: set stock symbol(s)
+ */
+def setSymbol(String symbol) {
+    symbol = symbol?.trim()?.toUpperCase()
+    if (!symbol) return
+
+    def list = symbol.split(",")*.trim().findAll { it }
+    List<String> symbolsList = list.collect { it.toUpperCase() } as List<String>
+
+    device.updateSetting("symbols", [value: symbolsList.join(", "), type: "string"])
+    logDebug("setSymbol: Set ${symbol}, symbols: ${symbolsList}")
+    fetchProfiles(symbolsList)
+    refreshData(symbolsList)
 }
 
 /**
