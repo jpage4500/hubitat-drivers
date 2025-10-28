@@ -1026,6 +1026,7 @@
                     currentFiles = data.files || [];
                     displayFiles(currentFiles);
                     updateBreadcrumb();
+                    updateFontSize();
                 } catch (e) {
                     console.error('refreshFiles: Invalid JSON:', e);
                     showAlert('Error loading files: Invalid JSON', 'error');
