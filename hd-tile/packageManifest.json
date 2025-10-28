@@ -1,11 +1,11 @@
 {
   "packageName": "HD+ Tile",
   "author": "Joe Page",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-10-24",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "fix bug with polling stopping",
+  "releaseNotes": "stock ticker: add setSymbol command",
   "drivers": [
     {
       "id": "332d87f1-a671-4024-add8-99206881395f",
