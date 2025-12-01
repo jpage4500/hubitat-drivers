@@ -182,10 +182,7 @@ def refreshData(List<String> symbols) {
         }
     }
 
-    if (!isMarketOpen()) {
-        logDebug("Market is closed. Skipping quote fetch.")
-        return
-    }
+    boolean isMarketOpen = isMarketOpen()
 
     def quoteMap = [:]
 
@@ -193,6 +190,12 @@ def refreshData(List<String> symbols) {
     def today = new Date().format('yyyy-MM-dd', tz)
 
     symbols.each { sym ->
+        def existing = (state.stockQuotes[sym] as List) ?: []
+        if (!isMarketOpen && existing.size() > 0) {
+            logDebug("Market is closed. Skipping quote fetch for ${sym}.")
+            return
+        }
+
         def params = [
             uri    : "https://finnhub.io/api/v1/quote",
             headers: getAuthHeaders(),
@@ -209,9 +212,15 @@ def refreshData(List<String> symbols) {
                         logDebug("refreshData: ${sym}: Incomplete quote data: ${quote}")
                         return
                     }
+
                     // Validate timestamp is from today
                     def quoteDate = new Date(timestamp * 1000).format('yyyy-MM-dd', tz)
                     if (quoteDate != today) {
+                        if (existing.size() == 0) {
+                            // save quote and exit
+                            existing << [c: price, t: timestamp]
+                            state.stockQuotes[sym] = existing
+                        }
                         logDebug("refreshData: ${sym}: Skipping quote with old date: date:${quoteDate}, t:${timestamp}, today:${today}, quote:${quote}")
                         return
                     }
@@ -221,7 +230,6 @@ def refreshData(List<String> symbols) {
                     quoteMap[sym] = quote
 
                     // Append last quote value and timestamp
-                    def existing = (state.stockQuotes[sym] as List) ?: []
                     existing << [c: price, t: timestamp]
                     state.stockQuotes[sym] = existing
 
@@ -271,7 +279,13 @@ def setSymbol(String symbol) {
     def list = symbol.split(",")*.trim().findAll { it }
     List<String> symbolsList = list.collect { it.toUpperCase() } as List<String>
 
+    // clear out existing data
     device.updateSetting("symbols", [value: symbolsList.join(", "), type: "string"])
+    sendEvent(name: "stockQuotes", value: "[:]")
+    sendEvent(name: "latestQuotes", value: "[:]")
+    state.stockQuotes = [:]
+    state.latestQuotes = [:]
+
     logDebug("setSymbol: Set ${symbol}, symbols: ${symbolsList}")
     fetchProfiles(symbolsList)
     refreshData(symbolsList)
