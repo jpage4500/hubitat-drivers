@@ -1,9 +1,3 @@
-// hubitat start
-// hub: 192.168.0.200
-// type: device
-// id: 1271
-// hubitat end
-
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * DESCRIPTION:
@@ -82,11 +76,11 @@ def installed() {
 }
 
 def updated() {
-    if (isLogging) log.debug "updated: ${deviceType}, ${url}, ${refreshInterval}"
+    if (isLogging) log.debug "updated: ${deviceType}, url:${url}, url2:${url2}, url3:${url3}, ${refreshInterval}"
     sendEvent(name:"deviceType", value:deviceType)
     sendEvent(name:"url", value:url)
-    sendEvent(name:"url2", value:url2)
-    sendEvent(name:"url3", value:url3)
+    sendEvent(name:"url2", value:url2 ?: "")
+    sendEvent(name:"url3", value:url3 ?: "")
     sendEvent(name:"refreshInterval", value:refreshInterval)
     sendEvent(name:"lastUpdatedMs", value:new Date().getTime())
 }
