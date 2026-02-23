@@ -183,6 +183,7 @@ def mainPage() {
                     title: "Reboot Frequency",
                     description: "How often to perform scheduled reboot",
                     options: [
+                        "daily": "Daily",
                         "weekly": "Weekly",
                         "fortnightly": "Fortnightly (Every 2 weeks)",
                         "monthly": "Monthly (Every 4 weeks)"
@@ -398,6 +399,7 @@ def initialize() {
  */
 private int getFrequencyDays(String freq = null) {
     switch(freq ?: periodicFrequency ?: "weekly") {
+        case "daily":       return 1
         case "weekly":      return 7
         case "fortnightly": return 14
         case "monthly":     return 28
@@ -777,6 +779,26 @@ def schedulePeriodicReboot() {
         return
     }
 
+    // For daily reboots, simply schedule for today's time or tomorrow if time has passed
+    if (periodicFrequency == "daily") {
+        def nextReboot
+        if (rebootTime <= now) {
+            // Time has already passed today, schedule for tomorrow
+            def calendar = Calendar.getInstance(location.timeZone)
+            calendar.setTime(rebootTime)
+            calendar.add(Calendar.DAY_OF_MONTH, 1)
+            nextReboot = calendar.time
+        } else {
+            nextReboot = rebootTime
+        }
+
+        state.nextPeriodicReboot = nextReboot.time
+        runOnce(nextReboot, performPeriodicReboot)
+
+        log.info "Periodic reboot scheduled for ${nextReboot.format('yyyy-MM-dd HH:mm:ss')} (daily)"
+        return
+    }
+
     // Calculate next reboot time based on frequency and day of week
     // Start with today's reboot time
     def calendar = Calendar.getInstance(location.timeZone)
@@ -811,7 +833,9 @@ def schedulePeriodicReboot() {
 def performPeriodicReboot() {
     log.warn "═══════════════════════════════════════"
     log.warn "PERFORMING PERIODIC SCHEDULED REBOOT"
-    log.warn "Frequency: ${periodicFrequency ?: 'weekly'}, Day: ${periodicDayOfWeek}${enableDebug ? ' (debug mode)' : ''}"
+    def freqDisplay = periodicFrequency ?: 'weekly'
+    def dayDisplay = periodicFrequency == 'daily' ? '' : ", Day: ${periodicDayOfWeek}"
+    log.warn "Frequency: ${freqDisplay}${dayDisplay}${enableDebug ? ' (debug mode)' : ''}"
     log.warn "═══════════════════════════════════════"
 
     // Skip uptime check in debug mode
