@@ -8,7 +8,7 @@ import java.net.SocketTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
- *  5.1.0  - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
+ *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
  *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
  *           when no successful update in N minutes; loud banner when token expired
  *  5.0.15 - 12/31/24 - minor fixes
