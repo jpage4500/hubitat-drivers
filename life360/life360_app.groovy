@@ -1,10 +1,5 @@
-// hubitat start
-// hub: 192.168.0.200
-// type: app
-// id: 684
-// hubitat end
-
 import java.net.http.HttpTimeoutException
+import java.net.SocketTimeoutException
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
@@ -13,6 +8,9 @@ import java.net.http.HttpTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
+ *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
+ *           when no successful update in N minutes; loud banner when token expired
  *  5.0.15 - 12/31/24 - minor fixes
  *  5.0.14 - 12/24/24 - Dynamic Polling
  *  5.0.13 - 12/24/24 - restore original scheduling routine
@@ -149,7 +147,8 @@ def fetchCircles() {
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles.json",
-        headers: getHttpHeaders()
+        headers: getHttpHeaders(),
+        timeout: 30
     ]
     if (logEnable) log.debug "fetchCircles:"
     try {
@@ -179,7 +178,8 @@ def fetchPlaces() {
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/places.json",
-        headers: getHttpHeaders()
+        headers: getHttpHeaders(),
+        timeout: 30
     ]
     log.debug("fetchPlaces:")
     try {
@@ -209,7 +209,8 @@ def fetchMembers() {
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/members",
-        headers: getHttpHeaders()
+        headers: getHttpHeaders(),
+        timeout: 30
     ]
 
     if (logEnable) log.debug("fetchMembers:")
@@ -254,8 +255,20 @@ boolean fetchLocations() {
         return false
     }
 
-    // prevent calling this API too frequently (< 5 seconds)
     long currentTimeMs = new Date().getTime()
+
+    // honor a server-driven rate-limit window from a prior 429
+    if (state.rateLimitedUntilMs && currentTimeMs < state.rateLimitedUntilMs) {
+        if (logEnable) log.debug("fetchLocations: rate-limited for ${(state.rateLimitedUntilMs - currentTimeMs)/1000}s, skipping")
+        return false
+    }
+    // if the token is known-bad, stop hammering until the user pastes a new one
+    if (state.tokenLikelyExpired) {
+        if (logEnable) log.debug("fetchLocations: token flagged expired; skipping until refreshed")
+        return false
+    }
+
+    // prevent calling this API too frequently (< 5 seconds)
     if (state.lastUpdateMs != null) {
         long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
         if (lastAttempt < 5) {
@@ -283,7 +296,8 @@ def fetchMemberLocation(memberId) {
     def params = [
         uri    : "https://api-cloudfront.life360.com",
         path   : "/v3/circles/${circle}/members/${memberId}",
-        headers: getHttpHeaders()
+        headers: getHttpHeaders(),
+        timeout: 30
     ]
 
     // add cookies to header
@@ -321,6 +335,8 @@ def fetchMemberLocation(memberId) {
                     notifyChildDevice(memberId, response.data)
 
                     state.failCount = 0
+                    state.tokenLikelyExpired = false
+                    state.rateLimitedUntilMs = null
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
 
@@ -339,37 +355,69 @@ def fetchMemberLocation(memberId) {
                 }
         }
     } catch (e) {
+        // handleException classifies and updates state.failCount / state.tokenLikelyExpired /
+        // state.rateLimitedUntilMs / state.cookies as appropriate. Do NOT synchronously retry —
+        // let the next scheduled tick try again (fetchLocations short-circuits on AUTH/RATE_LIMIT).
         handleException("fetchMemberLocation: member:${memberId}", e)
-        def status = e.response?.status
-        if (status == 403) {
-            // if this call fails with a 403 error, try a different API to capture updated cookies
-            // alternately we could try clearing cookies and re-trying same call..
-            state.failCount = (state.failCount ?: 0) + 1
-            // NOTE: I'm setting a limit on how many times this will try fetchMembers()
-            if (state.failCount <= 10) {
-                log.debug("fetchMemberLocation: RETRY, fail:${state.failCount}")
-                fetchMembers()
-            }
-        }
     }
 }
 
-def handleException(String tag, Exception e) {
-    //log.error("handleException: ${e}")
-    if (e instanceof HttpTimeoutException) {
-        log.error("${tag}: EXCEPTION: ${e}")
-        state.message = "TIMEOUT: ${tag}: ${e}"
-        return
+/**
+ * Classify an exception thrown by httpGet/httpPost into one of:
+ *   "TIMEOUT" | "AUTH" | "RATE_LIMIT" | "TRANSIENT" | "OTHER"
+ * Updates state (failCount, tokenLikelyExpired, rateLimitedUntilMs, cookies) so the
+ * next scheduled poll can react. Returns the classification string.
+ */
+String handleException(String tag, Exception e) {
+    Integer status = null
+    try { status = e.response?.status } catch (ignored) { /* not all exceptions carry .response */ }
+
+    if (e instanceof HttpTimeoutException || e instanceof SocketTimeoutException) {
+        log.warn("${tag}: TIMEOUT: ${e}")
+        state.message = "TIMEOUT: ${tag}"
+        return "TIMEOUT"
     }
-    def status = e.response?.status
-    if (status == 403) {
-        log.error("handleException: ${tag}: ${status}")
-        state.message = "ERROR: ${tag}: ${status}"
-        return
+    if (status == 401 || status == 403) {
+        // ha-life360 treats 403 the same as 401: clear session, back off, surface to user.
+        clearSessionCache()
+        state.failCount = (state.failCount ?: 0) + 1
+        log.warn("${tag}: AUTH (${status}); cleared session; failCount=${state.failCount}")
+        if (state.failCount >= 3) {
+            state.tokenLikelyExpired = true
+            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+        } else {
+            state.message = "AUTH ERROR (${status}) on ${tag}; cleared session, will retry"
+        }
+        return "AUTH"
     }
-    def err = e.response?.data
-    log.error("handleException: ${tag}: ${status}: ${err}")
+    if (status == 429) {
+        Integer retryAfter = readRetryAfterSecs(e)
+        Integer delaySecs = (retryAfter ?: 60) + 10
+        state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
+        log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
+        state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
+        return "RATE_LIMIT"
+    }
+    if (status != null && (status == 502 || status == 503 || status == 504 || status == 520)) {
+        log.warn("${tag}: TRANSIENT (${status}); will retry next tick")
+        state.message = "TRANSIENT ${status} on ${tag}"
+        return "TRANSIENT"
+    }
+    def err = null
+    try { err = e.response?.data } catch (ignored) {}
+    log.error("handleException: ${tag}: ${status}: ${err}: ${e}")
     state.message = "ERROR: ${tag}: ${status}, ${err}"
+    return "OTHER"
+}
+
+private Integer readRetryAfterSecs(Exception e) {
+    try {
+        def h = e.response?.getFirstHeader('Retry-After')
+        if (h?.value != null) {
+            return Integer.parseInt(h.value.toString().trim())
+        }
+    } catch (ignored) {}
+    return null
 }
 
 Map getHttpHeaders() {
@@ -426,6 +474,10 @@ def installed() {
  */
 def updated() {
     log.debug("updated:")
+    // user clicked Done — assume any pasted token is fresh; let polling resume
+    state.tokenLikelyExpired = false
+    state.failCount = 0
+    state.rateLimitedUntilMs = null
     createChildDevices()
     scheduleUpdates()
 }
@@ -485,6 +537,22 @@ def scheduleUpdates() {
  * called by timer
  */
 def handleTimerFired() {
+    // watchdog: if we haven't had a successful fetch in a long time, surface it loudly.
+    // Threshold = max(pollFreq * 10, 10 minutes). state.message is rendered on mainPage,
+    // and a log.warn shows up in Hubitat's main log so the user can see something is wrong
+    // without needing to rely on the auto_reboot script.
+    Long now = new Date().getTime()
+    if (state.lastSuccessMs != null) {
+        long ageMs = now - state.lastSuccessMs
+        Integer pollFreqSec = ((settings.pollFreq ?: "60").toString()).toInteger()
+        long thresholdMs = Math.max((long)(pollFreqSec * 10L * 1000L), (long)(10L * 60L * 1000L))
+        if (ageMs > thresholdMs && !state.tokenLikelyExpired) {
+            long ageMin = (long)(ageMs / 60000L)
+            log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
+            state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
+        }
+    }
+
     if (!fetchLocations()) return
 
     // change things up every 10 minutes or so
@@ -583,6 +651,19 @@ void captureCookies(response) {
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
     }
+}
+
+/**
+ * Drop the session-bound cache (cookies + per-member etags). Mirrors what
+ * ha-life360's coordinator does when it sees a LoginError before re-auth.
+ */
+void clearSessionCache() {
+    state.remove("cookies")
+    def toRemove = []
+    state.each { k, v ->
+        if (k?.toString()?.startsWith("etag-")) toRemove << k
+    }
+    toRemove.each { state.remove(it) }
 }
 
 void dynamicPolling() {
