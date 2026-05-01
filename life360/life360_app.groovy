@@ -8,6 +8,7 @@ import java.net.SocketTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.1.2  - 05/01/27 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
  *  5.1.1 -  05/01/26 - add device notification when token expires
  *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
  *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
@@ -108,7 +109,7 @@ def mainPage() {
             input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
             input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
             input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
-            input(name: "notifyDevices", type: "capability.notification", title: "Notification Devices", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
+            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -445,10 +446,10 @@ Map getHttpHeaders() {
         "User-Agent"   : "com.life360.android.safetymapd/KOKO/23.50.0 android/13",
     ]
 
-    // TODO: not sure this is necessary for old API
-    if (!isEmpty(circle)) {
-        baseHeaders["circleid"] = circle
-    }
+    // part of newer API
+    //    if (!isEmpty(circle)) {
+    //        baseHeaders["circleid"] = circle
+    //    }
 
     if (!isEmpty(access_token)) {
         baseHeaders["Authorization"] = "Bearer " + access_token
