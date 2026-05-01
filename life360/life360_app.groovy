@@ -145,17 +145,12 @@ def showMessage(text) {
 }
 
 def fetchCircles() {
-    // https://api-cloudfront.life360.com/v3/circles.json
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles.json",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles.json")
     if (logEnable) log.debug "fetchCircles:"
     try {
         httpGet(params) {
             response ->
+                captureCookies(response)
                 if (response.status == 200) {
                     state.circles = response.data.circles
                     if (logEnable) log.debug("fetchCircles: DONE")
@@ -176,17 +171,12 @@ def fetchPlaces() {
         return;
     }
 
-    // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/places.json",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles/${circle}/places.json")
     log.debug("fetchPlaces:")
     try {
         httpGet(params) {
             response ->
+                captureCookies(response)
                 if (response.status == 200) {
                     state.places = response.data.places
                     if (logEnable) log.debug("fetchPlaces: DONE")
@@ -207,13 +197,7 @@ def fetchMembers() {
         return;
     }
 
-    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/members",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles/${circle}/members")
 
     if (logEnable) log.debug("fetchMembers:")
 
@@ -294,13 +278,7 @@ boolean fetchLocations() {
 }
 
 def fetchMemberLocation(memberId) {
-    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members/MEMBER
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/members/${memberId}",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles/${circle}/members/${memberId}")
 
     // add cookies to header
     def cookies = state["cookies"]
@@ -436,6 +414,20 @@ private Integer readRetryAfterSecs(Exception e) {
     return null
 }
 
+private String life360BaseUrl() {
+    // alternate base URL to try if cloudfront stops working:
+    // return "https://api.life360.com/v3"
+    return "https://api-cloudfront.life360.com/v3"
+}
+
+private Map life360Params(String path) {
+    return [
+        uri    : "${life360BaseUrl()}${path}",
+        headers: getHttpHeaders(),
+        timeout: 30
+    ]
+}
+
 Map getHttpHeaders() {
     if (isEmpty(state.deviceId)) {
         state.deviceId = UUID.randomUUID().toString()
@@ -447,6 +439,9 @@ Map getHttpHeaders() {
     def baseHeaders = [
         "Accept"       : "application/json",
         "cache-control": "no-cache",
+        // alternate Life360 mobile-app fingerprint to try (also requires X-Application header below):
+        // "User-Agent"   : "com.life360.android.safetymapd/KNSTNB/24.50.0 android/14",
+        // "X-Application": "com.life360.android.safetymapd",
         "User-Agent"   : "com.life360.android.safetymapd/KOKO/23.50.0 android/13",
     ]
 
@@ -658,11 +653,15 @@ def notifyChildDevice(memberId, memberObj) {
 
 void captureCookies(response) {
     def responseCookies = []
-    // Extract just the "Set-Cookie" headers from the Response.
-    response.getHeaders('Set-Cookie').each {
-        def cookie = it.value.tokenize(';|,')[0]
-        if (cookie) responseCookies << cookie
-        if (logEnable) log.trace("captureCookies: ${it.value}")
+    try {
+        // Extract just the "Set-Cookie" headers from the Response.
+        response.getHeaders('Set-Cookie')?.each {
+            def cookie = it.value?.tokenize(';|,')?.getAt(0)
+            if (cookie) responseCookies << cookie
+            if (logEnable) log.trace("captureCookies: ${it.value}")
+        }
+    } catch (e) {
+        if (logEnable) log.trace("captureCookies: ${e.message}")
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
