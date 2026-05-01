@@ -146,7 +146,7 @@ def showMessage(text) {
 }
 
 def fetchCircles() {
-    def params = life360Params("/circles.json")
+    def params = life360Params("/circles")
     if (logEnable) log.debug "fetchCircles:"
     try {
         httpGet(params) {
