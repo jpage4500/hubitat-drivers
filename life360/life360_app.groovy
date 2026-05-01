@@ -8,6 +8,7 @@ import java.net.SocketTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.1.1 -  05/01/26 - add device notification when token expires
  *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
  *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
  *           when no successful update in N minutes; loud banner when token expired
@@ -107,6 +108,7 @@ def mainPage() {
             input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
             input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
             input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
+            input(name: "notifyDevices", type: "capability.notification", title: "Notification Devices", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -383,8 +385,10 @@ String handleException(String tag, Exception e) {
         state.failCount = (state.failCount ?: 0) + 1
         log.warn("${tag}: AUTH (${status}); cleared session; failCount=${state.failCount}")
         if (state.failCount >= 3) {
+            boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            if (!wasExpired) notifyTokenExpired()
         } else {
             state.message = "AUTH ERROR (${status}) on ${tag}; cleared session, will retry"
         }
@@ -408,6 +412,18 @@ String handleException(String tag, Exception e) {
     log.error("handleException: ${tag}: ${status}: ${err}: ${e}")
     state.message = "ERROR: ${tag}: ${status}, ${err}"
     return "OTHER"
+}
+
+private void notifyTokenExpired() {
+    if (isEmpty(settings.notifyDevices)) return
+    String msg = "Life360 token expired"
+    settings.notifyDevices.each { dev ->
+        try {
+            dev.deviceNotification(msg)
+        } catch (e) {
+            log.error("notifyTokenExpired: ${dev?.displayName}: ${e}")
+        }
+    }
 }
 
 private Integer readRetryAfterSecs(Exception e) {
