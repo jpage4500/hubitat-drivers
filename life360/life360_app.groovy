@@ -8,6 +8,7 @@ import java.net.SocketTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.1.2  - 05/01/27 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
  *  5.1.1 -  05/01/26 - add device notification when token expires
  *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
  *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
@@ -108,7 +109,7 @@ def mainPage() {
             input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
             input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
             input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
-            input(name: "notifyDevices", type: "capability.notification", title: "Notification Devices", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
+            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
@@ -145,17 +146,12 @@ def showMessage(text) {
 }
 
 def fetchCircles() {
-    // https://api-cloudfront.life360.com/v3/circles.json
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles.json",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles")
     if (logEnable) log.debug "fetchCircles:"
     try {
         httpGet(params) {
             response ->
+                captureCookies(response)
                 if (response.status == 200) {
                     state.circles = response.data.circles
                     if (logEnable) log.debug("fetchCircles: DONE")
@@ -176,17 +172,12 @@ def fetchPlaces() {
         return;
     }
 
-    // https://api-cloudfront.life360.com/v3/circles/${circle}/places.json
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/places.json",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles/${circle}/places.json")
     log.debug("fetchPlaces:")
     try {
         httpGet(params) {
             response ->
+                captureCookies(response)
                 if (response.status == 200) {
                     state.places = response.data.places
                     if (logEnable) log.debug("fetchPlaces: DONE")
@@ -207,13 +198,7 @@ def fetchMembers() {
         return;
     }
 
-    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/members",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles/${circle}/members")
 
     if (logEnable) log.debug("fetchMembers:")
 
@@ -294,13 +279,7 @@ boolean fetchLocations() {
 }
 
 def fetchMemberLocation(memberId) {
-    // https://api-cloudfront.life360.com/v3/circles/CIRCLE/members/MEMBER
-    def params = [
-        uri    : "https://api-cloudfront.life360.com",
-        path   : "/v3/circles/${circle}/members/${memberId}",
-        headers: getHttpHeaders(),
-        timeout: 30
-    ]
+    def params = life360Params("/circles/${circle}/members/${memberId}")
 
     // add cookies to header
     def cookies = state["cookies"]
@@ -436,6 +415,20 @@ private Integer readRetryAfterSecs(Exception e) {
     return null
 }
 
+private String life360BaseUrl() {
+    // alternate base URL to try if cloudfront stops working:
+    // return "https://api.life360.com/v3"
+    return "https://api-cloudfront.life360.com/v3"
+}
+
+private Map life360Params(String path) {
+    return [
+        uri    : "${life360BaseUrl()}${path}",
+        headers: getHttpHeaders(),
+        timeout: 30
+    ]
+}
+
 Map getHttpHeaders() {
     if (isEmpty(state.deviceId)) {
         state.deviceId = UUID.randomUUID().toString()
@@ -447,13 +440,16 @@ Map getHttpHeaders() {
     def baseHeaders = [
         "Accept"       : "application/json",
         "cache-control": "no-cache",
+        // alternate Life360 mobile-app fingerprint to try (also requires X-Application header below):
+        // "User-Agent"   : "com.life360.android.safetymapd/KNSTNB/24.50.0 android/14",
+        // "X-Application": "com.life360.android.safetymapd",
         "User-Agent"   : "com.life360.android.safetymapd/KOKO/23.50.0 android/13",
     ]
 
-    // TODO: not sure this is necessary for old API
-    if (!isEmpty(circle)) {
-        baseHeaders["circleid"] = circle
-    }
+    // part of newer API
+    //    if (!isEmpty(circle)) {
+    //        baseHeaders["circleid"] = circle
+    //    }
 
     if (!isEmpty(access_token)) {
         baseHeaders["Authorization"] = "Bearer " + access_token
@@ -658,11 +654,15 @@ def notifyChildDevice(memberId, memberObj) {
 
 void captureCookies(response) {
     def responseCookies = []
-    // Extract just the "Set-Cookie" headers from the Response.
-    response.getHeaders('Set-Cookie').each {
-        def cookie = it.value.tokenize(';|,')[0]
-        if (cookie) responseCookies << cookie
-        if (logEnable) log.trace("captureCookies: ${it.value}")
+    try {
+        // Extract just the "Set-Cookie" headers from the Response.
+        response.getHeaders('Set-Cookie')?.each {
+            def cookie = it.value?.tokenize(';|,')?.getAt(0)
+            if (cookie) responseCookies << cookie
+            if (logEnable) log.trace("captureCookies: ${it.value}")
+        }
+    } catch (e) {
+        if (logEnable) log.trace("captureCookies: ${e.message}")
     }
     if (responseCookies) {
         state["cookies"] = responseCookies.join(";")
