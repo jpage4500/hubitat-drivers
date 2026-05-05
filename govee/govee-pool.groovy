@@ -38,6 +38,8 @@ preferences {
         options: ["0": "Never", "15": "15 Seconds", "30": "30 Seconds", "120": "2 Minutes", "300": "5 Minutes", "600": "10 Minutes", "900": "15 Minutes", "1800": "30 Minutes", "3600": "1 Hour", "10800": "3 Hours", "18000": "5 Hours"])
 
     input name: "isLogging", type: "bool", title: "Enable Logging", description: "", required: true
+    input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the access token appears expired/revoked.")
+
 }
 
 private logDebug(msg) {
@@ -55,7 +57,8 @@ def updated() {
 
     def updateInterval = (settings?.refreshInterval ?: "900").toInteger()
     logDebug("updated: interval: ${updateInterval} seconds")
-    schedule("0/${updateInterval} * * * * ?", refreshData)
+    def cron = updateInterval < 60 ? "0/${updateInterval} * * * * ?" : "0 0/${(updateInterval / 60).toInteger()} * * * ?"
+    schedule(cron, refreshData)
 
     refreshData()
 }
@@ -129,8 +132,21 @@ def parseResponse(data) {
             log.error "Authorization token is invalid: ${data}"
             state.lastError = "Authorization token is invalid"
             unschedule()
+            notifyTokenExpired()
         } else {
             log.error "No devices found in the response: ${data}"
+        }
+    }
+}
+
+private void notifyTokenExpired() {
+    if (isEmpty(settings.notifyDevices)) return
+    String msg = "Govee token expired"
+    settings.notifyDevices.each { dev ->
+        try {
+            dev.deviceNotification(msg)
+        } catch (e) {
+            log.error("notifyTokenExpired: ${dev?.displayName}: ${e}")
         }
     }
 }
