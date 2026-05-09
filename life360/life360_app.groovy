@@ -8,7 +8,8 @@ import java.net.SocketTimeoutException
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
- *  5.1.2  - 05/01/27 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
+ *  5.1.3  - 05/09/26 - add /view endpoint to view members on a map
+ *  5.1.2  - 05/01/26 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
  *  5.1.1 -  05/01/26 - add device notification when token expires
  *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
  *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
@@ -42,6 +43,7 @@ definition(
     iconX2Url: "",
     singleInstance: true,
     importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_app.groovy",
+    oauth: [displayName: "Life360+", displayLink: ""]
 )
 
 preferences {
@@ -49,12 +51,10 @@ preferences {
 }
 
 mappings {
-    // used for Life360 webhook
-    path("/placecallback") {
-        action:
-        [
-            POST: "placeEventHandler",
-            GET : "placeEventHandler"
+    // map view showing all selected members
+    path("/view") {
+        action: [
+            GET: "renderView"
         ]
     }
 }
@@ -113,7 +113,23 @@ def mainPage() {
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
+
+        section(header("Map View")) {
+            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, description: "If set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).")
+            String viewUrl = getViewUrl()
+            if (viewUrl) {
+                paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small>"
+            } else {
+                input("generateViewLinkBtn", "button", title: "Generate Map Link")
+                paragraph "<small style='color:#888'>Enable OAuth on this app (top-right of the app source code editor), then click 'Generate Map Link'.</small>"
+            }
+        }
     }
+}
+
+private String getViewUrl() {
+    if (isEmpty(state.accessToken)) return null
+    return "${getFullLocalApiServerUrl()}/view?access_token=${state.accessToken}"
 }
 
 /**
@@ -134,8 +150,22 @@ def appButtonHandler(String button) {
         case "fetchLocationsBtn":
             fetchLocations()
             break
+        case "generateViewLinkBtn":
+            generateViewLink()
+            break
         default:
             log.debug("appButtonHandler: unhandled:${button}")
+    }
+}
+
+private void generateViewLink() {
+    try {
+        if (isEmpty(state.accessToken)) {
+            createAccessToken()
+        }
+    } catch (e) {
+        log.error("generateViewLink: failed to create access token — enable OAuth in the app source code editor first: ${e}")
+        state.message = "Enable OAuth on the app (top-right of the app source code editor), then try again."
     }
 }
 
@@ -715,4 +745,213 @@ void dynamicPolling() {
 boolean isMemberInTransit(memberId) {
     def inTransit = state["inTransit-${memberId}"]
     return inTransit != null && inTransit
+}
+
+// ----------------------------------------------------------------------------
+// Map View — renders all selected members on a single OpenStreetMap (Leaflet)
+// page. No API key required. Reached via the /view mapping.
+// ----------------------------------------------------------------------------
+def renderView() {
+    def members = []
+    getChildDevices().each { dev ->
+        def lat = dev.currentValue("latitude")
+        def lng = dev.currentValue("longitude")
+        if (lat == null || lng == null) return
+        try {
+            double dlat = (lat as Number).doubleValue()
+            double dlng = (lng as Number).doubleValue()
+            if (dlat == 0.0d && dlng == 0.0d) return
+            members << [
+                name      : (dev.currentValue("memberName") ?: dev.displayName ?: "?").toString(),
+                lat       : dlat,
+                lng       : dlng,
+                avatar    : (dev.currentValue("avatar") ?: "").toString(),
+                address   : (dev.currentValue("address1") ?: "").toString(),
+                battery   : (dev.currentValue("battery") ?: "").toString(),
+                presence  : (dev.currentValue("presence") ?: "").toString(),
+                updated   : (dev.currentValue("lastLocationUpdate") ?: "").toString(),
+                inTransit : (dev.currentValue("inTransit") ?: "false").toString()
+            ]
+        } catch (e) {
+            if (logEnable) log.debug("renderView: skipping ${dev.displayName}: ${e}")
+        }
+    }
+
+    String membersJson = new groovy.json.JsonBuilder(members).toString()
+    String apiKey = settings.googleMapsApiKey?.toString()?.trim()
+    String html = isEmpty(apiKey) ?
+        buildOsmMapHtml(membersJson, members.size()) :
+        buildGoogleMapHtml(membersJson, members.size(), apiKey)
+    render contentType: "text/html", data: html, status: 200
+}
+
+private String commonMapStyles() {
+    return """
+  html, body { height: 100%; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  #map { position: absolute; top: 0; bottom: 0; left: 0; right: 0; }
+  .l360-avatar { border-radius: 50%; border: 3px solid #8652ff; box-shadow: 0 2px 6px rgba(0,0,0,0.4); background: #fff; object-fit: cover; }
+  .l360-pin { width: 36px; height: 36px; border-radius: 50%; background: #8652ff; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: bold; border: 3px solid #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-size: 14px; }
+  .l360-popup { font-size: 13px; min-width: 180px; }
+  .l360-popup b { color: #8652ff; }
+  .l360-popup .row { margin-top: 4px; color: #444; }
+  .l360-empty { padding: 40px; text-align: center; color: #666; font-size: 16px; }
+  .l360-status { position: absolute; top: 10px; right: 10px; z-index: 1000; background: rgba(255,255,255,0.9); padding: 6px 10px; border-radius: 6px; font-size: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+"""
+}
+
+private String popupBuilderJs() {
+    return """
+  function buildPopup(m) {
+    var popup = '<div class="l360-popup"><b>' + escapeHtml(m.name) + '</b>';
+    if (m.address)  popup += '<div class="row">' + escapeHtml(m.address) + '</div>';
+    if (m.presence) popup += '<div class="row">Presence: ' + escapeHtml(m.presence) + '</div>';
+    if (m.inTransit === 'true') popup += '<div class="row">In transit</div>';
+    if (m.battery)  popup += '<div class="row">Battery: ' + escapeHtml(m.battery) + '%</div>';
+    if (m.updated)  popup += '<div class="row">Updated: ' + escapeHtml(m.updated) + '</div>';
+    popup += '</div>';
+    return popup;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function(c) {
+      return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
+    });
+  }
+"""
+}
+
+private String buildOsmMapHtml(String membersJson, int count) {
+    return """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Life360 Map</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<style>${commonMapStyles()}</style>
+</head>
+<body>
+${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading…</div>'}
+<script>
+  var members = ${membersJson};
+  ${popupBuilderJs()}
+  if (members.length > 0) {
+    var map = L.map('map');
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+    }).addTo(map);
+
+    var bounds = [];
+    members.forEach(function(m) {
+      var icon;
+      if (m.avatar) {
+        icon = L.divIcon({
+          className: '',
+          html: '<img class="l360-avatar" src="' + m.avatar + '" width="44" height="44">',
+          iconSize: [44, 44],
+          iconAnchor: [22, 22],
+          popupAnchor: [0, -22]
+        });
+      } else {
+        var initial = (m.name || '?').charAt(0).toUpperCase();
+        icon = L.divIcon({
+          className: '',
+          html: '<div class="l360-pin">' + initial + '</div>',
+          iconSize: [36, 36],
+          iconAnchor: [18, 18],
+          popupAnchor: [0, -18]
+        });
+      }
+      L.marker([m.lat, m.lng], { icon: icon }).addTo(map).bindPopup(buildPopup(m));
+      bounds.push([m.lat, m.lng]);
+    });
+
+    if (bounds.length === 1) {
+      map.setView(bounds[0], 15);
+    } else {
+      map.fitBounds(bounds, { padding: [40, 40] });
+    }
+
+    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' · OSM · auto-refresh 60s';
+    setTimeout(function() { window.location.reload(); }, 60000);
+  }
+</script>
+</body>
+</html>
+"""
+}
+
+private String buildGoogleMapHtml(String membersJson, int count, String apiKey) {
+    return """<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Life360 Map</title>
+<style>${commonMapStyles()}</style>
+</head>
+<body>
+${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading…</div>'}
+<script>
+  var members = ${membersJson};
+  ${popupBuilderJs()}
+  async function initMap() {
+    if (members.length === 0) return;
+    var { Map, InfoWindow } = await google.maps.importLibrary('maps');
+    var { AdvancedMarkerElement } = await google.maps.importLibrary('marker');
+
+    var map = new Map(document.getElementById('map'), {
+      mapTypeControl: true,
+      streetViewControl: false,
+      fullscreenControl: true,
+      mapId: 'DEMO_MAP_ID'
+    });
+    var bounds = new google.maps.LatLngBounds();
+    var infoWindow = new InfoWindow();
+
+    members.forEach(function(m) {
+      var pos = { lat: m.lat, lng: m.lng };
+      var content;
+      if (m.avatar) {
+        content = document.createElement('img');
+        content.className = 'l360-avatar';
+        content.src = m.avatar;
+        content.width = 44;
+        content.height = 44;
+      } else {
+        content = document.createElement('div');
+        content.className = 'l360-pin';
+        content.textContent = (m.name || '?').charAt(0).toUpperCase();
+      }
+      var marker = new AdvancedMarkerElement({
+        position: pos,
+        map: map,
+        title: m.name,
+        content: content
+      });
+      marker.addListener('gmp-click', function() {
+        infoWindow.setContent(buildPopup(m));
+        infoWindow.open(map, marker);
+      });
+      bounds.extend(pos);
+    });
+
+    if (members.length === 1) {
+      map.setCenter({ lat: members[0].lat, lng: members[0].lng });
+      map.setZoom(15);
+    } else {
+      map.fitBounds(bounds, 60);
+    }
+
+    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' · Google · auto-refresh 60s';
+    setTimeout(function() { window.location.reload(); }, 60000);
+  }
+</script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=marker&callback=initMap&v=weekly"></script>
+</body>
+</html>
+"""
 }
