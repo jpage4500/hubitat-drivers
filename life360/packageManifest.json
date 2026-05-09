@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "5.1.1",
+  "version": "5.1.2",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling",
+  "releaseNotes": "add /view endpoint to view members on a map",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
