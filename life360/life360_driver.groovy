@@ -453,6 +453,7 @@ def saveLocationHistory(Double latitude, Double longitude, Long timeMs) {
  *       dlat = integer delta in units of 0.00001 deg
  *       dlng = integer delta in units of 0.00001 deg
  *   - to decode entry i: s_i = s_{i-1} + ds_i, lat_i = lat_{i-1} + dlat_i/1e5
+ *   - entries within 5m of the previous emitted entry are skipped (GPS jitter filter)
  */
 def getHistory() {
     try {
@@ -463,9 +464,17 @@ def getHistory() {
         Long prevLat100k = null
         Long prevLng100k = null
         for (entry in entries) {
+            Double latDeg = entry[1] as Double
+            Double lngDeg = entry[2] as Double
             Long sec = (entry[0] as Long).intdiv(1000)
-            Long lat100k = Math.round((entry[1] as Double) * 100000) as Long
-            Long lng100k = Math.round((entry[2] as Double) * 100000) as Long
+            Long lat100k = Math.round(latDeg * 100000) as Long
+            Long lng100k = Math.round(lngDeg * 100000) as Long
+
+            // skip subsequent entries that haven't moved >5m from the previous emitted entry (GPS jitter)
+            if (prevSec != null) {
+                Double meters = haversine(prevLat100k / 100000.0, prevLng100k / 100000.0, latDeg, lngDeg) * 1000.0
+                if (meters < 5.0) continue
+            }
 
             String token
             if (prevSec == null) {
@@ -568,7 +577,9 @@ def sendHistory(msgValue) {
  * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
  */
 def historyClearData() {
-    if (logEnable) log.trace "In historyClearData"
+    if (logEnable) log.trace "historyClearData"
+    // clear location history
+    state.locationHistory = []
     msgValue = "-"
     logCharCount = "0"
     state.list1 = []
