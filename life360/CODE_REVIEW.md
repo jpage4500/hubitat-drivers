@@ -133,6 +133,8 @@ String d = device.displayName + " has " + (memberPresence == "present") ? "arriv
 String d = device.displayName + " has " + ((memberPresence == "present") ? "arrived" : "left")
 ```
 
+**Status:** FIXED in this branch.
+
 ### 3.2  `life360_driver.groovy:405` — HTML tile `if` always truthy when address is "No Data"
 
 **Problem:** the inner ternary returns the string `"Between Places"` (truthy), so the `if` always fires.

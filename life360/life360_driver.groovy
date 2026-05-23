@@ -279,7 +279,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     }
 
     // *** Presence ***
-    String descriptionText = device.displayName + " has " + (memberPresence == "present") ? "arrived" : "left"
+    String descriptionText = device.displayName + " has " + ((memberPresence == "present") ? "arrived" : "left")
     sendEvent(name: "presence", value: memberPresence, descriptionText: descriptionText)
     state.presence = memberPresence
 
