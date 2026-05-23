@@ -347,6 +347,10 @@ def fetchMemberLocation(memberId) {
                     state.rateLimitedUntilMs = null
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
+                    if (state.watchdogWarned) {
+                        log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
+                        state.watchdogWarned = false
+                    }
 
                     // save l360-etag value for next request
                     def eTag = response.getFirstHeader("l360-etag")
@@ -354,6 +358,10 @@ def fetchMemberLocation(memberId) {
                 } else if (response.status == 304) {
                     state.message = null
                     state.lastSuccessMs = new Date().getTime()
+                    if (state.watchdogWarned) {
+                        log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
+                        state.watchdogWarned = false
+                    }
                     // NOTE: if user WAS inTransit before, do we keep them in that state?
                     boolean prevInTransit = isMemberInTransit(memberId)
                     if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}, prevInTransit:${prevInTransit}")
@@ -614,9 +622,13 @@ def handleTimerFired() {
         Integer pollFreqSec = ((settings.pollFreq ?: "60").toString()).toInteger()
         long thresholdMs = Math.max((long)(pollFreqSec * 10L * 1000L), (long)(10L * 60L * 1000L))
         if (ageMs > thresholdMs && !state.tokenLikelyExpired) {
-            long ageMin = (long)(ageMs / 60000L)
-            log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
-            state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
+            // only log on the rising edge — otherwise this would spam every poll tick
+            if (!state.watchdogWarned) {
+                long ageMin = (long)(ageMs / 60000L)
+                log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
+                state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
+                state.watchdogWarned = true
+            }
         }
     }
 
