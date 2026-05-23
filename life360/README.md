@@ -40,6 +40,12 @@ A few standard Hubitat capabilities are repurposed to expose Life360 data:
 
 Full attribute list in [STATE_REFERENCE.md](STATE_REFERENCE.md).
 
+## Privacy & security notes
+
+- **Map View URL contains a live access token.** The `/view` link shown on the app config page is of the form `http://<hub>/apps/api/<appId>/view?access_token=<token>`. Anyone with LAN access to your hub plus that URL can pull every tracked member's live coordinates. Don't share the URL or screenshots of the config page. If the token leaks, disable and re-enable OAuth on the app's source-code editor (Apps Code → Life360+ → OAuth) to rotate it. (CODE_REVIEW §6.1)
+- **Google Maps API key is visible in page HTML.** If you set `googleMapsApiKey`, the key is embedded in the `<script src="…?key=…">` tag the browser receives — there is no way to hide it server-side. Lock the key down in Google Cloud Console (APIs &amp; Services → Credentials): add HTTP-referrer restrictions to your hub's hostname/LAN, and API restrictions to *Maps JavaScript API* only. A leaked-but-restricted key is harmless. (CODE_REVIEW §6.2)
+- **Logs may include member names, place names, and coordinates** unless you turn off the two privacy toggles under app settings → Logging (*Include Names and Places in Logs*, *Include Google Maps Link in Logs*). Turn both OFF before sharing hub logs publicly. (CODE_REVIEW §6.3, §6.4)
+
 ## Setup
 
 1. Install the app and driver code in Hubitat (Apps Code / Drivers Code → New → paste).
