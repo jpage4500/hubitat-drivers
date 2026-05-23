@@ -144,8 +144,7 @@ def installed() {
 
     if (logEnable) log.info "installed: Setting attributes to initial values"
 
-    address1prev = "No Data"
-    sendEvent(name: address1prev, value: address1prev)
+    sendEvent(name: "address1prev", value: "No Data")
 }
 
 def updated() {

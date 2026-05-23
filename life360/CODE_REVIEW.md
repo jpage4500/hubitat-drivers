@@ -56,6 +56,8 @@ sendEvent(name: address1prev, value: address1prev)
 sendEvent(name: "address1prev", value: "No Data")
 ```
 
+**Status:** FIXED in this branch.
+
 ### 2.2  `life360_driver.groovy:579` (`historyClearData`) — undefined variable `logCharCount1`
 
 **Problem:** throws `MissingPropertyException` when the user clicks "Clear History". Event names `numOfCharacters1` / `lastLogMessage1` also don't match what `sendHistory` writes (`numOfCharacters` / `lastLogMessage`), so even if it didn't throw it wouldn't clear the right attributes. The locally-scoped helpers `msgValue`, `logCharCount`, `historyLog` are also assigned without `def` (implicit globals).
