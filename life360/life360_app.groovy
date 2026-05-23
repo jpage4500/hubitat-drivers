@@ -655,7 +655,7 @@ def createChildDevices() {
             } else {
                 log.info "createChildDevices: Creating Life360 Device: ${memberName}"
                 try {
-                    addChildDevice("jpage4500", "Life360+ Driver", externalId, 1234, ["name": "Life360 - ${memberName}", isComponent: false])
+                    addChildDevice("jpage4500", "Life360+ Driver", externalId, null, ["name": "Life360 - ${memberName}", isComponent: false])
                     log.info "createChildDevices: Child Device Successfully Created"
                 }
                 catch (e) {

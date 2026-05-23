@@ -154,6 +154,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** anyone whose hub ID isn't `1234` gets the child device created on the wrong hub (or fails on multi-hub installs).
 **Fix:** pass `null` (Hubitat picks) or `location.hubs[0].id`.
 
+**Status:** FIXED in this branch — passing `null` so Hubitat picks the correct hub.
+
 ### 3.4  `life360_app.groovy:627` (`createChildDevices`) — dead inner check never matches
 
 **Problem:** `childList.find { it.data.vcId == "${member}" }` stringifies the whole member map and compares against `vcId` (which doesn't exist on these devices). The outer `if (!deviceWrapper)` already protects creation.
