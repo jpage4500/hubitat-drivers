@@ -817,16 +817,16 @@ void dynamicPolling() {
     }
 
     if (state.memberInTransit && ! state.dynamicPollingActive) {
-        if (logEnable) log.debug("dynamicPolling - SET DYNAMIC POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
         scheduleUpdates()
+        if (logEnable) log.debug("dynamicPolling: switched STANDARD -> DYNAMIC (memberInTransit: ${state.memberInTransit}, dynamicPollingActive: ${state.dynamicPollingActive})")
 
     } else if (state.memberInTransit && state.dynamicPollingActive) {
         //if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
 
     } else if (! state.memberInTransit && state.dynamicPollingActive) {
-        if (logEnable) log.debug("dynamicPolling - SET STANDARD POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
         state.memberInTransit = false
         scheduleUpdates()
+        if (logEnable) log.debug("dynamicPolling: switched DYNAMIC -> STANDARD (memberInTransit: ${state.memberInTransit}, dynamicPollingActive: ${state.dynamicPollingActive})")
     } else {
         // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
     }
