@@ -189,6 +189,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** when `state.tokenLikelyExpired` is true, `fetchLocations()` early-returns but the timer still fires at the user's poll interval.
 **Fix:** `unschedule()` (or back off to a slow 5-min check) when the token is bad; re-`schedule()` on `updated()` after a fresh token is pasted.
 
+**Status:** FIXED in this branch — when `handleException` flips `tokenLikelyExpired` to true for the first time, it calls `scheduleUpdates()`, which now overrides `baseSecs` to 300 (5 min) while the token is bad. `updated()` already clears the flag and re-arms the normal rate.
+
 ---
 
 ## 4. Performance
