@@ -56,14 +56,14 @@ sendEvent(name: address1prev, value: address1prev)
 sendEvent(name: "address1prev", value: "No Data")
 ```
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 2.2  `life360_driver.groovy:579` (`historyClearData`) — undefined variable `logCharCount1`
 
 **Problem:** throws `MissingPropertyException` when the user clicks "Clear History". Event names `numOfCharacters1` / `lastLogMessage1` also don't match what `sendHistory` writes (`numOfCharacters` / `lastLogMessage`), so even if it didn't throw it wouldn't clear the right attributes. The locally-scoped helpers `msgValue`, `logCharCount`, `historyLog` are also assigned without `def` (implicit globals).
 **Fix:** drop the `1` suffix on the event names, use the locally-defined `logCharCount` / `msgValue` (declared with `def`), and use `0` as the count.
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 2.3  `life360_app.groovy` (`scheduleUpdates`) — `pollFreq=0` (Disabled) silently schedules 1–4s polling
 
@@ -76,14 +76,14 @@ refreshSecs += random                                  // becomes 0..4 — bug
 if (refreshSecs > 0 ...) { schedule(...) }             // schedules ultra-fast polling
 ```
 
-**Status:** FIXED in this branch — `scheduleUpdates()` now returns early when `baseSecs <= 0`, logging `polling DISABLED` and skipping both the jitter add and `schedule()`.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — `scheduleUpdates()` now returns early when `baseSecs <= 0`, logging `polling DISABLED` and skipping both the jitter add and `schedule()`.
 
 ### 2.4  `life360_driver.groovy:547` (`sendHistory`) — undefined preference `fontSize`
 
 **Problem:** HTML template references `fontSize`, which doesn't exist. The defined preference is `avatarFontSize`.
 **Fix:** replace `fontSize` with `avatarFontSize` in the `<table style=...>` string.
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 2.5  `life360_app.groovy:715` (`dynamicPolling`) — dynamic polling never exits when Life360 keeps a stale `inTransit` flag
 
@@ -105,7 +105,7 @@ if (inTransit && !reallyMoving) {
 
 (Same idea could live in `dynamicPolling()` instead, by also reading per-member speed/lastMoved state — but the driver already has the prev-position context, so it's the cleaner home.) Also worth: if `inTransit` has been true for > 15 min and the member hasn't moved more than `accuracy`, force a reset.
 
-**Status:** FIXED in this branch — driver `generatePresenceEvent` now overrides `inTransit=true` to `false` when `speedUnits < 0.5` and movement since last update is within GPS accuracy. Logged as `<name>: ignoring stale Life360 inTransit flag (...)`.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — driver `generatePresenceEvent` now overrides `inTransit=true` to `false` when `speedUnits < 0.5` and movement since last update is within GPS accuracy. Logged as `<name>: ignoring stale Life360 inTransit flag (...)`.
 
 ### 2.6  `life360_app.groovy` (`scheduleUpdates` / `handleTimerFired`) — overlapping timer instances fire on top of each other
 
@@ -115,7 +115,7 @@ Each extra fire runs `fetchMembers()` → another HTTP round-trip to Life360 and
 
 **Fix:** in `scheduleUpdates()` (and anywhere else that calls `schedule(...)` for the polling job), always `unschedule("handleTimerFired")` first. Better: track the currently scheduled interval in state and short-circuit if the desired rate hasn't changed, so we don't churn the scheduler from inside `handleTimerFired` at all. (§8.8 covers the no-op-rebuild half; this entry adds the unschedule discipline.)
 
-**Status:** FIXED in this branch — `scheduleUpdates()` now tracks `state.scheduledBaseSecs` and returns early when the desired base rate hasn't changed and the polling mode hasn't flipped. `installed()`/`updated()`/`initialize()` clear `state.scheduledBaseSecs` first to force a (re)arm on lifecycle events. Polling-mode flips are logged at `info` level.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — `scheduleUpdates()` now tracks `state.scheduledBaseSecs` and returns early when the desired base rate hasn't changed and the polling mode hasn't flipped. `installed()`/`updated()`/`initialize()` clear `state.scheduledBaseSecs` first to force a (re)arm on lifecycle events. Polling-mode flips are logged at `info` level.
 
 ---
 
@@ -133,7 +133,7 @@ String d = device.displayName + " has " + (memberPresence == "present") ? "arriv
 String d = device.displayName + " has " + ((memberPresence == "present") ? "arrived" : "left")
 ```
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 3.2  `life360_driver.groovy:405` — HTML tile `if` always truthy when address is "No Data"
 
@@ -147,49 +147,49 @@ if (address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) 
 if (address1 != "Home" && inTransit) { ... }
 ```
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 3.3  `life360_app.groovy:633` (`createChildDevices`) — `addChildDevice` hardcodes hub ID `1234`
 
 **Problem:** anyone whose hub ID isn't `1234` gets the child device created on the wrong hub (or fails on multi-hub installs).
 **Fix:** pass `null` (Hubitat picks) or `location.hubs[0].id`.
 
-**Status:** FIXED in this branch — passing `null` so Hubitat picks the correct hub.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — passing `null` so Hubitat picks the correct hub.
 
 ### 3.4  `life360_app.groovy:627` (`createChildDevices`) — dead inner check never matches
 
 **Problem:** `childList.find { it.data.vcId == "${member}" }` stringifies the whole member map and compares against `vcId` (which doesn't exist on these devices). The outer `if (!deviceWrapper)` already protects creation.
 **Fix:** delete the inner `if (childList.find ...)` block.
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 3.5  `life360_app.groovy` (`updated`) — orphan devices when a member is deselected
 
 **Problem:** `updated()` calls `createChildDevices()` to add but never removes children for members deselected from `settings.users`. Deselected members leave dangling child devices showing stale state.
 **Fix:** diff `settings.users` against `getChildDevices()*.deviceNetworkId` and call `deleteChildDevice` on the difference.
 
-**Status:** FIXED in this branch — `createChildDevices()` now also removes any child whose `deviceNetworkId` isn't `${app.id}.${memberId}` for some currently-selected member.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — `createChildDevices()` now also removes any child whose `deviceNetworkId` isn't `${app.id}.${memberId}` for some currently-selected member.
 
 ### 3.6  `life360_app.groovy` (`handleTimerFired`) — watchdog warning spams every tick
 
 **Problem:** once `state.lastSuccessMs` is older than `max(pollFreq×10, 10min)`, `log.warn("WATCHDOG: ...")` fires on every poll (every 10s on 10s polling).
 **Fix:** add a `state.watchdogWarned` flag, log only on the rising edge, clear on the next 200/304.
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 3.7  `life360_driver.groovy:189` — `location.since.toLong()` NPE
 
 **Problem:** if Life360 omits the `since` field (rare but seen), `.toLong()` throws and aborts `generatePresenceEvent` mid-update — no events get sent for that poll.
 **Fix:** `location.since?.toLong() ?: 0L`
 
-**Status:** FIXED in this branch.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
 ### 3.8  `life360_app.groovy` (`fetchLocations`) — timer keeps firing at full rate when token is known-expired
 
 **Problem:** when `state.tokenLikelyExpired` is true, `fetchLocations()` early-returns but the timer still fires at the user's poll interval.
 **Fix:** `unschedule()` (or back off to a slow 5-min check) when the token is bad; re-`schedule()` on `updated()` after a fresh token is pasted.
 
-**Status:** FIXED in this branch — when `handleException` flips `tokenLikelyExpired` to true for the first time, it calls `scheduleUpdates()`, which now overrides `baseSecs` to 300 (5 min) while the token is bad. `updated()` already clears the flag and re-arms the normal rate.
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — when `handleException` flips `tokenLikelyExpired` to true for the first time, it calls `scheduleUpdates()`, which now overrides `baseSecs` to 300 (5 min) while the token is bad. `updated()` already clears the flag and re-arms the normal rate.
 
 ---
 
