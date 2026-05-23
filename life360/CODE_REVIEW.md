@@ -175,6 +175,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** once `state.lastSuccessMs` is older than `max(pollFreq×10, 10min)`, `log.warn("WATCHDOG: ...")` fires on every poll (every 10s on 10s polling).
 **Fix:** add a `state.watchdogWarned` flag, log only on the rising edge, clear on the next 200/304.
 
+**Status:** FIXED in this branch.
+
 ### 3.7  `life360_driver.groovy:189` — `location.since.toLong()` NPE
 
 **Problem:** if Life360 omits the `since` field (rare but seen), `.toLong()` throws and aborts `generatePresenceEvent` mid-update — no events get sent for that poll.
