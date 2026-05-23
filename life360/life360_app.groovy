@@ -111,6 +111,7 @@ def mainPage() {
             input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
             input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            input(name: "logRedactNames", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Redact Names in Logs (Privacy)", description: "Show UUIDs instead of member/place/circle names in all logs. Useful when sharing logs for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
         }
 
@@ -183,7 +184,7 @@ def fetchCircles() {
                 captureCookies(response)
                 if (response.status == 200) {
                     state.circles = response.data.circles
-                    if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { it.name }}")
+                    if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { settings.logRedactNames ? it.id : it.name }}")
                     state.message = null
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
@@ -208,7 +209,7 @@ def fetchPlaces() {
                 captureCookies(response)
                 if (response.status == 200) {
                     state.places = response.data.places
-                    if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { it.name }}")
+                    if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { settings.logRedactNames ? it.id : it.name }}")
                     state.message = null
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
@@ -235,7 +236,7 @@ def fetchMembers() {
                 //if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
-                    if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { it.firstName }}")
+                    if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { settings.logRedactNames ? it.id : it.firstName }}")
                     state.message = null
 
                     // update child devices
@@ -306,7 +307,7 @@ boolean fetchLocations() {
 }
 
 def fetchMemberLocation(memberId) {
-    String memberName = state.members?.find { it.id == memberId }?.firstName ?: memberId
+    String memberName = settings.logRedactNames ? memberId : (state.members?.find { it.id == memberId }?.firstName ?: memberId)
     def params = life360Params("/circles/${circle}/members/${memberId}")
 
     // add cookies to header
@@ -338,7 +339,7 @@ def fetchMemberLocation(memberId) {
 
                 if (response.status == 200) {
                     // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberName}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), member:${memberName}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -509,6 +510,13 @@ static boolean isEmpty(text) {
     return text == null || text.isEmpty()
 }
 
+/**
+ * called by child driver to honor the app's privacy-redaction setting in its own logs
+ */
+boolean getRedactNames() {
+    return (settings.logRedactNames == true)
+}
+
 // -------------------------------------------------------------------
 
 /**
@@ -676,7 +684,7 @@ def createChildDevices() {
         if (!deviceWrapper) {
             def member = state.members.find { it.id == memberId }
             def memberName = member.firstName
-            log.info "createChildDevices: Creating Life360 Device: ${memberName}"
+            log.info "createChildDevices: Creating Life360 Device: ${settings.logRedactNames ? memberId : memberName}"
             try {
                 addChildDevice("jpage4500", "Life360+ Driver", externalId, null, ["name": "Life360 - ${memberName}", isComponent: false])
                 log.info "createChildDevices: Child Device Successfully Created"
@@ -730,7 +738,7 @@ def notifyChildDevice(memberId, memberObj) {
             // send location, places and home to device driver
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
             boolean prevInTransit = isMemberInTransit(memberId)
-            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${memberObj.firstName}: state changed: inTransit:${inTransit}")
+            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${settings.logRedactNames ? memberId : memberObj.firstName}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
         } else {
