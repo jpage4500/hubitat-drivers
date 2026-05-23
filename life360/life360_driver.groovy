@@ -420,7 +420,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "Since: ${dateSince}<br>"
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
-    if (address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) {
+    if (address1 != "Home" && inTransit) {
         tileMap += " @ ${sprintf("%.1f", speed)} "
         tileMap += isMiles ? "MPH" : "KPH"
     }
