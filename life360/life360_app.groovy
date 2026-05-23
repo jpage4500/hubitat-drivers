@@ -177,14 +177,13 @@ def showMessage(text) {
 
 def fetchCircles() {
     def params = life360Params("/circles")
-    if (logEnable) log.debug "fetchCircles:"
     try {
         httpGet(params) {
             response ->
                 captureCookies(response)
                 if (response.status == 200) {
                     state.circles = response.data.circles
-                    if (logEnable) log.debug("fetchCircles: DONE")
+                    if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { it.name }}")
                     state.message = null
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
