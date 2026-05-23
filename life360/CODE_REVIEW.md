@@ -83,6 +83,8 @@ if (refreshSecs > 0 ...) { schedule(...) }             // schedules ultra-fast p
 **Problem:** HTML template references `fontSize`, which doesn't exist. The defined preference is `avatarFontSize`.
 **Fix:** replace `fontSize` with `avatarFontSize` in the `<table style=...>` string.
 
+**Status:** FIXED in this branch.
+
 ### 2.5  `life360_app.groovy:715` (`dynamicPolling`) — dynamic polling never exits when Life360 keeps a stale `inTransit` flag
 
 **Problem:** `dynamicPolling()` decides whether to stay in fast-poll mode purely by reading `state["inTransit-<memberId>"]`, which is whatever Life360's API reported for that member. Life360 routinely keeps `inTransit=true` for many minutes after a member has actually stopped moving (or sometimes indefinitely if their phone hands off WiFi/cell oddly). When that happens for any one of N members, the app stays locked in dynamic-poll mode forever — e.g. polling every 20s instead of every 180s, ~9× the API call rate, ~9× the app-busy contribution.
