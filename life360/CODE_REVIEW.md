@@ -280,10 +280,14 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** `${getFullLocalApiServerUrl()}/view?access_token=...` is shown on the main config page; anyone with LAN access plus that URL can view all members' live coordinates.
 **Fix:** add a paragraph in the README warning the user not to share screenshots and to revoke the OAuth token (via the source-code editor) if compromised.
 
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — added a *Privacy & security notes* section to the README and an inline `<small>` red-text warning under the Map View URL in the app config page. No code change to the endpoint itself (token in URL is how Hubitat OAuth works).
+
 ### 6.2  Driver / app — Google Maps API key visible in rendered HTML
 
 **Problem:** `buildGoogleMapHtml` embeds the raw key in page source.
 **Fix:** add a one-liner in the `googleMapsApiKey` setting description telling the user to restrict the key with HTTP referrer limits in Google Cloud Console.
+
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — extended the `googleMapsApiKey` setting description with a *Security:* note and added the same guidance to the README *Privacy & security notes* section. The key still appears in HTML (unavoidable for the Maps JS API); the mitigation is referrer + API restrictions in Google Cloud Console.
 
 ### 6.3  App / driver — member first names and Life360 place names leak into logs
 
