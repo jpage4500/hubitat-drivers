@@ -76,6 +76,8 @@ refreshSecs += random                                  // becomes 0..4 — bug
 if (refreshSecs > 0 ...) { schedule(...) }             // schedules ultra-fast polling
 ```
 
+**Status:** FIXED in this branch — `scheduleUpdates()` now returns early when `baseSecs <= 0`, logging `polling DISABLED` and skipping both the jitter add and `schedule()`.
+
 ### 2.4  `life360_driver.groovy:547` (`sendHistory`) — undefined preference `fontSize`
 
 **Problem:** HTML template references `fontSize`, which doesn't exist. The defined preference is `avatarFontSize`.

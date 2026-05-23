@@ -577,6 +577,12 @@ def scheduleUpdates() {
     state.dynamicPollingActive = wantDynamic
     state.scheduledBaseSecs = baseSecs
 
+    // pollFreq=0 means Disabled — don't add jitter (would land in 1..4s polling) and don't schedule
+    if (baseSecs <= 0) {
+        log.info("scheduleUpdates: polling DISABLED (pollFreq=0)")
+        return
+    }
+
     // add some randomness to this value (between 0 and 5 seconds)
     Integer random = Math.abs(new Random().nextInt() % 5)
     Integer refreshSecs = baseSecs + random
