@@ -117,6 +117,14 @@ Each extra fire runs `fetchMembers()` → another HTTP round-trip to Life360 and
 
 **Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — `scheduleUpdates()` now tracks `state.scheduledBaseSecs` and returns early when the desired base rate hasn't changed and the polling mode hasn't flipped. `installed()`/`updated()`/`initialize()` clear `state.scheduledBaseSecs` first to force a (re)arm on lifecycle events. Polling-mode flips are logged at `info` level.
 
+### 2.7  `life360_app.groovy` (`dynamicPolling`) — mode-switch log shows pre-change state, reads as wrong
+
+**Problem:** the `log.debug` calls in `dynamicPolling()` fired **before** `scheduleUpdates()`, so the logged variables still reflected the prior state. A standard→dynamic transition (or vice versa) showed `dynamicPollingActive: true` on the line announcing the switch to standard polling, which reads as "the code just set the flag wrong" when in fact the flag was about to be cleared by `scheduleUpdates()` a microsecond later. Audited the variable: `state.dynamicPollingActive` is written in exactly one place (`scheduleUpdates()` line ~626) and the logic is correct — only the log presentation was misleading.
+
+**Fix:** move the `log.debug(...)` after `scheduleUpdates()` and rewrite as past tense (`switched X -> Y`) so the values reflect the new state.
+
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
+
 ---
 
 ## 3. Bugs — Medium Priority
@@ -276,6 +284,20 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Problem:** `buildGoogleMapHtml` embeds the raw key in page source.
 **Fix:** add a one-liner in the `googleMapsApiKey` setting description telling the user to restrict the key with HTTP referrer limits in Google Cloud Console.
+
+### 6.3  App / driver — member first names and Life360 place names leak into logs
+
+**Problem:** `fetchCircles`, `fetchPlaces`, `fetchMembers`, `fetchMemberLocation`, `notifyChildDevice`, `createChildDevices` (app) and the stale-inTransit / "moved" info logs (driver) all emit member first names and place labels at `info`/`debug` level. For users who share their hub logs for debugging — or whose logs are captured by a remote logging integration — this leaks household members' identities and the names of private places ("Mom's House", "Work", etc.).
+**Fix:** add an app-level `logShowNames` preference (default ON to preserve current behavior) and gate every name/place log line on it. When OFF, log opaque IDs (memberId / circleId / placeId) instead. Driver reads the parent setting via `parent?.getShowNamesInLogs()`.
+
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — new `Logging` section in app preferences adds **Include Names and Places in Logs** (default ON). Driver helper `displayMember(firstName)` falls back to the memberId parsed from `device.deviceNetworkId` when the toggle is OFF.
+
+### 6.4  Driver — exact coordinates and Google Maps URL emitted at `info`
+
+**Problem:** the "moved" info log (added in §5.1) appends `https://www.google.com/maps/search/?api=1&query=<lat>,<lng>` with the member's live coordinates. Anyone who can read the logs gets a one-click satellite view of where each tracked person was, every time they move. Same disclosure concern as 6.3 but with precise location instead of identity.
+**Fix:** add an app-level `logShowMapsLink` preference (default ON). When OFF, the driver's "moved" log omits the Maps URL (distance + speed still logged so users can see polling is working).
+
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — **Include Google Maps Link in Logs** toggle added alongside §6.3. Driver checks `parent?.getShowMapsLink()` before appending the URL.
 
 ---
 
