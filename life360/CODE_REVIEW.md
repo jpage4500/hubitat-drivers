@@ -168,6 +168,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** `updated()` calls `createChildDevices()` to add but never removes children for members deselected from `settings.users`. Deselected members leave dangling child devices showing stale state.
 **Fix:** diff `settings.users` against `getChildDevices()*.deviceNetworkId` and call `deleteChildDevice` on the difference.
 
+**Status:** FIXED in this branch — `createChildDevices()` now also removes any child whose `deviceNetworkId` isn't `${app.id}.${memberId}` for some currently-selected member.
+
 ### 3.6  `life360_app.groovy` (`handleTimerFired`) — watchdog warning spams every tick
 
 **Problem:** once `state.lastSuccessMs` is older than `max(pollFreq×10, 10min)`, `log.warn("WATCHDOG: ...")` fires on every poll (every 10s on 10s polling).
