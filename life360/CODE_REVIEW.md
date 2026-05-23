@@ -271,6 +271,22 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Fix:** document prominently in the README and add inline comments in the driver. Also captured in [STATE_REFERENCE.md](STATE_REFERENCE.md).
 
+### 5.5  Settings page layout defects  **(FIXED)**
+
+**Problem:** several UX defects on `mainPage()` made the app harder to use than it should be:
+- "Fetch Locations" — the post-setup connectivity check — was buried inside a catch-all "Other Options" section, far below STEP 4, with no indication it was the verification step.
+- The "Other Options" header had grown stale: it now contained polling + notifications + everything else.
+- Typo: "Dynamic Refesh Rate" in the polling description.
+- Google Maps API key help text was passed via `description:`, which Hubitat renders as placeholder text *inside* the input — the long security warning was clipped on most screen widths.
+- All inputs rendered full-row width, including enums for "10 seconds" / "1 minute" — short values looked comically wide and the page felt visually inconsistent.
+
+**Fix:**
+- Promote Fetch Locations to its own **STEP 5: Verify Connectivity** section with a "✓ Last successful fetch: <age>" indicator (uses existing `state.lastSuccessMs`).
+- Split "Other Options" into focused **Polling**, **Notifications**, **Logging**, **Map View** sections.
+- Fix "Refesh" → "Refresh".
+- Move Maps API key help out of `description:` and render as a `paragraph` below the field with bolded red `Security:` callout.
+- Standardize all inputs to `width: 6` (half-row) for consistent left/right edges across the page.
+
 ---
 
 ## 6. Security / Privacy
