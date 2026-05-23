@@ -161,6 +161,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** `childList.find { it.data.vcId == "${member}" }` stringifies the whole member map and compares against `vcId` (which doesn't exist on these devices). The outer `if (!deviceWrapper)` already protects creation.
 **Fix:** delete the inner `if (childList.find ...)` block.
 
+**Status:** FIXED in this branch.
+
 ### 3.5  `life360_app.groovy` (`updated`) — orphan devices when a member is deselected
 
 **Problem:** `updated()` calls `createChildDevices()` to add but never removes children for members deselected from `settings.users`. Deselected members leave dangling child devices showing stale state.
