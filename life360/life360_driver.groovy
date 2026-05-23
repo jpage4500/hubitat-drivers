@@ -314,6 +314,24 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         isDriving = (speedUnits >= drivingThreshold.toDouble())
     }
 
+    // *** Stale inTransit override (Life360 keeps inTransit=true for stationary members) ***
+    // If Life360 says we're in transit but speed is ~0 AND we haven't moved more than GPS
+    // accuracy since the last update, ignore the flag. This prevents the app's dynamic
+    // polling from being held active indefinitely by a stuck Life360 flag.
+    Double movedMeters = 0.0
+    if (prevLatitude != null && prevLongitude != null) {
+        movedMeters = haversine(prevLatitude, prevLongitude, latitude, longitude) * 1000.0
+    }
+    Double accuracyMeters = Math.max((prevAccuracy ?: 0) as double, (accuracy ?: 0) as double)
+    if (inTransit && speedUnits < 0.5d && movedMeters <= accuracyMeters) {
+        log.info("${memberFirstName}: ignoring stale Life360 inTransit flag (speed:${speedUnits}, moved:${movedMeters.round(0)}m within ${accuracyMeters.round(0)}m accuracy)")
+        inTransit = false
+    } else if (movedMeters > accuracyMeters && (inTransit || isDriving)) {
+        // Real movement — surface it as info so users can correlate polls with motion.
+        Double movedUnits = ((movedMeters / 1000.0) / (isMiles ? 1.609344 : 1.0)).round(2)
+        log.info("${memberFirstName}: moved ${movedUnits} ${isMiles ? 'mi' : 'km'} @ ${speedUnits} ${isMiles ? 'mph' : 'kph'}")
+    }
+
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
 
     if (logEnable && (isDriving || inTransit)) {
