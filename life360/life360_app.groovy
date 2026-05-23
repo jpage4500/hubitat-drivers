@@ -71,11 +71,11 @@ mappings {
 def mainPage() {
     dynamicPage(name: "mainPage", install: true, uninstall: true) {
         section() {
-            href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external"
+            href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external", width: 6
             showMessage(state.message)
         }
         section(header("STEP 1: Access Token")) {
-            input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true
+            input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true, width: 6
         }
 
         if (!isEmpty(access_token)) {
@@ -83,7 +83,7 @@ def mainPage() {
                 input("fetchCirclesBtn", "button", title: "Fetch Circles")
 
                 if (!isEmpty(state.circles)) {
-                    input "circle", "enum", multiple: false, required: true, title: "Life360 Circle", options: state.circles.collectEntries { [it.id, it.name] }, submitOnChange: true
+                    input "circle", "enum", multiple: false, required: true, title: "Life360 Circle", options: state.circles.collectEntries { [it.id, it.name] }, submitOnChange: true, width: 6
                 }
             }
 
@@ -94,7 +94,7 @@ def mainPage() {
                     paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
                     def thePlaces = state.places.collectEntries { [it.id, it.name] }
                     def sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
-                    input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true
+                    input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true, width: 6
                 }
             }
 
@@ -104,17 +104,31 @@ def mainPage() {
                 if (!isEmpty(state.members)) {
                     def theMembers = state.members.collectEntries { [it.id, it.firstName + " " + it.lastName] }
                     def sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
-                    input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true
+                    input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true, width: 6
+                }
+            }
+
+            section(header("STEP 5: Verify Connectivity")) {
+                paragraph "<small style='color:#666'>Pulls current data for every selected member. Use this to confirm setup before saving — if it fails, check the access token (STEP 1) and try again.</small>"
+                input("fetchLocationsBtn", "button", title: "Fetch Locations")
+                if (state.lastSuccessMs) {
+                    long ageSec = (long)((new Date().getTime() - state.lastSuccessMs) / 1000L)
+                    String ageStr = (ageSec < 60) ? "${ageSec}s ago"
+                        : (ageSec < 3600) ? "${(long)(ageSec / 60L)} min ago"
+                        : "${(long)(ageSec / 3600L)} hr ago"
+                    paragraph "<small style='color:#080'>\u2713 Last successful fetch: ${ageStr}</small>"
                 }
             }
         }
 
-        section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
-            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
-            input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
-            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
-            input("fetchLocationsBtn", "button", title: "Fetch Locations")
+        section(header("Polling")) {
+            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", width: 6, options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling", description: "Increase polling frequency to 'Dynamic Refresh Rate' when a member is in motion. Polling returns to 'Default Refresh Rate' once they've stopped.")
+            input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
+        }
+
+        section(header("Notifications")) {
+            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.")
         }
 
         section(header("Logging")) {
@@ -125,7 +139,8 @@ def mainPage() {
         }
 
         section(header("Map View")) {
-            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, description: "If set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required). <b>Security:</b> the key is embedded in the page HTML and visible to anyone who can load the map. Restrict it in Google Cloud Console (APIs &amp; Services → Credentials) with HTTP-referrer + API restrictions so a leaked key can't be abused.")
+            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, width: 6)
+            paragraph "<small style='color:#666'>If a Google Maps API Key is set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).<br><b style='color:#a00'>Security:</b> the key is embedded in the page HTML and visible to anyone who can load the map. Restrict it in Google Cloud Console (APIs &amp; Services → Credentials) with HTTP-referrer + API restrictions so a leaked key can't be abused.</small>"
             String viewUrl = getViewUrl()
             if (viewUrl) {
                 paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small><br><small style='color:#a00'><b>Privacy:</b> this URL contains an access_token that grants live access to all members' coordinates. Don't share it or screenshots of this page. If it leaks, disable + re-enable OAuth on the app source-code editor to rotate the token.</small>"
