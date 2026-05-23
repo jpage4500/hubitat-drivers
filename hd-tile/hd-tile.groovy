@@ -45,6 +45,7 @@ metadata {
 
 preferences {
     input("deviceType", "enum", title: "Device Type", required: true,
+        description: "see <a href=https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/hd+-tile target=_blank>this page</a> for examples",
         options: [
             "imageUrl": "Image URL",
             "videoUrl" : "Video URL",

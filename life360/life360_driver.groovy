@@ -5,6 +5,7 @@
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.1.4  - 06/30/26 - add history preference
  *  5.0.15 - 12/31/24 - minor fixes
  *  5.0.12 - 12/24/24 - Dynamic Polling (mpalermo73)
  *  5.0.12 - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
@@ -70,7 +71,12 @@ metadata {
         // place data
         attribute "address1", "string"
         attribute "address1prev", "string"
+        // JSON formatted list of favorite places (circles)
         attribute "savedPlaces", "string"
+        // Compact location history (only when saveHistory=true). Format: "1|s,lat,lng|ds,dlat,dlng|..."
+        // - "1" is version; first entry is absolute (seconds-since-epoch + decimal lat/lng);
+        //   subsequent entries are signed deltas (sec delta, int lat delta in 1e-5 deg, int lng delta in 1e-5 deg)
+        attribute "history", "string"
 
         // hubitat device states
         attribute "contact", "string"
@@ -98,6 +104,7 @@ metadata {
 preferences {
     input "isMiles", "bool", title: "Units: Miles (false for Kilometer)", required: true, defaultValue: true
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
+    input "saveHistory", "bool", title: "Save Location History", description: "Save recent locations (time/lat/lng) to 'history' attribute", required: true, defaultValue: false
 
     input "transitThreshold", "number", title: "Minimum 'Transit' Speed", description: "Set minimum speed for inTransit to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: 0
     input "drivingThreshold", "number", title: "Minimum 'Driving' Speed", description: "Set minimum speed for isDriving to be true\n(leave as 0 to use Life360 data)", required: true, defaultValue: 0
@@ -282,6 +289,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     sendEvent(name: "latitude", value: latitude)
     sendEvent(name: "accuracy", value: accuracy)
 
+    // *** Location History (only when lat/lng actually changed) ***
+    if (saveHistory && (prevLatitude == null || prevLatitude != latitude
+        || prevLongitude == null || prevLongitude != longitude)) {
+        saveLocationHistory(latitude, longitude, lastUpdated.getTime())
+    }
+
     // Update status attribute with appropriate distance units
     // and update appropriate speed units
     // as chosen by users in device preferences
@@ -404,6 +417,90 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     return inTransit
 }
 
+/**
+ * Append a location to state.locationHistory as [timeMs, lat, lng], most recent first, capped at 100 entries.
+ */
+def saveLocationHistory(Double latitude, Double longitude, Long timeMs) {
+    try {
+        if (state.locationHistory == null) state.locationHistory = []
+
+        // round lat/lng to 5 decimals (~1m precision) to keep entries compact
+        Double latRounded = Math.round(latitude * 100000) / 100000.0
+        Double lngRounded = Math.round(longitude * 100000) / 100000.0
+
+        state.locationHistory.add(0, [timeMs, latRounded, lngRounded])
+
+        // cap at 100 entries
+        while (state.locationHistory.size() > 100) {
+            state.locationHistory.remove(state.locationHistory.size() - 1)
+        }
+
+        // generate history attribute
+        getHistory()
+    } catch (e) {
+        log.error "saveLocationHistory: ${e}"
+    }
+}
+
+/**
+ * Write up to 1024 chars of location history to the 'history' attribute.
+ *
+ * Format v1: "1|s,lat,lng|ds,dlat,dlng|ds,dlat,dlng|..."
+ *   - leading "1" is the format version
+ *   - first entry is absolute: s = seconds-since-epoch, lat/lng = decimal (5 decimals)
+ *   - subsequent entries are signed deltas from the previous entry:
+ *       ds   = seconds delta (negative since list is most-recent-first)
+ *       dlat = integer delta in units of 0.00001 deg
+ *       dlng = integer delta in units of 0.00001 deg
+ *   - to decode entry i: s_i = s_{i-1} + ds_i, lat_i = lat_{i-1} + dlat_i/1e5
+ *   - entries within 5m of the previous emitted entry are skipped (GPS jitter filter)
+ */
+def getHistory() {
+    try {
+        def entries = state.locationHistory ?: []
+        StringBuilder sb = new StringBuilder("1")
+        int count = 0
+        Long prevSec = null
+        Long prevLat100k = null
+        Long prevLng100k = null
+        for (entry in entries) {
+            Double latDeg = entry[1] as Double
+            Double lngDeg = entry[2] as Double
+            Long sec = (entry[0] as Long).intdiv(1000)
+            Long lat100k = Math.round(latDeg * 100000) as Long
+            Long lng100k = Math.round(lngDeg * 100000) as Long
+
+            // skip subsequent entries that haven't moved >5m from the previous emitted entry (GPS jitter)
+            if (prevSec != null) {
+                Double meters = haversine(prevLat100k / 100000.0, prevLng100k / 100000.0, latDeg, lngDeg) * 1000.0
+                if (meters < 5.0) continue
+            }
+
+            String token
+            if (prevSec == null) {
+                token = "|${sec},${lat100k / 100000.0},${lng100k / 100000.0}"
+            } else {
+                token = "|${sec - prevSec},${lat100k - prevLat100k},${lng100k - prevLng100k}"
+            }
+
+            if (sb.length() + token.length() > 1024) break
+            sb.append(token)
+            prevSec = sec
+            prevLat100k = lat100k
+            prevLng100k = lng100k
+            count++
+        }
+
+        String result = sb.toString()
+        sendEvent(name: "history", value: result)
+        return result
+    } catch (e) {
+        log.error "getHistory: ${e}"
+        sendEvent(name: "history", value: "1")
+        return "1"
+    }
+}
+
 def haversine(lat1, lon1, lat2, lon2) {
     Double R = 6372.8
     // In kilometers
@@ -480,7 +577,9 @@ def sendHistory(msgValue) {
  * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
  */
 def historyClearData() {
-    if (logEnable) log.trace "In historyClearData"
+    if (logEnable) log.trace "historyClearData"
+    // clear location history
+    state.locationHistory = []
     msgValue = "-"
     logCharCount = "0"
     state.list1 = []

@@ -271,24 +271,33 @@ def refreshData(List<String> symbols) {
 
 /**
  * command: set stock symbol(s)
+ * NOTE: varargs — MakerAPI splits URL path args on commas, so setSymbol/HUT,MU arrives as two String args
  */
-def setSymbol(String symbol) {
-    symbol = symbol?.trim()?.toUpperCase()
-    if (!symbol) return
+def setSymbol(String... symbols) {
+    def list = (symbols ?: []).collect { String s -> s ? s.split(",") as List : [] }.flatten()*.trim().findAll { it }
+    List<String> newList = list.collect { it.toUpperCase() } as List<String>
 
-    def list = symbol.split(",")*.trim().findAll { it }
-    List<String> symbolsList = list.collect { it.toUpperCase() } as List<String>
+    // no symbols passed - clear everything
+    if (newList.isEmpty()) {
+        device.updateSetting("symbols", [value: "", type: "string"])
+        sendEvent(name: "stockProfiles", value: "[:]")
+        sendEvent(name: "stockQuotes", value: "[:]")
+        sendEvent(name: "latestQuotes", value: "[:]")
+        state.stockProfiles = [:]
+        state.stockQuotes = [:]
+        state.latestQuotes = [:]
+        logDebug("setSymbol: cleared")
+        return
+    }
 
-    // clear out existing data
-    device.updateSetting("symbols", [value: symbolsList.join(", "), type: "string"])
-    sendEvent(name: "stockQuotes", value: "[:]")
-    sendEvent(name: "latestQuotes", value: "[:]")
-    state.stockQuotes = [:]
-    state.latestQuotes = [:]
+    def currentList = getSymbolList()
+    def toAdd = newList.findAll { !currentList.contains(it) }
+    def toRemove = currentList.findAll { !newList.contains(it) }
 
-    logDebug("setSymbol: Set ${symbol}, symbols: ${symbolsList}")
-    fetchProfiles(symbolsList)
-    refreshData(symbolsList)
+    logDebug("setSymbol: current:${currentList}, new:${newList}, add:${toAdd}, remove:${toRemove}")
+
+    toRemove.each { removeSymbol(it) }
+    toAdd.each { addSymbol(it) }
 }
 
 /**
