@@ -660,6 +660,19 @@ def createChildDevices() {
         }
     }
 
+    // remove child devices whose member is no longer selected (orphan cleanup)
+    Set<String> wantedDnis = settings.users.collect { "${app.id}.${it}".toString() } as Set
+    getChildDevices().each { child ->
+        if (!wantedDnis.contains(child.deviceNetworkId)) {
+            log.info "createChildDevices: removing orphan child: ${child.displayName} (${child.deviceNetworkId})"
+            try {
+                deleteChildDevice(child.deviceNetworkId)
+            } catch (e) {
+                log.error "createChildDevices: failed to remove ${child.displayName}: ${e}"
+            }
+        }
+    }
+
     // not enabling webhook as it doesn't appear to work anymore
     // createCircleSubscription()
 }
