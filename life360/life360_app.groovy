@@ -306,6 +306,7 @@ boolean fetchLocations() {
 }
 
 def fetchMemberLocation(memberId) {
+    String memberName = state.members?.find { it.id == memberId }?.firstName ?: memberId
     def params = life360Params("/circles/${circle}/members/${memberId}")
 
     // add cookies to header
@@ -336,8 +337,8 @@ def fetchMemberLocation(memberId) {
                 captureCookies(response)
 
                 if (response.status == 200) {
-                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200): member:${memberId}")
+                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberName}: ${response.data}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), member:${memberName}")
 
                     // update child devices
                     notifyChildDevice(memberId, response.data)
@@ -364,7 +365,7 @@ def fetchMemberLocation(memberId) {
                     }
                     // NOTE: if user WAS inTransit before, do we keep them in that state?
                     boolean prevInTransit = isMemberInTransit(memberId)
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}, prevInTransit:${prevInTransit}")
+                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), prevInTransit:${prevInTransit}, member:${memberName}")
                 } else {
                     log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
                     state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
@@ -374,7 +375,7 @@ def fetchMemberLocation(memberId) {
         // handleException classifies and updates state.failCount / state.tokenLikelyExpired /
         // state.rateLimitedUntilMs / state.cookies as appropriate. Do NOT synchronously retry —
         // let the next scheduled tick try again (fetchLocations short-circuits on AUTH/RATE_LIMIT).
-        handleException("fetchMemberLocation: member:${memberId}", e)
+        handleException("fetchMemberLocation: member:${memberName}", e)
     }
 }
 
