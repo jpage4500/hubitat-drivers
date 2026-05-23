@@ -516,7 +516,7 @@ def installed() {
  * called when user hits DONE on app (already installed)
  */
 def updated() {
-    log.debug("updated:")
+    log.debug("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}")
     // user clicked Done — assume any pasted token is fresh; let polling resume
     state.tokenLikelyExpired = false
     state.failCount = 0
