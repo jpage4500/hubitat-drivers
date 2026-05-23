@@ -63,6 +63,8 @@ sendEvent(name: "address1prev", value: "No Data")
 **Problem:** throws `MissingPropertyException` when the user clicks "Clear History". Event names `numOfCharacters1` / `lastLogMessage1` also don't match what `sendHistory` writes (`numOfCharacters` / `lastLogMessage`), so even if it didn't throw it wouldn't clear the right attributes. The locally-scoped helpers `msgValue`, `logCharCount`, `historyLog` are also assigned without `def` (implicit globals).
 **Fix:** drop the `1` suffix on the event names, use the locally-defined `logCharCount` / `msgValue` (declared with `def`), and use `0` as the count.
 
+**Status:** FIXED in this branch.
+
 ### 2.3  `life360_app.groovy` (`scheduleUpdates`) — `pollFreq=0` (Disabled) silently schedules 1–4s polling
 
 **Problem:** random jitter is added unconditionally, so "Disabled" becomes `0 + (0..4) = 1..4` seconds.

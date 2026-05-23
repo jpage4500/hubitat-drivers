@@ -598,14 +598,12 @@ def historyClearData() {
     if (logEnable) log.trace "historyClearData"
     // clear location history
     state.locationHistory = []
-    msgValue = "-"
-    logCharCount = "0"
     state.list1 = []
     if (logEnable) log.info "Clearing the data"
-    historyLog = "Waiting for Data..."
+    String historyLog = "Waiting for Data..."
     sendEvent(name: "bpt-history", value: historyLog, displayed: true)
-    sendEvent(name: "numOfCharacters1", value: logCharCount1, displayed: true)
-    sendEvent(name: "lastLogMessage1", value: msgValue, displayed: true)
+    sendEvent(name: "numOfCharacters", value: 0, displayed: true)
+    sendEvent(name: "lastLogMessage", value: "-", displayed: true)
 }
 
 /**
