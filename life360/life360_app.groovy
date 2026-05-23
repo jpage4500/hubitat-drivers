@@ -1,5 +1,9 @@
 import java.net.http.HttpTimeoutException
 import java.net.SocketTimeoutException
+import groovy.transform.Field
+
+// §8.6 — shared RNG so we don't allocate one per scheduleUpdates/handleTimerFired tick
+@Field static final Random RNG = new Random()
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
@@ -88,8 +92,8 @@ def mainPage() {
 
                 if (!isEmpty(state.places)) {
                     paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
-                    thePlaces = state.places.collectEntries { [it.id, it.name] }
-                    sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
+                    def thePlaces = state.places.collectEntries { [it.id, it.name] }
+                    def sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
                     input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true
                 }
             }
@@ -98,8 +102,8 @@ def mainPage() {
                 input("fetchMembersBtn", "button", title: "Fetch Members")
 
                 if (!isEmpty(state.members)) {
-                    theMembers = state.members.collectEntries { [it.id, it.firstName + " " + it.lastName] }
-                    sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
+                    def theMembers = state.members.collectEntries { [it.id, it.firstName + " " + it.lastName] }
+                    def sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
                     input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true
                 }
             }
@@ -292,8 +296,8 @@ boolean fetchLocations() {
     if (state.lastUpdateMs != null) {
         long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
         if (lastAttempt < 5) {
-            //if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
-            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
+            //if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}s"
+            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}s"
             return false
         }
     }
@@ -633,7 +637,7 @@ def scheduleUpdates() {
     }
 
     // add some randomness to this value (between 0 and 5 seconds)
-    Integer random = Math.abs(new Random().nextInt() % 5)
+    Integer random = Math.abs(RNG.nextInt() % 5)
     Integer refreshSecs = baseSecs + random
 
     // log.info — visibility into polling-mode flips and (re)schedules in production
@@ -680,12 +684,11 @@ def handleTimerFired() {
     if (!fetchLocations()) return
 
     // change things up every 10 minutes or so
-    Long currentTimeMs = new Date().getTime()
     Long updateTimeMs = state.updateTimeMs ?: 0
-    if (currentTimeMs > updateTimeMs) {
+    if (now > updateTimeMs) {
         // update again in 5-10 minutes
-        Integer random = Math.abs(new Random().nextInt() % 300000) + 300000
-        state.updateTimeMs = currentTimeMs + random
+        Integer random = Math.abs(RNG.nextInt() % 300000) + 300000
+        state.updateTimeMs = now + random
         if (logEnable) log.info "handleTimerFired: changing things up; ${random}ms"
 
         // re-schedule timer to add a little randomness
@@ -747,7 +750,7 @@ def notifyChildDevice(memberId, memberObj) {
     def thePlaces = state.places.sort { a, b -> a.name <=> b.name }
     def home = state.places.find { it.id == settings.place }
 
-    placesMap = [:]
+    def placesMap = [:]
     for (rec in thePlaces) {
         placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
     }
@@ -824,7 +827,7 @@ void dynamicPolling() {
         //if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
 
     } else if (! state.memberInTransit && state.dynamicPollingActive) {
-        state.memberInTransit = false
+        // §8.4: state.memberInTransit was already set to false at the top of this method
         scheduleUpdates()
         if (logEnable) log.debug("dynamicPolling: switched DYNAMIC -> STANDARD (memberInTransit: ${state.memberInTransit}, dynamicPollingActive: ${state.dynamicPollingActive})")
     } else {

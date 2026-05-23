@@ -56,7 +56,7 @@ metadata {
         attribute "userActivity", "string"
 
         // device data
-        attribute "battery", "number"
+        // NOTE: 'battery' attribute is provided by capability "Battery"; don't redeclare (§8.11)
         attribute "charge", "enum", ["true", "false"]
         attribute "status", "string"
         attribute "wifiState", "enum", ["true", "false"]
@@ -150,16 +150,6 @@ def installed() {
 def updated() {
     log.info "updated: Location Tracker User Driver has been Updated"
     refresh()
-}
-
-def strToDate(dateStr) {
-    try {
-        // "updated": "2024-11-07T21:42:09.900Z",
-        return Date.parse("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", dateStr)
-    } catch (e) {
-        log.error("dateToMs: bad date: ${dateStr}, ${e}")
-    }
-    return null
 }
 
 // called from Life360+ app
@@ -281,7 +271,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // *** Presence ***
     String descriptionText = device.displayName + " has " + ((memberPresence == "present") ? "arrived" : "left")
     sendEvent(name: "presence", value: memberPresence, descriptionText: descriptionText)
-    state.presence = memberPresence
 
     // *** Coordinates ***
     sendEvent(name: "longitude", value: longitude)
@@ -346,7 +335,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     }
 
     sendEvent(name: "status", value: sStatus)
-    state.status = sStatus
 
     sendEvent(name: "inTransit", value: inTransit)
     sendEvent(name: "isDriving", value: isDriving)
@@ -389,7 +377,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     // *** Timestamp ***
     sendEvent(name: "lastUpdated", value: lastUpdated)
-    state.update = true
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {
@@ -404,8 +391,9 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     else if (inTransit) binTransita = "Moving"
     else binTransita = "Not Moving"
 
-    int sEpoch = device.currentValue('since')
-    if (sEpoch == null) {
+    // §8.13: long to avoid Y2K38 overflow once 'since' epoch exceeds 2^31 seconds
+    long sEpoch = (device.currentValue('since') ?: 0L) as long
+    if (sEpoch == 0L) {
         theDate = use(groovy.time.TimeCategory) {
             new Date(0)
         }
@@ -525,7 +513,8 @@ def getHistory() {
     }
 }
 
-def haversine(lat1, lon1, lat2, lon2) {
+// §8.12: pure math, no instance state — make static
+static def haversine(lat1, lon1, lat2, lon2) {
     Double R = 6372.8
     // In kilometers
     Double dLat = Math.toRadians(lat2 - lat1)
