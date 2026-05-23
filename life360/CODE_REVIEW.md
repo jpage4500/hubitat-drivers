@@ -323,15 +323,15 @@ Not a bug in current master (the fork still uses synchronous `fetchLocations`), 
 | ID | File | Issue |
 | --- | --- | --- |
 | 8.1 | App | ~~`log.debug("fetchPlaces:")` not guarded by `if (logEnable)` — inconsistent with rest of app~~ — FIXED (gated, and given context) |
-| 8.2 | App | `handleTimerFired` creates two `new Date()` objects; capture once as `long now` |
-| 8.3 | App | `lastAttempt` is in seconds but the message says `"last:${lastAttempt}ms"` |
-| 8.4 | App | `state.memberInTransit = false` set at top of `dynamicPolling()` then redundantly set again in one branch |
-| 8.5 | App | `placesMap`, `sortedPlaces`, `sortedMembers`, `thePlaces`, `theMembers` used without `def` — implicit Groovy globals |
-| 8.6 | App | `new Random()` instantiated on every `scheduleUpdates()` / `handleTimerFired` — use `@Field static final Random RNG = new Random()` |
-| 8.7 | App | `captureCookiesAsync` only saves the first `Set-Cookie` value; sync `captureCookies` joins multiples with `;` — inconsistency, not biting today |
+| 8.2 | App | ~~`handleTimerFired` creates two `new Date()` objects; capture once as `long now`~~ — FIXED |
+| 8.3 | App | ~~`lastAttempt` is in seconds but the message says `"last:${lastAttempt}ms"`~~ — FIXED (unit changed to `s`) |
+| 8.4 | App | ~~`state.memberInTransit = false` set at top of `dynamicPolling()` then redundantly set again in one branch~~ — FIXED |
+| 8.5 | App | ~~`placesMap`, `sortedPlaces`, `sortedMembers`, `thePlaces`, `theMembers` used without `def` — implicit Groovy globals~~ — FIXED |
+| 8.6 | App | ~~`new Random()` instantiated on every `scheduleUpdates()` / `handleTimerFired`~~ — FIXED with `@Field static final Random RNG = new Random()` |
+| 8.7 | App | ~~`captureCookiesAsync` only saves the first `Set-Cookie` value; sync `captureCookies` joins multiples with `;`~~ — N/A (the fork no longer has `captureCookiesAsync`; only the sync path exists) |
 | 8.8 | App | ~~`scheduleUpdates()` re-armed from inside `handleTimerFired` every 5–10 min — check whether rate actually changed before re-scheduling~~ — FIXED with §2.6 |
-| 8.9 | Driver | `strToDate()` defined but never called — dead code |
-| 8.10 | Driver | `state.presence`, `state.status`, `state.update` set but never read — wasted state |
-| 8.11 | Driver | `attribute "battery", "number"` duplicates what `capability "Battery"` already provides |
-| 8.12 | Driver | `haversine()` is pure math — should be `static` |
-| 8.13 | Driver | HTML `int sEpoch = device.currentValue('since')` — overflows signed int in 2038 (Y2K38); use `long` |
+| 8.9 | Driver | ~~`strToDate()` defined but never called — dead code~~ — FIXED (removed) |
+| 8.10 | Driver | ~~`state.presence`, `state.status`, `state.update` set but never read — wasted state~~ — FIXED (removed) |
+| 8.11 | Driver | ~~`attribute "battery", "number"` duplicates what `capability "Battery"` already provides~~ — FIXED (removed) |
+| 8.12 | Driver | ~~`haversine()` is pure math — should be `static`~~ — FIXED |
+| 8.13 | Driver | ~~HTML `int sEpoch = device.currentValue('since')` — overflows signed int in 2038 (Y2K38); use `long`~~ — FIXED |
