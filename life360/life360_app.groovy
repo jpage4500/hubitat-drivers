@@ -203,7 +203,7 @@ def fetchPlaces() {
     }
 
     def params = life360Params("/circles/${circle}/places.json")
-    log.debug("fetchPlaces:")
+    if (logEnable) log.debug("fetchPlaces: circle:${circle}")
     try {
         httpGet(params) {
             response ->
@@ -230,7 +230,7 @@ def fetchMembers() {
 
     def params = life360Params("/circles/${circle}/members")
 
-    if (logEnable) log.debug("fetchMembers:")
+    if (logEnable) log.debug("fetchMembers: circle:${circle}")
 
     try {
         httpGet(params) {
@@ -546,7 +546,7 @@ def uninstalled() {
  * can be called by child device to force update location
  */
 def refresh() {
-    if (logEnable) log.debug("refresh:")
+    if (logEnable) log.debug("refresh: manual refresh from child device")
     fetchLocations()
     scheduleUpdates()
 }
