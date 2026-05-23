@@ -147,6 +147,8 @@ if (address1 == "No Data" ? "Between Places" : address1 != "Home" && inTransit) 
 if (address1 != "Home" && inTransit) { ... }
 ```
 
+**Status:** FIXED in this branch.
+
 ### 3.3  `life360_app.groovy:633` (`createChildDevices`) — `addChildDevice` hardcodes hub ID `1234`
 
 **Problem:** anyone whose hub ID isn't `1234` gets the child device created on the wrong hub (or fails on multi-hub installs).
