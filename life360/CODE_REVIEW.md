@@ -77,6 +77,38 @@ if (refreshSecs > 0 ...) { schedule(...) }             // schedules ultra-fast p
 **Problem:** HTML template references `fontSize`, which doesn't exist. The defined preference is `avatarFontSize`.
 **Fix:** replace `fontSize` with `avatarFontSize` in the `<table style=...>` string.
 
+### 2.5  `life360_app.groovy:715` (`dynamicPolling`) — dynamic polling never exits when Life360 keeps a stale `inTransit` flag
+
+**Problem:** `dynamicPolling()` decides whether to stay in fast-poll mode purely by reading `state["inTransit-<memberId>"]`, which is whatever Life360's API reported for that member. Life360 routinely keeps `inTransit=true` for many minutes after a member has actually stopped moving (or sometimes indefinitely if their phone hands off WiFi/cell oddly). When that happens for any one of N members, the app stays locked in dynamic-poll mode forever — e.g. polling every 20s instead of every 180s, ~9× the API call rate, ~9× the app-busy contribution.
+
+Observed in the wild: one member showed `prevInTransit:true` continuously for the entire log window with zero matching "moved" lines (driver-side jitter filter correctly suppressing because the member is stationary). Dynamic polling held at 20s the whole time.
+
+**Fix:** gate the in-transit flag on actual motion before letting it drive dynamic-polling mode. In the driver where `inTransit` is decided / returned (and saved into `state["inTransit-<memberId>"]` by the app), require **both** Life360's `inTransit` flag **and** either a non-trivial speed or a recent position change. Rough shape:
+
+```groovy
+// in the driver, before returning inTransit to the app:
+double movedMeters = haversine(prevLat, prevLng, latitude, longitude) * 1000.0
+double accuracyM   = Math.max((prevAccuracy ?: 0) as double, (accuracy ?: 0) as double)
+boolean reallyMoving = speedUnits >= 1.0 || movedMeters > accuracyM
+if (inTransit && !reallyMoving) {
+    inTransit = false  // ignore stale Life360 in-transit flag
+}
+```
+
+(Same idea could live in `dynamicPolling()` instead, by also reading per-member speed/lastMoved state — but the driver already has the prev-position context, so it's the cleaner home.) Also worth: if `inTransit` has been true for > 15 min and the member hasn't moved more than `accuracy`, force a reset.
+
+**Status:** FIXED in this branch — driver `generatePresenceEvent` now overrides `inTransit=true` to `false` when `speedUnits < 0.5` and movement since last update is within GPS accuracy. Logged as `<name>: ignoring stale Life360 inTransit flag (...)`.
+
+### 2.6  `life360_app.groovy` (`scheduleUpdates` / `handleTimerFired`) — overlapping timer instances fire on top of each other
+
+**Problem:** `scheduleUpdates()` is called from `updated()`, `initialize()`, and from inside `handleTimerFired()` itself (when switching between standard and dynamic poll rates). It calls `schedule(...)` without first `unschedule`-ing the existing job in all paths. After an `updated:` event, the previously-scheduled timer can still fire alongside the newly-scheduled one — observed in the wild as three `handleTimerFired` invocations within the same second (e.g. `12:36:00.044`, `12:36:00.149`, `12:36:00.383`) after an `updated:` at 12:35:21.
+
+Each extra fire runs `fetchMembers()` → another HTTP round-trip to Life360 and another full member iteration. Combined with §2.5 (stuck dynamic polling), this multiplies hub load substantially: 3× the API calls per tick at 3× the tick rate = ~9× nominal.
+
+**Fix:** in `scheduleUpdates()` (and anywhere else that calls `schedule(...)` for the polling job), always `unschedule("handleTimerFired")` first. Better: track the currently scheduled interval in state and short-circuit if the desired rate hasn't changed, so we don't churn the scheduler from inside `handleTimerFired` at all. (§8.8 covers the no-op-rebuild half; this entry adds the unschedule discipline.)
+
+**Status:** FIXED in this branch — `scheduleUpdates()` now tracks `state.scheduledBaseSecs` and returns early when the desired base rate hasn't changed and the polling mode hasn't flipped. `installed()`/`updated()`/`initialize()` clear `state.scheduledBaseSecs` first to force a (re)arm on lifecycle events. Polling-mode flips are logged at `info` level.
+
 ---
 
 ## 3. Bugs — Medium Priority
@@ -247,7 +279,7 @@ Not a bug in current master (the fork still uses synchronous `fetchLocations`), 
 | 8.5 | App | `placesMap`, `sortedPlaces`, `sortedMembers`, `thePlaces`, `theMembers` used without `def` — implicit Groovy globals |
 | 8.6 | App | `new Random()` instantiated on every `scheduleUpdates()` / `handleTimerFired` — use `@Field static final Random RNG = new Random()` |
 | 8.7 | App | `captureCookiesAsync` only saves the first `Set-Cookie` value; sync `captureCookies` joins multiples with `;` — inconsistency, not biting today |
-| 8.8 | App | `scheduleUpdates()` re-armed from inside `handleTimerFired` every 5–10 min — check whether rate actually changed before re-scheduling |
+| 8.8 | App | ~~`scheduleUpdates()` re-armed from inside `handleTimerFired` every 5–10 min — check whether rate actually changed before re-scheduling~~ — FIXED with §2.6 |
 | 8.9 | Driver | `strToDate()` defined but never called — dead code |
 | 8.10 | Driver | `state.presence`, `state.status`, `state.update` set but never read — wasted state |
 | 8.11 | Driver | `attribute "battery", "number"` duplicates what `capability "Battery"` already provides |

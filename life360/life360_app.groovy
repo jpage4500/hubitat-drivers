@@ -508,6 +508,7 @@ def installed() {
     createChildDevices()
     // re-schedule updates on reboot; TODO: is this needed?
     subscribe(location, 'systemStart', initialize)
+    state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
 
@@ -521,11 +522,13 @@ def updated() {
     state.failCount = 0
     state.rateLimitedUntilMs = null
     createChildDevices()
+    state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
 
 def initialize(evt) {
     log.debug("initialize: ${evt.device} ${evt.value} ${evt.name}")
+    state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
 
@@ -549,21 +552,41 @@ def refresh() {
 }
 
 def scheduleUpdates() {
-    unschedule()
-
-    Integer refreshSecs
-    if (settings.dynamicPolling && state.memberInTransit && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger())) {
-        state.dynamicPollingActive = true
-        refreshSecs = settings.dynamicPollFreq.toInteger()
+    // pick the desired base rate (no jitter), so we can detect no-op rebuilds
+    Integer baseSecs
+    boolean wantDynamic = (settings.dynamicPolling && state.memberInTransit
+        && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger()))
+    if (wantDynamic) {
+        baseSecs = settings.dynamicPollFreq.toInteger()
     } else {
-        refreshSecs = settings.pollFreq.toInteger()
-        state.dynamicPollingActive = false
+        baseSecs = settings.pollFreq.toInteger()
     }
+
+    boolean prevActive = (state.dynamicPollingActive == true)
+    boolean modeFlipped = (prevActive != wantDynamic)
+
+    // skip churn: if the base rate hasn't changed AND we've scheduled at least once,
+    // don't tear down + re-arm the job. Stops scheduleUpdates() from re-firing the
+    // same cron registration when called repeatedly from handleTimerFired/fetchLocations.
+    if (!modeFlipped && state.scheduledBaseSecs != null && state.scheduledBaseSecs == baseSecs) {
+        if (logEnable) log.debug("scheduleUpdates: no-op (baseSecs:${baseSecs} unchanged)")
+        return
+    }
+
+    unschedule()
+    state.dynamicPollingActive = wantDynamic
+    state.scheduledBaseSecs = baseSecs
+
     // add some randomness to this value (between 0 and 5 seconds)
     Integer random = Math.abs(new Random().nextInt() % 5)
-    refreshSecs += random
+    Integer refreshSecs = baseSecs + random
 
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
+    // log.info — visibility into polling-mode flips and (re)schedules in production
+    if (modeFlipped) {
+        log.info("scheduleUpdates: polling mode -> ${wantDynamic ? 'DYNAMIC' : 'STANDARD'}, baseSecs:${baseSecs}")
+    } else if (logEnable) {
+        log.debug("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
+    }
 
     if (refreshSecs > 0 && refreshSecs < 60) {
         // seconds
