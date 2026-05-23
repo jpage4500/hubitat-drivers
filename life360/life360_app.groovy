@@ -203,14 +203,13 @@ def fetchPlaces() {
     }
 
     def params = life360Params("/circles/${circle}/places.json")
-    if (logEnable) log.debug("fetchPlaces: circle:${circle}")
     try {
         httpGet(params) {
             response ->
                 captureCookies(response)
                 if (response.status == 200) {
                     state.places = response.data.places
-                    if (logEnable) log.debug("fetchPlaces: DONE")
+                    if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { it.name }}")
                     state.message = null
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
@@ -230,8 +229,6 @@ def fetchMembers() {
 
     def params = life360Params("/circles/${circle}/members")
 
-    if (logEnable) log.debug("fetchMembers: circle:${circle}")
-
     try {
         httpGet(params) {
             response ->
@@ -239,6 +236,7 @@ def fetchMembers() {
                 //if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
+                    if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { it.firstName }}")
                     state.message = null
 
                     // update child devices
@@ -546,7 +544,6 @@ def uninstalled() {
  * can be called by child device to force update location
  */
 def refresh() {
-    if (logEnable) log.debug("refresh: manual refresh from child device")
     fetchLocations()
     scheduleUpdates()
 }
