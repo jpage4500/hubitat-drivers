@@ -280,7 +280,7 @@ Not a bug in current master (the fork still uses synchronous `fetchLocations`), 
 
 | ID | File | Issue |
 | --- | --- | --- |
-| 8.1 | App | `log.debug("fetchPlaces:")` not guarded by `if (logEnable)` — inconsistent with rest of app |
+| 8.1 | App | ~~`log.debug("fetchPlaces:")` not guarded by `if (logEnable)` — inconsistent with rest of app~~ — FIXED (gated, and given context) |
 | 8.2 | App | `handleTimerFired` creates two `new Date()` objects; capture once as `long now` |
 | 8.3 | App | `lastAttempt` is in seconds but the message says `"last:${lastAttempt}ms"` |
 | 8.4 | App | `state.memberInTransit = false` set at top of `dynamicPolling()` then redundantly set again in one branch |
