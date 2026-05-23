@@ -402,7 +402,12 @@ String handleException(String tag, Exception e) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
-            if (!wasExpired) notifyTokenExpired()
+            if (!wasExpired) {
+                notifyTokenExpired()
+                // down-shift polling to 5 min so the timer doesn't keep firing at the
+                // user's normal rate while every call is doomed to early-return
+                scheduleUpdates()
+            }
         } else {
             state.message = "AUTH ERROR (${status}) on ${tag}; cleared session, will retry"
         }
@@ -564,6 +569,15 @@ def scheduleUpdates() {
         baseSecs = settings.dynamicPollFreq.toInteger()
     } else {
         baseSecs = settings.pollFreq.toInteger()
+    }
+
+    // when token is flagged expired, slow polling to 5 minutes — fetchLocations
+    // would early-return anyway, but the timer was still firing at the user's poll
+    // rate (10s on aggressive installs). 5 min is fast enough to pick up a fresh
+    // token quickly without spamming the scheduler.
+    if (state.tokenLikelyExpired) {
+        baseSecs = 300
+        wantDynamic = false
     }
 
     boolean prevActive = (state.dynamicPollingActive == true)
