@@ -185,7 +185,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     Double speed = toDouble(location.speed)
     Boolean inTransit = toBool(location.inTransit)
     Boolean isDriving = toBool(location.isDriving)
-    Long since = location.since.toLong()
+    Long since = (location.since != null) ? location.since.toLong() : 0L
     // NOTE: userActivity passed in v5 API (not implemented)
     // userActivity:[unknown|os_biking|os_running|vehicle]
     String userActivity = location.userActivity

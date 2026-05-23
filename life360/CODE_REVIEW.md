@@ -182,6 +182,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** if Life360 omits the `since` field (rare but seen), `.toLong()` throws and aborts `generatePresenceEvent` mid-update — no events get sent for that poll.
 **Fix:** `location.since?.toLong() ?: 0L`
 
+**Status:** FIXED in this branch.
+
 ### 3.8  `life360_app.groovy` (`fetchLocations`) — timer keeps firing at full rate when token is known-expired
 
 **Problem:** when `state.tokenLikelyExpired` is true, `fetchLocations()` early-returns but the timer still fires at the user's poll interval.
