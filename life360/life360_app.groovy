@@ -649,18 +649,13 @@ def createChildDevices() {
         if (!deviceWrapper) {
             def member = state.members.find { it.id == memberId }
             def memberName = member.firstName
-            def childList = getChildDevices()
-            if (childList.find { it.data.vcId == "${member}" }) {
-                if (logEnable) log.info "createChildDevices: ${memberName} already exists...skipping"
-            } else {
-                log.info "createChildDevices: Creating Life360 Device: ${memberName}"
-                try {
-                    addChildDevice("jpage4500", "Life360+ Driver", externalId, null, ["name": "Life360 - ${memberName}", isComponent: false])
-                    log.info "createChildDevices: Child Device Successfully Created"
-                }
-                catch (e) {
-                    log.error "createChildDevices: Child device creation failed with error = ${e}"
-                }
+            log.info "createChildDevices: Creating Life360 Device: ${memberName}"
+            try {
+                addChildDevice("jpage4500", "Life360+ Driver", externalId, null, ["name": "Life360 - ${memberName}", isComponent: false])
+                log.info "createChildDevices: Child Device Successfully Created"
+            }
+            catch (e) {
+                log.error "createChildDevices: Child device creation failed with error = ${e}"
             }
         }
     }
