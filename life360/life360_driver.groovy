@@ -329,7 +329,8 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     } else if (movedMeters > accuracyMeters && (inTransit || isDriving)) {
         // Real movement — surface it as info so users can correlate polls with motion.
         Double movedUnits = ((movedMeters / 1000.0) / (isMiles ? 1.609344 : 1.0)).round(2)
-        log.info("${memberFirstName}: moved ${movedUnits} ${isMiles ? 'mi' : 'km'} @ ${speedUnits} ${isMiles ? 'mph' : 'kph'}")
+        String mapsUrl = "https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}"
+        log.info("${memberFirstName}: moved ${movedUnits} ${isMiles ? 'mi' : 'km'} @ ${speedUnits} ${isMiles ? 'mph' : 'kph'} — <a href='${mapsUrl}' target='_blank'>Google Maps link</a>")
     }
 
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
