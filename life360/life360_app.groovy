@@ -121,10 +121,10 @@ def mainPage() {
         }
 
         section(header("Map View")) {
-            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, description: "If set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).")
+            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, description: "If set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required). <b>Security:</b> the key is embedded in the page HTML and visible to anyone who can load the map. Restrict it in Google Cloud Console (APIs &amp; Services → Credentials) with HTTP-referrer + API restrictions so a leaked key can't be abused.")
             String viewUrl = getViewUrl()
             if (viewUrl) {
-                paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small>"
+                paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small><br><small style='color:#a00'><b>Privacy:</b> this URL contains an access_token that grants live access to all members' coordinates. Don't share it or screenshots of this page. If it leaks, disable + re-enable OAuth on the app source-code editor to rotate the token.</small>"
             } else {
                 input("generateViewLinkBtn", "button", title: "Generate Map Link")
                 paragraph "<small style='color:#888'>Enable OAuth on this app (top-right of the app source code editor), then click 'Generate Map Link'.</small>"
