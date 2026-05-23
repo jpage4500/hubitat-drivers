@@ -328,8 +328,14 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     } else if (movedMeters > accuracyMeters && (inTransit || isDriving)) {
         // Real movement — surface it as info so users can correlate polls with motion.
         Double movedUnits = ((movedMeters / 1000.0) / (isMiles ? 1.609344 : 1.0)).round(2)
-        String mapsUrl = "https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}"
-        log.info("${displayMember(memberFirstName)}: moved ${movedUnits} ${isMiles ? 'mi' : 'km'} @ ${speedUnits} ${isMiles ? 'mph' : 'kph'} — <a href='${mapsUrl}' target='_blank'>Google Maps link</a>")
+        boolean showMaps = true
+        try { showMaps = (parent?.getShowMapsLink() != false) } catch (ignored) {}
+        String suffix = ""
+        if (showMaps) {
+            String mapsUrl = "https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}"
+            suffix = " — <a href='${mapsUrl}' target='_blank'>Google Maps link</a>"
+        }
+        log.info("${displayMember(memberFirstName)}: moved ${movedUnits} ${isMiles ? 'mi' : 'km'} @ ${speedUnits} ${isMiles ? 'mph' : 'kph'}${suffix}")
     }
 
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
@@ -631,14 +637,14 @@ static boolean toBool(Object object) {
 }
 
 /**
- * If the parent app has "Redact Names in Logs" enabled, return the memberId
- * (parsed from device.deviceNetworkId = "${app.id}.${memberId}"); otherwise
- * return the supplied firstName.
+ * If the parent app has "Include Names and Places in Logs" enabled (default),
+ * return the supplied firstName; otherwise return the memberId parsed from
+ * device.deviceNetworkId = "${app.id}.${memberId}".
  */
 private String displayMember(String firstName) {
-    boolean redact = false
-    try { redact = (parent?.getRedactNames() == true) } catch (ignored) {}
-    if (!redact) return firstName
+    boolean showNames = true
+    try { showNames = (parent?.getShowNamesInLogs() != false) } catch (ignored) {}
+    if (showNames) return firstName
     String dni = device.deviceNetworkId ?: ""
     int dot = dni.indexOf('.')
     return (dot > 0 && dot < dni.length() - 1) ? dni.substring(dot + 1) : (firstName ?: "?")

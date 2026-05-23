@@ -110,9 +110,14 @@ def mainPage() {
             input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
             input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
             input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
-            input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
-            input(name: "logRedactNames", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Redact Names in Logs (Privacy)", description: "Show UUIDs instead of member/place/circle names in all logs. Useful when sharing logs for debugging.")
             input("fetchLocationsBtn", "button", title: "Fetch Locations")
+        }
+
+        section(header("Logging")) {
+            paragraph "<small style='color:#666'>Controls what appears in Hubitat's app/device logs. Turn the privacy switches OFF when sharing logs publicly.</small>"
+            input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            input(name: "logShowNames", type: "bool", defaultValue: "true", submitOnChange: "true", title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
+            input(name: "logShowMapsLink", type: "bool", defaultValue: "true", submitOnChange: "true", title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
         }
 
         section(header("Map View")) {
@@ -184,7 +189,7 @@ def fetchCircles() {
                 captureCookies(response)
                 if (response.status == 200) {
                     state.circles = response.data.circles
-                    if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { settings.logRedactNames ? it.id : it.name }}")
+                    if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
@@ -209,7 +214,7 @@ def fetchPlaces() {
                 captureCookies(response)
                 if (response.status == 200) {
                     state.places = response.data.places
-                    if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { settings.logRedactNames ? it.id : it.name }}")
+                    if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
@@ -236,7 +241,7 @@ def fetchMembers() {
                 //if (logEnable) log.debug("fetchMembers: ${response.data}")
                 if (response.status == 200) {
                     state.members = response.data?.members
-                    if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { settings.logRedactNames ? it.id : it.firstName }}")
+                    if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
                     state.message = null
 
                     // update child devices
@@ -307,7 +312,7 @@ boolean fetchLocations() {
 }
 
 def fetchMemberLocation(memberId) {
-    String memberName = settings.logRedactNames ? memberId : (state.members?.find { it.id == memberId }?.firstName ?: memberId)
+    String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
     def params = life360Params("/circles/${circle}/members/${memberId}")
 
     // add cookies to header
@@ -511,10 +516,27 @@ static boolean isEmpty(text) {
 }
 
 /**
- * called by child driver to honor the app's privacy-redaction setting in its own logs
+ * Both privacy toggles default ON ("include in logs"). On a fresh install
+ * settings.* is null until the user opens the app and hits Done — treat null
+ * as the documented default so behavior matches the UI.
  */
-boolean getRedactNames() {
-    return (settings.logRedactNames == true)
+boolean showNamesInLogs() {
+    return (settings.logShowNames == null) ? true : (settings.logShowNames == true)
+}
+
+/**
+ * called by child driver to honor the same toggle in its own logs
+ */
+boolean getShowNamesInLogs() {
+    return showNamesInLogs()
+}
+
+/**
+ * called by child driver to decide whether to include a Google Maps link in
+ * its "moved" info log
+ */
+boolean getShowMapsLink() {
+    return (settings.logShowMapsLink == null) ? true : (settings.logShowMapsLink == true)
 }
 
 // -------------------------------------------------------------------
@@ -684,7 +706,7 @@ def createChildDevices() {
         if (!deviceWrapper) {
             def member = state.members.find { it.id == memberId }
             def memberName = member.firstName
-            log.info "createChildDevices: Creating Life360 Device: ${settings.logRedactNames ? memberId : memberName}"
+            log.info "createChildDevices: Creating Life360 Device: ${showNamesInLogs() ? memberName : memberId}"
             try {
                 addChildDevice("jpage4500", "Life360+ Driver", externalId, null, ["name": "Life360 - ${memberName}", isComponent: false])
                 log.info "createChildDevices: Child Device Successfully Created"
@@ -738,7 +760,7 @@ def notifyChildDevice(memberId, memberObj) {
             // send location, places and home to device driver
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
             boolean prevInTransit = isMemberInTransit(memberId)
-            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${settings.logRedactNames ? memberId : memberObj.firstName}: state changed: inTransit:${inTransit}")
+            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
         } else {
