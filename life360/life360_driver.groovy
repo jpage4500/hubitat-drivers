@@ -562,7 +562,7 @@ def sendHistory(msgValue) {
             String result1 = state.list1.join(";")
             def lines1 = result1.split(";")
 
-            theData1 = "<div style='overflow:auto;height:90%'><table style='text-align:left;font-size:${fontSize}px'><tr><td>"
+            theData1 = "<div style='overflow:auto;height:90%'><table style='text-align:left;font-size:${avatarFontSize}px'><tr><td>"
 
             for (i = 0; i < intNumOfLines && i < listSize1; i++) {
                 combined = theData1.length() + lines1[i].length()
