@@ -371,6 +371,7 @@
             }
         }
 
+        log.warn "[FireTV] BUILD-DEBUG-5 (features banner + named-args fix)"
         logD "Connecting to ${settings.ipAddress}:${settings.adbPort}"
         state.connState  = "CONNECTING"
         state.remoteId   = 0
@@ -381,7 +382,7 @@
                 settings.ipAddress,
                 settings.adbPort as Integer,
                 byteInterface: true,
-                timeout: 5000
+                readDelay: 50
             )
             sendEvent(name: "adbStatus", value: "connecting")
             pauseExecution(200)
@@ -439,8 +440,11 @@
     // ═══════════════════════════════════════════════════════════════════════════════
 
     private void sendAdbConnect() {
-        sendAdbMsg(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, "host::\0".bytes)
-        logD "→ CNXN"
+        // Some ADB daemons (including some Fire TV firmware) silently drop a CNXN
+        // with an empty banner. Match what the `adb` CLI sends — a features list.
+        String banner = "host::features=shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb,fixed_push_symlink_timestamp,abb_exec,remount_shell,track_app,sendrecv_v2,sendrecv_v2_brotli,sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send,openscreen_mdns\0"
+        sendAdbMsg(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, banner.bytes)
+        logD "→ CNXN (banner=${banner.length()} bytes)"
     }
 
     private void sendAdbMsg(int cmd, int arg0, int arg1, byte[] data) {
@@ -455,19 +459,21 @@
         sendRawHex(msg.encodeHex().toString().toUpperCase())
     }
 
+    // ADB's "data_crc32" field is misleadingly named — the wire protocol expects
+    // a simple sum of payload bytes (mod 2^32), not CRC32. A real CRC32 here makes
+    // the device silently drop CNXN, so no AUTH challenge is sent and the
+    // authorization dialog never appears on screen.
     private long calcCRC32(byte[] data) {
         if (!data || data.length == 0) return 0L
-        long crc = 0xFFFFFFFFL
+        long sum = 0L
         for (byte b : data) {
-            crc ^= (b & 0xFFL)
-            for (int i = 0; i < 8; i++) {
-                crc = (crc & 1L) ? ((crc >>> 1) ^ 0xEDB88320L) : (crc >>> 1)
-            }
+            sum = (sum + (b & 0xFFL)) & 0xFFFFFFFFL
         }
-        return (crc ^ 0xFFFFFFFFL) & 0xFFFFFFFFL
+        return sum
     }
 
     private void sendRawHex(String hexStr) {
+        log.debug "[FireTV] TX hex (${hexStr.length()} chars): ${hexStr}"
         try {
             interfaces.rawSocket.sendMessage(hexStr)
         } catch (Exception e) {
@@ -481,6 +487,7 @@
     // ═══════════════════════════════════════════════════════════════════════════════
 
     def parse(String message) {
+        log.debug "[FireTV] parse RAW (${message?.length() ?: 0} hex chars): ${message?.take(96)}"
         String key = device.id as String
         rxBuf[key] = (rxBuf[key] ?: "") + message.toUpperCase()
 
