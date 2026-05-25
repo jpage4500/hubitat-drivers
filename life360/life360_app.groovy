@@ -898,7 +898,7 @@ def renderView() {
     String html = isEmpty(apiKey) ?
         buildOsmMapHtml(membersJson, members.size()) :
         buildGoogleMapHtml(membersJson, members.size(), apiKey)
-    render contentType: "text/html", data: html, status: 200
+    render contentType: "text/html; charset=utf-8", data: html, status: 200
 }
 
 private String commonMapStyles() {
