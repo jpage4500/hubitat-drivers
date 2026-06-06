@@ -12,6 +12,7 @@ import groovy.transform.Field
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.2.0  - 06/06/26 - async per-member location fetches; buildPlacesContext once per poll; in-flight guard (§4.1/§4.2/§7.1)
  *  5.1.3  - 05/09/26 - add /view endpoint to view members on a map
  *  5.1.2  - 05/01/26 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
  *  5.1.1 -  05/01/26 - add device notification when token expires
@@ -326,9 +327,12 @@ boolean fetchLocations() {
     }
     state.lastUpdateMs = currentTimeMs
 
+    // build places context once per poll cycle — reused for every member (§4.2)
+    def ctx = buildPlacesContext()
+
     // iterate over every selected member
     settings.users.each { memberId ->
-        fetchMemberLocation(memberId)
+        fetchMemberLocation(memberId, ctx)
     }
 
     if (settings.dynamicPolling) {
@@ -338,78 +342,106 @@ boolean fetchLocations() {
     return true
 }
 
-def fetchMemberLocation(memberId) {
-    String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
+def fetchMemberLocation(memberId, Map ctx = null) {
+    // in-flight guard (§7.1): skip if a prior request for this member is still pending
+    long startMs = new Date().getTime()
+    long inflightMs = (state["inflight-${memberId}"] ?: 0L) as long
+    Integer httpTimeout = clamp((state.pollIntervalSecs ?: 30) as int, 5, 30)
+    if (inflightMs > 0 && (startMs - inflightMs) < ((httpTimeout + 2) * 1000L)) {
+        String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
+        if (logEnable) log.trace("fetchMemberLocation: member:${memberName}: prior request pending, skipping")
+        return
+    }
+    state["inflight-${memberId}"] = startMs
+
     def params = life360Params("/circles/${circle}/members/${memberId}")
+    params.timeout = httpTimeout
 
-    // add cookies to header
     def cookies = state["cookies"]
-    if (cookies) {
-        params["headers"]["Cookie"] = cookies
-        //if (logEnable) log.debug("fetchMemberLocation: cookie: ${cookies}")
-    }
+    if (cookies) params["headers"]["Cookie"] = cookies
 
-    // set l360-etag value
     def tag = state["etag-${memberId}"]
-    if (tag) {
-        params["headers"]["If-None-Match"] = tag
-        //if (logEnable) log.debug("eTag header:  ${tag}")
+    if (tag) params["headers"]["If-None-Match"] = tag
+
+    asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx])
+}
+
+def handleMemberLocationResponse(response, Map data) {
+    String memberId = data.memberId
+    Map ctx = data.ctx
+    state.remove("inflight-${memberId}")  // clear in-flight marker (§7.1)
+
+    String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
+
+    // AsyncResponse.hasError() returns true for ANY non-2xx, including 304.
+    // Use response.status as the primary gate; null/zero means a network-level failure.
+    Integer status = response.status
+    if (!status) {
+        log.warn("fetchMemberLocation: member:${memberName}: network error: ${response.getErrorMessage()}")
+        state.message = "Network error for member ${memberName}: ${response.getErrorMessage()}"
+        return
     }
 
-    //if (logEnable) log.trace("fetchMemberLocation: member:${memberId}, tag:${tag}")
+    captureCookiesAsync(response)
 
-    try {
-        httpGet(params) {
-            response ->
-
-/*
-                if (response.data) {
-                    log.trace("fetchMemberLocation (${response.status}) - ${response.data["firstName"]}: inTransit ${response.data["location"].inTransit} || speed ${response.data["location"].speed.toInteger()} || memberInTransit ${state.memberInTransit}")
-                }
-*/
-                captureCookies(response)
-
-                if (response.status == 200) {
-                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberName}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
-
-                    // update child devices
-                    notifyChildDevice(memberId, response.data)
-
-                    state.failCount = 0
-                    state.tokenLikelyExpired = false
-                    state.rateLimitedUntilMs = null
-                    state.message = null
-                    state.lastSuccessMs = new Date().getTime()
-                    if (state.watchdogWarned) {
-                        log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
-                        state.watchdogWarned = false
-                    }
-
-                    // save l360-etag value for next request
-                    def eTag = response.getFirstHeader("l360-etag")
-                    if (eTag != null) state["etag-${memberId}"] = eTag.value
-                } else if (response.status == 304) {
-                    state.message = null
-                    state.lastSuccessMs = new Date().getTime()
-                    if (state.watchdogWarned) {
-                        log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
-                        state.watchdogWarned = false
-                    }
-                    // NOTE: if user WAS inTransit before, do we keep them in that state?
-                    boolean prevInTransit = isMemberInTransit(memberId)
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), prevInTransit:${prevInTransit}, member:${memberName}")
-                } else {
-                    log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
-                    state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
-                }
+    if (status == 200) {
+        if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
+        notifyChildDevice(memberId, response.json, ctx)
+        state.failCount = 0
+        state.tokenLikelyExpired = false
+        state.rateLimitedUntilMs = null
+        state.message = null
+        state.lastSuccessMs = new Date().getTime()
+        if (state.watchdogWarned) {
+            log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
+            state.watchdogWarned = false
         }
-    } catch (e) {
-        // handleException classifies and updates state.failCount / state.tokenLikelyExpired /
-        // state.rateLimitedUntilMs / state.cookies as appropriate. Do NOT synchronously retry —
-        // let the next scheduled tick try again (fetchLocations short-circuits on AUTH/RATE_LIMIT).
-        handleException("fetchMemberLocation: member:${memberName}", e)
+        // AsyncResponse headers are a Map — no getFirstHeader()
+        def eTag = response.headers?.get("l360-etag")
+        if (eTag) state["etag-${memberId}"] = eTag
+
+    } else if (status == 304) {
+        state.message = null
+        state.lastSuccessMs = new Date().getTime()
+        if (state.watchdogWarned) {
+            log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
+            state.watchdogWarned = false
+        }
+        if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
+
+    } else if (status == 401 || status == 403) {
+        clearSessionCache()
+        state.failCount = (state.failCount ?: 0) + 1
+        log.warn("fetchMemberLocation: AUTH (${status}); cleared session; failCount=${state.failCount}")
+        if (state.failCount >= 3) {
+            boolean wasExpired = state.tokenLikelyExpired ?: false
+            state.tokenLikelyExpired = true
+            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            if (!wasExpired) { notifyTokenExpired(); scheduleUpdates() }
+        } else {
+            state.message = "AUTH ERROR (${status}) on fetchMemberLocation member:${memberName}; cleared session, will retry"
+        }
+
+    } else if (status == 429) {
+        Integer retryAfter = null
+        try { retryAfter = response.headers?.get('Retry-After')?.toInteger() } catch (ignored) {}
+        Integer delaySecs = (retryAfter ?: 60) + 10
+        state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
+        log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
+        state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
+
+    } else if (status in [502, 503, 504, 520]) {
+        log.warn("fetchMemberLocation: TRANSIENT (${status}); will retry next tick")
+        state.message = "TRANSIENT ${status} on fetchMemberLocation member:${memberName}"
+
+    } else {
+        log.error("fetchMemberLocation: unexpected response:${status} for member:${memberName}")
+        state.message = "ERROR: fetchMemberLocation: ${status} for member:${memberName}"
     }
+}
+
+private static int clamp(int val, int lo, int hi) {
+    return Math.min(Math.max(val, lo), hi)
 }
 
 /**
@@ -652,6 +684,7 @@ def scheduleUpdates() {
     unschedule()
     state.dynamicPollingActive = wantDynamic
     state.scheduledBaseSecs = baseSecs
+    state.pollIntervalSecs = baseSecs
 
     // pollFreq=0 means Disabled — don't add jitter (would land in 1..4s polling) and don't schedule
     if (baseSecs <= 0) {
@@ -764,18 +797,18 @@ private removeChildDevices(delete) {
     delete.each { deleteChildDevice(it.deviceNetworkId) }
 }
 
-def notifyChildDevice(memberId, memberObj) {
+def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     if (isEmpty(settings.users)) return;
     if (isEmpty(settings.place)) return;
     if (isEmpty(state.places)) return;
 
-    // Get a *** sorted *** list of places for easier navigation
-    def thePlaces = state.places.sort { a, b -> a.name <=> b.name }
-    def home = state.places.find { it.id == settings.place }
-
-    def placesMap = [:]
-    for (rec in thePlaces) {
-        placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
+    // use pre-built context from fetchLocations() poll cycle, or build on the spot (§4.2)
+    Map placesMap = ctx?.placesMap
+    def home = ctx?.home
+    if (placesMap == null) {
+        def built = buildPlacesContext()
+        placesMap = built.placesMap
+        home = built.home
     }
 
     def externalId = "${app.id}.${memberId}"
@@ -798,6 +831,16 @@ def notifyChildDevice(memberId, memberObj) {
     }
 }
 
+private Map buildPlacesContext() {
+    def thePlaces = state.places?.sort { a, b -> a.name <=> b.name } ?: []
+    def home = state.places?.find { it.id == settings.place }
+    def placesMap = [:]
+    for (rec in thePlaces) {
+        placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
+    }
+    return [placesMap: placesMap, home: home]
+}
+
 void captureCookies(response) {
     def responseCookies = []
     try {
@@ -815,6 +858,29 @@ void captureCookies(response) {
     }
 }
 
+void captureCookiesAsync(response) {
+    // AsyncResponse headers are a plain Map — one value per name, no getHeaders() list.
+    // The __cf_bm Cloudflare cookie arrives here; missing it causes 403 within minutes.
+    try {
+        def cookie = response.headers?.get("Set-Cookie")
+        if (cookie) {
+            def cookieVal = cookie.tokenize(';|,')?.getAt(0)
+            if (cookieVal) {
+                String existing = state["cookies"] ?: ""
+                // replace existing __cf_bm entry if present, otherwise append
+                if (existing && !existing.contains(cookieVal.split("=")[0])) {
+                    state["cookies"] = existing + ";" + cookieVal
+                } else {
+                    state["cookies"] = cookieVal
+                }
+                if (logEnable) log.trace("captureCookiesAsync: ${cookieVal}")
+            }
+        }
+    } catch (e) {
+        if (logEnable) log.trace("captureCookiesAsync: ${e.message}")
+    }
+}
+
 /**
  * Drop the session-bound cache (cookies + per-member etags). Mirrors what
  * ha-life360's coordinator does when it sees a LoginError before re-auth.
@@ -823,7 +889,7 @@ void clearSessionCache() {
     state.remove("cookies")
     def toRemove = []
     state.each { k, v ->
-        if (k?.toString()?.startsWith("etag-")) toRemove << k
+        if (k?.toString()?.startsWith("etag-") || k?.toString()?.startsWith("inflight-")) toRemove << k
     }
     toRemove.each { state.remove(it) }
 }
