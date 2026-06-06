@@ -331,6 +331,12 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — **Include Google Maps Link in Logs** toggle added alongside §6.3. Driver checks `parent?.getShowMapsLink()` before appending the URL.
 
+### 6.5  App / driver — real member names flow through the entire system; privacy is log-only
+
+**Problem:** member first/last names from the Life360 API are stored in `state.members`, passed as function arguments (`memberObj.firstName`, `notifyChildDevice`, `generatePresenceEvent`), and written to device attributes throughout the app and driver. The current privacy controls (§6.3, `logShowNames`) only gate what appears in *log output* — real names exist everywhere else. A privacy-first design would pass member UUIDs internally and resolve to human-readable names only at the last moment (display/logging), so that names are never incidentally exposed through state dumps, debug output, or future code paths that don't know to call `displayMember()`.
+
+**Fix:** refactor internal APIs to pass `memberId` (UUID) rather than name strings. Look up the display name from `state.members` only at the point of user-visible output (logs, device labels, UI). Device attributes that are user-facing (e.g. `memberName`) are intentional and remain as-is.
+
 ---
 
 ## 7. Async HTTP pile-up — forward-looking guidance
