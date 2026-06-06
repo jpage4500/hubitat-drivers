@@ -209,15 +209,21 @@ if (address1 != "Home" && inTransit) { ... }
 **Fix:** switch to `asynchttpGet` with a dedicated response handler.
 **Caveat:** parallel async requests can pile up when Life360 gets slow — see Section 7 for the in-flight-guard pattern that's required when going async.
 
+**Status:** FIXED in branch: feature/async-member-fetch — `fetchMemberLocation` now fires `asynchttpGet`; `handleMemberLocationResponse` handles 200/304/401/403/429/5xx inline. In-flight guard (§7.1) prevents pile-up.
+
 ### 4.2  App (`notifyChildDevice`) — places map rebuilt per-member, per-poll
 
 **Problem:** for each member on each tick, the app re-sorts `state.places` and rebuilds a `LinkedHashMap`, even though the places list rarely changes.
 **Fix:** extract `buildPlacesContext()` returning `{placesMap, home}`, call once per poll cycle in `fetchLocations()`, thread the context through to `notifyChildDevice`.
 
+**Status:** FIXED in branch: feature/async-member-fetch — `buildPlacesContext()` added; called once in `fetchLocations()` and threaded through `fetchMemberLocation` → `handleMemberLocationResponse` → `notifyChildDevice`.
+
 ### 4.3  App (`handleTimerFired`) — `fetchMembers()` is synchronous
 
 **Problem:** every 5–10 min the timer fires `fetchMembers()` using blocking `httpGet`. Blocks the scheduler thread for the duration.
 **Fix:** convert to `asynchttpGet` (same pattern as per-member location fetches).
+
+**Status:** FIXED in branch: feature/async-member-fetch — `fetchMembers` now fires `asynchttpGet`; `handleMembersResponse` handles 200 and errors.
 
 ### 4.4  App (`createChildDevices`) — `getChildDevices()` called inside the `.each` loop
 
@@ -331,6 +337,8 @@ Not a bug in current master (the fork still uses synchronous `fetchLocations`), 
 2. `fetchMemberLocation` skips firing a new request for a member whose marker is younger than `(httpTimeout + 2s)`.
 3. Adapt HTTP `timeout` to the active poll interval — `clamp(activePollSecs, 5, 30)` — so a stuck request times out before the next tick, but a fast-polling install (5–10s) doesn't pay 30s of latency on every failure.
 4. `clearSessionCache()` should drop `inflight-*` keys alongside `etag-*` and `cookies`, so a fresh token-paste isn't blocked by stale markers.
+
+**Status:** FIXED in branch: feature/async-member-fetch — all four points implemented alongside §4.1/§4.2.
 
 ---
 
