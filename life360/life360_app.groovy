@@ -759,10 +759,12 @@ def createChildDevices() {
     if (isEmpty(settings.users)) return;
     if (isEmpty(state.members)) return;
 
+    // hoist getChildDevices() once — avoids O(N²) hub device-list walks (§4.4)
+    Map childMap = getChildDevices().collectEntries { [it.deviceNetworkId, it] }
+
     settings.users.each { memberId ->
         def externalId = "${app.id}.${memberId}"
-        def deviceWrapper = getChildDevice("${externalId}")
-        if (!deviceWrapper) {
+        if (!childMap.containsKey(externalId)) {
             def member = state.members.find { it.id == memberId }
             def memberName = member.firstName
             log.info "createChildDevices: Creating Life360 Device: ${showNamesInLogs() ? memberName : memberId}"
@@ -778,11 +780,11 @@ def createChildDevices() {
 
     // remove child devices whose member is no longer selected (orphan cleanup)
     Set<String> wantedDnis = settings.users.collect { "${app.id}.${it}".toString() } as Set
-    getChildDevices().each { child ->
-        if (!wantedDnis.contains(child.deviceNetworkId)) {
-            log.info "createChildDevices: removing orphan child: ${child.displayName} (${child.deviceNetworkId})"
+    childMap.each { dni, child ->
+        if (!wantedDnis.contains(dni)) {
+            log.info "createChildDevices: removing orphan child: ${child.displayName} (${dni})"
             try {
-                deleteChildDevice(child.deviceNetworkId)
+                deleteChildDevice(dni)
             } catch (e) {
                 log.error "createChildDevices: failed to remove ${child.displayName}: ${e}"
             }
