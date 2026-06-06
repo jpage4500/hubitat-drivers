@@ -261,6 +261,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Fix:** add a `"<member>: moved 0.37 mi @ 32.5 mph"` log when a member's position changes meaningfully.
 **Caveat:** guard against GPS jitter — when not in transit / not driving and `speed < 0.5`, suppress moves smaller than `max(prevAccuracy, accuracy)` (typical indoor GPS is 50–200m of noise).
 
+**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — `generatePresenceEvent` logs moved distance + speed at `info` when `movedMeters > accuracyMeters && (inTransit || isDriving)`. Uses `displayMember()` for privacy. Google Maps link gated on `logShowMapsLink` toggle (§6.4).
+
 ### 5.2  Token-expiry notification fires only once
 
 **Problem:** the `wasExpired` flag prevents repeat notifications. If the user misses the first one (phone silenced), they won't get another.
