@@ -237,10 +237,14 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** `new groovy.json.JsonBuilder(thePlaces).toString()` runs every poll for every member; the places list rarely changes. 5 members × 6 polls/min = 30 JSON serializations + event writes per minute for static data.
 **Fix:** compare to `device.currentValue('savedPlaces')`; skip the event when unchanged.
 
+**Status:** FIXED in branch: feature/async-member-fetch — serialize to string first, skip `sendEvent` if value matches `device.currentValue('savedPlaces')`.
+
 ### 4.6  Driver (`generatePresenceEvent`) — `memberName` / `avatar` re-sent every poll
 
 **Problem:** Hubitat dedupes by value before persisting, but the function-call overhead is wasted.
 **Fix:** gate behind "first run or value changed".
+
+**Status:** FIXED in branch: feature/async-member-fetch — `memberName` and `avatar` both gated on `device.currentValue()` check before `sendEvent`.
 
 ### 4.7  Driver — `generatePresenceEvent` is ~230 lines
 
