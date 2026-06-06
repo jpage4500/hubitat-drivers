@@ -230,6 +230,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** `getChildDevices()` walks the hub's full device list each call — O(N²) inside the loop.
 **Fix:** hoist outside the `.each`. Wall-clock impact is small (N≈5, only runs on install/preferences save), but it's a real perf hit not a style nit.
 
+**Status:** FIXED in branch: feature/async-member-fetch — `getChildDevices()` called once at top, result stored in `childMap`; both creation loop and orphan cleanup use the map.
+
 ### 4.5  Driver (`generatePresenceEvent`) — `savedPlaces` JSON sent on every member update
 
 **Problem:** `new groovy.json.JsonBuilder(thePlaces).toString()` runs every poll for every member; the places list rarely changes. 5 members × 6 polls/min = 30 JSON serializations + event writes per minute for static data.
