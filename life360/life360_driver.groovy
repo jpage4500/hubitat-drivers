@@ -223,12 +223,16 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
-    sendEvent(name: "memberName", value: memberFullName)
+    if (memberFullName != device.currentValue("memberName")) {
+        sendEvent(name: "memberName", value: memberFullName)
+    }
 
     // *** Places List ***
-    // format as JSON string for better parsing
-    def savedPlacesJson = new groovy.json.JsonBuilder(thePlaces)
-    sendEvent(name: "savedPlaces", value: savedPlacesJson.toString())
+    // format as JSON string for better parsing; skip sendEvent if unchanged (§4.5)
+    String savedPlacesJson = new groovy.json.JsonBuilder(thePlaces).toString()
+    if (savedPlacesJson != device.currentValue("savedPlaces")) {
+        sendEvent(name: "savedPlaces", value: savedPlacesJson)
+    }
 
     // *** Avatar ***
     String avatar
@@ -240,7 +244,9 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         avatar = "not set"
         avatarHtml = "not set"
     }
-    sendEvent(name: "avatar", value: avatar)
+    if (avatar != device.currentValue("avatar")) {
+        sendEvent(name: "avatar", value: avatar)
+    }
 
     // *** Location ***
     Double distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
