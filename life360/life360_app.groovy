@@ -259,35 +259,35 @@ def fetchMembers() {
         log.debug("fetchMembers: circle not set")
         return;
     }
-
     def params = life360Params("/circles/${circle}/members")
+    asynchttpGet("handleMembersResponse", params)
+}
 
-    try {
-        httpGet(params) {
-            response ->
-                captureCookies(response)
-                //if (logEnable) log.debug("fetchMembers: ${response.data}")
-                if (response.status == 200) {
-                    state.members = response.data?.members
-                    if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
-                    state.message = null
+def handleMembersResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        log.warn("fetchMembers: network error: ${response.getErrorMessage()}")
+        return
+    }
 
-                    // update child devices
-                    settings.users.each { memberId ->
-                        def externalId = "${app.id}.${memberId}"
-                        def deviceWrapper = getChildDevice("${externalId}")
-                        if (!deviceWrapper) {
-                            def member = state.members.find { it.id == memberId }
-                            notifyChildDevice(memberId, member)
-                        }
-                    }
-                } else {
-                    log.error("fetchMembers: bad response:${response.status}, ${response.data}")
-                    state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
-                }
+    captureCookiesAsync(response)
+
+    if (status == 200) {
+        state.members = response.json?.members
+        if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
+        state.message = null
+
+        // notify child devices for members that don't have one yet
+        settings.users.each { memberId ->
+            def externalId = "${app.id}.${memberId}"
+            if (!getChildDevice("${externalId}")) {
+                def member = state.members?.find { it.id == memberId }
+                notifyChildDevice(memberId, member)
+            }
         }
-    } catch (e) {
-        handleException("fetch members", e)
+    } else {
+        log.error("fetchMembers: bad response:${status}")
+        state.message = "fetchMembers: bad response:${status}"
     }
 }
 
