@@ -398,7 +398,10 @@ Life360's server pushes a location-update request to the member's phone. If `isP
 - A **"Force Update"** button per member in the Hubitat device UI (driver command)
 - Auto-trigger in the app: if `inTransit` has been true for > N minutes with no position change, fire a force-update POST for that member
 
-**Implementation sketch:**
+**⚠ BLOCKED — Cloudflare WAF blocks POST requests (tested 2026-06-06):**
+Live testing confirmed that `POST /circles/.../request` consistently returns HTTP 400 with an empty body from Hubitat, regardless of body format (JSON, form-encoded, or none). Direct curl tests to both `api-cloudfront.life360.com` and `api.life360.com` get a Cloudflare "Sorry, you have been blocked" HTML 403. Cloudflare's WAF appears to allow GET requests from non-browser clients but blocks POST requests, even with valid Bearer auth and the correct Life360 User-Agent. The GET poll endpoint (`/circles/members/request/{requestId}`) has not been tested independently. This feature cannot be implemented until Life360 relaxes their Cloudflare policy for non-browser POST clients — do not attempt again without a workaround.
+
+**Implementation sketch (for when/if it becomes unblocked):**
 1. App: `asyncHttpPost("handleForceUpdateResponse", life360Params("/circles/${circleId}/members/${memberId}/request"))`
 2. Handler reads `requestId` and `isPollable`; if pollable, `runIn(5, "pollForceUpdate")` with `requestId` in state
 3. Poll handler: `asynchttpGet` to `/circles/members/request/${requestId}`, process returned `location` through normal `notifyChildDevice` path
