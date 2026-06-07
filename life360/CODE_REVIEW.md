@@ -417,7 +417,7 @@ This means one HTTP request can replace all N per-member fetches. For a 5-member
 - **Gain:** atomic snapshot of all members at the same instant; dramatically simpler poll loop; far fewer open HTTP connections on the hub.
 - **Gain:** `memberCount` comes back in the same response, so the separate circles poll (§4.7) could be folded in too.
 
-This is a larger architectural refactor and should be treated as a separate branch/effort. Worth evaluating whether Life360's Cloudflare layer returns 304 on the circle endpoint when nothing changed — if yes, this is essentially free when the circle is quiet.
+This is not an incremental change — it is a ground-up rewrite of the polling architecture. Every per-member mechanism built in this branch (async fetch, eTag, in-flight guard, exponential backoff, `buildPlacesContext` threading) exists specifically because the current model polls each member individually. Switching to the single-circle endpoint makes all of that infrastructure unnecessary. Treat as a separate branch and a clean-sheet design, not a diff on top of the current branch. Worth validating first whether Life360's Cloudflare layer returns 304 on this endpoint when nothing changed — if yes, quiet circles cost almost nothing.
 
 ### 9.3  Cheap token validation via `GET /users/me`
 
