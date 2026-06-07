@@ -246,6 +246,13 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Status:** FIXED in branch: feature/async-member-fetch — `memberName` and `avatar` both gated on `device.currentValue()` check before `sendEvent`.
 
+### 4.7  App (`handleTimerFired`) — `fetchMembers()` fired on a fixed 5–10 min timer unrelated to actual membership changes
+
+**Problem:** the "changing things up" block called `fetchMembers()` every 5–10 minutes regardless of whether anything changed. Timer interval was disconnected from the user's poll frequency and could not be configured.
+**Fix:** poll `/circles` (tiny ~300-byte payload) with every standard poll tick, rate-limited to at most once per minute. If `memberCount` on the selected circle changes, fire `fetchMembers()` immediately. Remove the fixed timer entirely.
+
+**Status:** FIXED in branch: feature/async-member-fetch — `handleCirclesPollResponse` compares `circle.memberCount` to `state.memberCount`; logs DEBUG on no-change, INFO on change, calls `fetchMembers()` only when needed. `updated()` clears `state.memberCount` / `state.lastCirclesFetchMs` to re-baseline after config saves.
+
 ---
 
 ## 5. Functional / UX
@@ -262,6 +269,8 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Problem:** the `wasExpired` flag prevents repeat notifications. If the user misses the first one (phone silenced), they won't get another.
 **Fix:** add a periodic reminder while still expired (e.g. once per hour).
+
+**Status:** FIXED in branch: feature/async-member-fetch — two new settings in the Notifications section: **Enable Token Expiry Notifications** (bool master toggle, default ON) silences all alerts without removing configured devices; **Repeat Reminder Every** (enum: Never / 2h / 6h / 12h / 24h / 48h, default Never) schedules `sendTokenExpiryReminder` via `runIn`. The reminder re-checks `state.tokenLikelyExpired` and the master toggle before firing, then self-reschedules. `updated()` calls `unschedule("sendTokenExpiryReminder")` so pasting a fresh token stops the chain immediately.
 
 ### 5.3  No exponential backoff for transient errors
 
