@@ -164,7 +164,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     def location = member.location
     if (location == null) return false
 
-    // NOTE: only interested in sending updates device when location or battery changes
     // -- location --
     Double latitude = toDouble(location.latitude)
     Double longitude = toDouble(location.longitude)
@@ -194,31 +193,17 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     String address1 = (location.name) ? location.name : location.address1
     String address2 = (location.address2) ? location.address2 : location.shortaddress
 
-    // -- previous values (could be null) --
+    // -- previous values (used for address history and location history) --
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
     Integer prevAccuracy = device.currentValue('accuracy')
-    Integer prevBattery = device.currentValue('battery')
-    String prevWifiState = device.currentValue('wifiState')
 
-    // detect if location (lat/lng/accuracy) changed from previous update
+    // detect if lat/lng/accuracy changed — used for location history gating
     Boolean isLocationChanged = (prevLatitude == null || prevLatitude != latitude
-        || (prevLongitude == null || prevLongitude != longitude)
-        || (prevAccuracy == null || prevAccuracy != accuracy))
+        || prevLongitude == null || prevLongitude != longitude
+        || prevAccuracy == null || prevAccuracy != accuracy)
 
-    // ── Raw Life360 payload (logged before any correction logic) ─────────────────
-    // Full location object — captures every field Life360 sends, including any not
-    // in the unofficial API spec. Enable debug logging to see this during a trip.
     if (logEnable || parent?.getLogRawPayload()) log.info("RAW L360 ${displayMember(memberFirstName)}: ${location}")
-    // ─────────────────────────────────────────────────────────────────────────────
-
-    // skip update if location, accuracy and battery have not changed
-    if (!inTransit && speed <= 0 && !isLocationChanged
-        && (prevBattery != null && prevBattery == battery)
-        && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
-        if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
-        return false
-    }
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
@@ -228,16 +213,10 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
-    if (memberFullName != device.currentValue("memberName")) {
-        sendEvent(name: "memberName", value: memberFullName)
-    }
+    sendEvent(name: "memberName", value: memberFullName)
 
     // *** Places List ***
-    // format as JSON string for better parsing; skip sendEvent if unchanged (§4.5)
-    String savedPlacesJson = new groovy.json.JsonBuilder(thePlaces).toString()
-    if (savedPlacesJson != device.currentValue("savedPlaces")) {
-        sendEvent(name: "savedPlaces", value: savedPlacesJson)
-    }
+    sendEvent(name: "savedPlaces", value: new groovy.json.JsonBuilder(thePlaces).toString())
 
     // *** Avatar ***
     String avatar
@@ -249,9 +228,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         avatar = "not set"
         avatarHtml = "not set"
     }
-    if (avatar != device.currentValue("avatar")) {
-        sendEvent(name: "avatar", value: avatar)
-    }
+    sendEvent(name: "avatar", value: avatar)
 
     // *** Location ***
     Double distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
