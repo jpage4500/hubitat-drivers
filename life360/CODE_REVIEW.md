@@ -85,27 +85,20 @@ if (refreshSecs > 0 ...) { schedule(...) }             // schedules ultra-fast p
 
 **Status:** FIXED in branch: fix/life360-bugs-cleanup-docs.
 
-### 2.5  `life360_app.groovy:715` (`dynamicPolling`) — dynamic polling never exits when Life360 keeps a stale `inTransit` flag
+### 2.5  `life360_app.groovy` (`dynamicPolling`) — dynamic polling never exits when Life360 keeps a stale `inTransit` flag
 
-**Problem:** `dynamicPolling()` decides whether to stay in fast-poll mode purely by reading `state["inTransit-<memberId>"]`, which is whatever Life360's API reported for that member. Life360 routinely keeps `inTransit=true` for many minutes after a member has actually stopped moving (or sometimes indefinitely if their phone hands off WiFi/cell oddly). When that happens for any one of N members, the app stays locked in dynamic-poll mode forever — e.g. polling every 20s instead of every 180s, ~9× the API call rate, ~9× the app-busy contribution.
+**Problem:** `dynamicPolling()` decides whether to stay in fast-poll mode purely by reading `state["inTransit-<memberId>"]`. Life360 can keep `inTransit=true` after a member stops moving, holding dynamic polling active indefinitely.
 
-Observed in the wild: one member showed `prevInTransit:true` continuously for the entire log window with zero matching "moved" lines (driver-side jitter filter correctly suppressing because the member is stationary). Dynamic polling held at 20s the whole time.
+**Fix history:**
+- *First attempt (heuristic override):* the driver was modified to infer real movement from GPS speed and position delta (`isReallyMoving`) and override `inTransit` when evidence said otherwise. This was reverted after live testing (2026-06-07) showed the heuristic was firing on stationary WiFi-located members due to GPS jitter (~0.45 m/s, 50m accuracy). The "fix" was creating false `inTransit=true` states on people sitting at home, locking dynamic polling on for noise.
 
-**Fix:** gate the in-transit flag on actual motion before letting it drive dynamic-polling mode. In the driver where `inTransit` is decided / returned (and saved into `state["inTransit-<memberId>"]` by the app), require **both** Life360's `inTransit` flag **and** either a non-trivial speed or a recent position change. Rough shape:
+- *Root cause finding:* raw payload logging (`RAW L360` / `COMPUTED` entries, added 2026-06-07) confirmed that Life360 correctly sends `inTransit:0` for stationary members even when their reported speed is non-zero (GPS jitter). The previous heuristics were overriding correct Life360 data, not correcting incorrect Life360 data.
 
-```groovy
-// in the driver, before returning inTransit to the app:
-double movedMeters = haversine(prevLat, prevLng, latitude, longitude) * 1000.0
-double accuracyM   = Math.max((prevAccuracy ?: 0) as double, (accuracy ?: 0) as double)
-boolean reallyMoving = speedUnits >= 1.0 || movedMeters > accuracyM
-if (inTransit && !reallyMoving) {
-    inTransit = false  // ignore stale Life360 in-transit flag
-}
-```
+- *Current approach:* all `inTransit`/`isDriving` override logic removed from the driver. Life360's flags are passed through unchanged. The driver trusts the service directly; the only override is the user's explicit manual-threshold settings (`transitThreshold` / `drivingThreshold`).
 
-(Same idea could live in `dynamicPolling()` instead, by also reading per-member speed/lastMoved state — but the driver already has the prev-position context, so it's the cleaner home.) Also worth: if `inTransit` has been true for > 15 min and the member hasn't moved more than `accuracy`, force a reset.
+- *Genuine stuck-inTransit resolution:* use the force-update endpoint (§9.1) — rather than inferring the member stopped, tell Life360 to re-query the phone for ground truth. Not yet auto-triggered; manual button in the settings page for now.
 
-**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — driver `generatePresenceEvent` now overrides `inTransit=true` to `false` when `speedUnits < 0.5` and movement since last update is within GPS accuracy. Logged as `<name>: ignoring stale Life360 inTransit flag (...)`.
+**Status (2026-06-07):** heuristic override reverted. Driver now trusts Life360 flags directly. Force-update endpoint confirmed working as the intended long-term fix for genuine stuck cases.
 
 ### 2.6  `life360_app.groovy` (`scheduleUpdates` / `handleTimerFired`) — overlapping timer instances fire on top of each other
 
@@ -257,13 +250,12 @@ if (address1 != "Home" && inTransit) { ... }
 
 ## 5. Functional / UX
 
-### 5.1  Distance-moved logging at `info`
+### 5.1  Movement logging at `info`
 
 **Problem:** the only sign-of-life log is the per-poll HTTP 200 trace, which is invisible at default log levels.
-**Fix:** add a `"<member>: moved 0.37 mi @ 32.5 mph"` log when a member's position changes meaningfully.
-**Caveat:** guard against GPS jitter — when not in transit / not driving and `speed < 0.5`, suppress moves smaller than `max(prevAccuracy, accuracy)` (typical indoor GPS is 50–200m of noise).
+**Fix:** log when a member is moving so users can correlate polls with actual trips.
 
-**Status:** FIXED in branch: fix/life360-bugs-cleanup-docs — `generatePresenceEvent` logs moved distance + speed at `info` when `movedMeters > accuracyMeters && (inTransit || isDriving)`. Uses `displayMember()` for privacy. Google Maps link gated on `logShowMapsLink` toggle (§6.4).
+**Status (2026-06-07):** `generatePresenceEvent` logs `"<member>: moving @ <speed> mph — <Google Maps link>"` when `inTransit || isDriving`. Gate is the Life360 flag directly — no heuristic distance calculation. Google Maps link gated on `logShowMapsLink` toggle (§6.4). Uses `displayMember()` for privacy.
 
 ### 5.2  Token-expiry notification fires only once
 
@@ -392,20 +384,44 @@ Discovered from the unofficial Life360 API spec at `krconv.github.io/life360-api
 **Response:** `{ "requestId": "uuid", "isPollable": "1" }`
 **Poll result:** `GET /circles/members/request/{requestId}` → returns `{ requestId, groupId, location }` where `location` is the full location object (same fields as a normal member fetch).
 
-Life360's server pushes a location-update request to the member's phone. If `isPollable == "1"` the result can be polled; otherwise the update happens asynchronously and the next normal fetch will see the fresh data.
+Life360's server pushes a location-update request to the member's phone. Per the Home Assistant `life360` library: *"Seems to cause updates every five seconds for a minute (after request is seen.)"* — so this is not a single ping but a ~60-second burst of 5-second updates. The next normal poll cycle will see the fresh data automatically.
 
-**Why this matters:** Directly addresses the stuck-`inTransit` bug (§2.5). Rather than waiting for Life360 to stop returning stale 304s, we can force a fresh 200. Also enables:
-- A **"Force Update"** button per member in the Hubitat device UI (driver command)
-- Auto-trigger in the app: if `inTransit` has been true for > N minutes with no position change, fire a force-update POST for that member
+**Why this matters / potential uses (priority order):**
 
-**⚠ BLOCKED — Cloudflare WAF blocks POST requests (tested 2026-06-06):**
-Live testing confirmed that `POST /circles/.../request` consistently returns HTTP 400 with an empty body from Hubitat, regardless of body format (JSON, form-encoded, or none). Direct curl tests to both `api-cloudfront.life360.com` and `api.life360.com` get a Cloudflare "Sorry, you have been blocked" HTML 403. Cloudflare's WAF appears to allow GET requests from non-browser clients but blocks POST requests, even with valid Bearer auth and the correct Life360 User-Agent. The GET poll endpoint (`/circles/members/request/{requestId}`) has not been tested independently. This feature cannot be implemented until Life360 relaxes their Cloudflare policy for non-browser POST clients — do not attempt again without a workaround.
+1. **Auto-trigger for stuck-`inTransit` (§2.5) — top priority.** The current fix in `generatePresenceEvent` overrides the flag by *inferring* the member stopped (low speed + position within GPS accuracy). The force-update endpoint lets us stop inferring: if a member has been `inTransit` for > N minutes with no real movement, POST a force-update to make Life360 re-query the phone and return the true current state. Replaces a heuristic with ground truth and clears the stale 304 loop.
 
-**Implementation sketch (for when/if it becomes unblocked):**
-1. App: `asyncHttpPost("handleForceUpdateResponse", life360Params("/circles/${circleId}/members/${memberId}/request"))`
-2. Handler reads `requestId` and `isPollable`; if pollable, `runIn(5, "pollForceUpdate")` with `requestId` in state
-3. Poll handler: `asynchttpGet` to `/circles/members/request/${requestId}`, process returned `location` through normal `notifyChildDevice` path
-4. Driver: add `command "refreshLocation"` which calls `parent.forceMemberUpdate(device.deviceNetworkId)`
+2. **Manual "Force Update" button** — implemented in app settings page (2026-06-07). User-initiated on-demand refresh.
+
+3. **Driver command for Rule Machine / automations.** Expose `refreshLocation` as a driver command so users can wire automations: "when my Hubitat geofence says I left but Life360 hasn't caught up, force-update me"; "force-update everyone at 5pm to confirm who's heading home."
+
+4. **Arrival/departure confirmation.** When a member crosses a place boundary, fire a force update immediately rather than waiting up to one full poll cycle for confirmation. Tightens presence-based automations (lights, locks, thermostat).
+
+5. **Leverage the 60-second burst.** Per the Home Assistant `life360` library: the POST makes the phone report every ~5s for ~60 seconds. One force-update fired when a member starts driving gives smooth tracking for that first minute without paying for fast polling all day.
+
+6. **"Where are they right now" dashboard button.** Force a fresh fix before loading the map view so coordinates aren't 5+ minutes stale when it matters.
+
+**✅ WORKING — confirmed 2026-06-07.** Previously recorded as blocked; two things were wrong in earlier attempts:
+
+1. **Missing request body.** The POST requires `Content-Type: application/json` and body `{"type":"location"}`. Earlier attempts sent JSON, form-encoded, or no body — but none sent this specific payload. The API returns 400 on a missing or wrong body.
+
+2. **Missing Cloudflare cookies.** `curl` tests (without prior GET requests to the same host) were blocked with 403 because they had no `_cfuvid` or `__cf_bm` cookies. The Hubitat app accumulates both cookies from every GET response via `captureCookies`/`captureCookiesAsync` and forwards them on the POST — that is what gets the POST through Cloudflare's WAF. The cookies, not the User-Agent or Bearer token alone, are the gate.
+
+**What is implemented:**
+- App settings page: member dropdown + "Force Update" button → `forceMemberUpdate()` / `handleForceUpdateResponse()`. On success, calls `runIn(6, "fetchLocations")` to pick up the fresh data on the next tick.
+
+**What is not yet implemented:**
+- Driver `refreshLocation` command (calls `parent.forceMemberUpdate(memberId)` so it can be triggered from Rule Machine or a device tile)
+- Auto-trigger: if a member's `inTransit` flag has been true for > N minutes with no position change, fire the POST automatically
+
+### 9.1.1  eTag skip-for-in-transit removed (2026-06-07)
+
+The app was sending requests **without** `If-None-Match` for in-transit members to force a 200 response. The original reason was so the driver's (now-removed) heuristic correction could see fresh data every poll. With the correction logic gone, the skip-eTag logic had no justification — if Life360 says nothing changed (304), it means nothing changed. Removed. eTags now sent unconditionally for all members; Life360 decides when data is fresh.
+
+### 9.1.2  Raw payload logging toggle (2026-06-07)
+
+Added **Log Raw Life360 Payloads** toggle (default OFF) in the Logging section. When on, the driver logs the full `location` map from Life360 (`RAW L360`) plus the post-threshold state (`COMPUTED`) on every update for every member. Used to gather the evidence that drove the §2.5 heuristic revert. Leave off in normal operation — it is verbose (one info line per member per poll tick).
+
+App exposes `getLogRawPayload()` as a parent method; driver checks `logEnable || parent?.getLogRawPayload()`.
 
 ### 9.2  Get all member locations in one call instead of N per-member calls
 
