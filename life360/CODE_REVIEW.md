@@ -379,3 +379,51 @@ Not a bug in current master (the fork still uses synchronous `fetchLocations`), 
 | 8.11 | Driver | ~~`attribute "battery", "number"` duplicates what `capability "Battery"` already provides~~ — FIXED (removed) |
 | 8.12 | Driver | ~~`haversine()` is pure math — should be `static`~~ — FIXED |
 | 8.13 | Driver | ~~HTML `int sEpoch = device.currentValue('since')` — overflows signed int in 2038 (Y2K38); use `long`~~ — FIXED |
+
+---
+
+## 9. Ideas — Undocumented API Capabilities
+
+Discovered from the unofficial Life360 API spec at `krconv.github.io/life360-api-docs` (OpenAPI YAML in `github.com/krconv/life360-api-docs`). These are not bugs — they are capabilities the API exposes that the app doesn't use yet.
+
+### 9.1  Force a member's phone to report a fresh GPS fix
+
+**Endpoint:** `POST /circles/{circle}/members/{member}/request`
+**Response:** `{ "requestId": "uuid", "isPollable": "1" }`
+**Poll result:** `GET /circles/members/request/{requestId}` → returns `{ requestId, groupId, location }` where `location` is the full location object (same fields as a normal member fetch).
+
+Life360's server pushes a location-update request to the member's phone. If `isPollable == "1"` the result can be polled; otherwise the update happens asynchronously and the next normal fetch will see the fresh data.
+
+**Why this matters:** Directly addresses the stuck-`inTransit` bug (§2.5). Rather than waiting for Life360 to stop returning stale 304s, we can force a fresh 200. Also enables:
+- A **"Force Update"** button per member in the Hubitat device UI (driver command)
+- Auto-trigger in the app: if `inTransit` has been true for > N minutes with no position change, fire a force-update POST for that member
+
+**Implementation sketch:**
+1. App: `asyncHttpPost("handleForceUpdateResponse", life360Params("/circles/${circleId}/members/${memberId}/request"))`
+2. Handler reads `requestId` and `isPollable`; if pollable, `runIn(5, "pollForceUpdate")` with `requestId` in state
+3. Poll handler: `asynchttpGet` to `/circles/members/request/${requestId}`, process returned `location` through normal `notifyChildDevice` path
+4. Driver: add `command "refreshLocation"` which calls `parent.forceMemberUpdate(device.deviceNetworkId)`
+
+### 9.2  Get all member locations in one call instead of N per-member calls
+
+**Endpoint:** `GET /circles/{circle}` (the single-circle detail endpoint, not `/circles`)
+**Response:** full `CircleInformation` object (id, name, memberCount, etc.) **plus** an embedded `members[]` array, each with the full `location` object.
+
+This means one HTTP request can replace all N per-member fetches. For a 5-member circle: 5 round-trips → 1. The payload is larger but the API call count drops 80%.
+
+**Tradeoff vs current approach:**
+- **Lose:** per-member eTags — currently each member gets `If-None-Match` so unchanged members return 304 at near-zero cost. With a single circle call there is one eTag for the whole response; if any one member moves, all members are re-processed.
+- **Lose:** per-member in-flight guard and per-member exponential backoff — these become moot when it's one call.
+- **Gain:** atomic snapshot of all members at the same instant; dramatically simpler poll loop; far fewer open HTTP connections on the hub.
+- **Gain:** `memberCount` comes back in the same response, so the separate circles poll (§4.7) could be folded in too.
+
+This is a larger architectural refactor and should be treated as a separate branch/effort. Worth evaluating whether Life360's Cloudflare layer returns 304 on the circle endpoint when nothing changed — if yes, this is essentially free when the circle is quiet.
+
+### 9.3  Cheap token validation via `GET /users/me`
+
+**Endpoint:** `GET /users/me`
+**Response:** authenticated user's profile (id, firstName, lastName, loginEmail, avatar, settings, etc.)
+
+Tiny call. Currently the app only discovers a bad token when a member fetch 401s (after potentially 3 failures). `GET /users/me` on startup or immediately after a token is pasted in `updated()` would give instant confirmation or a clear error — before the first poll tick fires.
+
+**Implementation:** fire async `GET /users/me` from `updated()` after a token change; on 200 log `"token valid: ${firstName} ${lastName}"`; on 401/403 immediately flip `state.tokenLikelyExpired` and notify.
