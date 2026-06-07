@@ -273,6 +273,8 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** 502/503/504 errors just wait for the next normal poll tick.
 **Fix:** progressive delay (1×, 2×, 4× the poll interval, cap at 5 min) reduces hammering on an already-struggling API.
 
+**Status:** FIXED in branch: feature/async-member-fetch — `handleMemberLocationResponse` now tracks `state["transientCount-${memberId}"]` and `state["transientUntilMs-${memberId}"]`. On each 5xx the count increments and the backoff doubles (`pollSecs * 2^(count-1)`, capped at 300s). `fetchMemberLocation` skips firing if still in the backoff window. Both cleared on 200/304. `clearSessionCache()` drops `transientCount-*` and `transientUntilMs-*` alongside `etag-*` and `inflight-*`.
+
 ### 5.4  Capability repurposing is non-obvious
 
 **Problem:** standard capabilities are repurposed for Life360 data, which confuses Rule Machine authors.

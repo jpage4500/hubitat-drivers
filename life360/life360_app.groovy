@@ -12,6 +12,8 @@ import groovy.transform.Field
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.3.1  - 06/06/26 - skip eTag for in-transit members to force 200 on stale inTransit flag (§2.5)
+ *  5.3.0  - 06/06/26 - exponential backoff for transient 5xx errors per member (§5.3)
  *  5.2.0  - 06/06/26 - async per-member location fetches; buildPlacesContext once per poll; in-flight guard (§4.1/§4.2/§7.1)
  *  5.1.3  - 05/09/26 - add /view endpoint to view members on a map
  *  5.1.2  - 05/01/26 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
@@ -352,6 +354,17 @@ def fetchMemberLocation(memberId, Map ctx = null) {
         if (logEnable) log.trace("fetchMemberLocation: member:${memberName}: prior request pending, skipping")
         return
     }
+    // transient-error backoff (§5.3): skip if still in backoff window after a prior 5xx
+    long transientUntilMs = (state["transientUntilMs-${memberId}"] ?: 0L) as long
+    if (transientUntilMs > 0 && startMs < transientUntilMs) {
+        if (logEnable) {
+            String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
+            long remainSecs = (long)((transientUntilMs - startMs) / 1000L)
+            log.trace("fetchMemberLocation: member:${memberName}: transient backoff ${remainSecs}s remaining, skipping")
+        }
+        return
+    }
+
     state["inflight-${memberId}"] = startMs
 
     def params = life360Params("/circles/${circle}/members/${memberId}")
@@ -360,8 +373,10 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     def cookies = state["cookies"]
     if (cookies) params["headers"]["Cookie"] = cookies
 
+    // skip eTag for in-transit members — forces a 200 so the driver can re-evaluate
+    // speed/movement and override a stale Life360 inTransit flag (§2.5)
     def tag = state["etag-${memberId}"]
-    if (tag) params["headers"]["If-None-Match"] = tag
+    if (tag && !isMemberInTransit(memberId)) params["headers"]["If-None-Match"] = tag
 
     asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx])
 }
@@ -390,6 +405,8 @@ def handleMemberLocationResponse(response, Map data) {
         state.failCount = 0
         state.tokenLikelyExpired = false
         state.rateLimitedUntilMs = null
+        state["transientCount-${memberId}"] = 0   // clear backoff on success (§5.3)
+        state.remove("transientUntilMs-${memberId}")
         state.message = null
         state.lastSuccessMs = new Date().getTime()
         if (state.watchdogWarned) {
@@ -403,6 +420,8 @@ def handleMemberLocationResponse(response, Map data) {
     } else if (status == 304) {
         state.message = null
         state.lastSuccessMs = new Date().getTime()
+        state["transientCount-${memberId}"] = 0   // clear backoff on success (§5.3)
+        state.remove("transientUntilMs-${memberId}")
         if (state.watchdogWarned) {
             log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
             state.watchdogWarned = false
@@ -431,8 +450,13 @@ def handleMemberLocationResponse(response, Map data) {
         state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
 
     } else if (status in [502, 503, 504, 520]) {
-        log.warn("fetchMemberLocation: TRANSIENT (${status}); will retry next tick")
-        state.message = "TRANSIENT ${status} on fetchMemberLocation member:${memberName}"
+        int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
+        state["transientCount-${memberId}"] = count
+        int pollSecs = (state.pollIntervalSecs ?: 30) as int
+        long delaySecs = Math.min((long)(pollSecs * (1L << (count - 1))), 300L)
+        state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
+        log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
+        state.message = "TRANSIENT ${status} x${count} on fetchMemberLocation member:${memberName}"
 
     } else {
         log.error("fetchMemberLocation: unexpected response:${status} for member:${memberName}")
@@ -763,7 +787,7 @@ def createChildDevices() {
     Map childMap = getChildDevices().collectEntries { [it.deviceNetworkId, it] }
 
     settings.users.each { memberId ->
-        def externalId = "${app.id}.${memberId}"
+        String externalId = "${app.id}.${memberId}"
         if (!childMap.containsKey(externalId)) {
             def member = state.members.find { it.id == memberId }
             def memberName = member.firstName
@@ -891,7 +915,8 @@ void clearSessionCache() {
     state.remove("cookies")
     def toRemove = []
     state.each { k, v ->
-        if (k?.toString()?.startsWith("etag-") || k?.toString()?.startsWith("inflight-")) toRemove << k
+        if (k?.toString()?.startsWith("etag-") || k?.toString()?.startsWith("inflight-") ||
+            k?.toString()?.startsWith("transientCount-") || k?.toString()?.startsWith("transientUntilMs-")) toRemove << k
     }
     toRemove.each { state.remove(it) }
 }
