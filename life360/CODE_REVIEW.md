@@ -246,11 +246,6 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Status:** FIXED in branch: feature/async-member-fetch — `memberName` and `avatar` both gated on `device.currentValue()` check before `sendEvent`.
 
-### 4.7  Driver — `generatePresenceEvent` is ~230 lines
-
-**Problem:** single monolithic function. Hard to read, hard to test, hard to change safely.
-**Fix:** split into `updateLocation()`, `updateBattery()`, `updateTransitState()`, `buildHtmlTile()`.
-
 ---
 
 ## 5. Functional / UX
