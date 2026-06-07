@@ -384,7 +384,7 @@ Not a bug in current master (the fork still uses synchronous `fetchLocations`), 
 
 ## 9. Ideas — Undocumented API Capabilities
 
-Discovered from the unofficial Life360 API spec at `krconv.github.io/life360-api-docs` (OpenAPI YAML in `github.com/krconv/life360-api-docs`). These are not bugs — they are capabilities the API exposes that the app doesn't use yet.
+Discovered from the unofficial Life360 API spec at `krconv.github.io/life360-api-docs` (OpenAPI YAML in `github.com/krconv/life360-api-docs`). These are not bugs — they are API capabilities that the Life360 mobile app uses but this Hubitat integration does not yet.
 
 ### 9.1  Force a member's phone to report a fresh GPS fix
 
