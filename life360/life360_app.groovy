@@ -12,6 +12,8 @@ import groovy.transform.Field
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.5.0  - 06/06/26 - circles polled every poll tick (≤1/min) to detect membership changes; removes unconditional fetchMembers timer
+ *  5.4.0  - 06/06/26 - configurable token-expiry repeat notifications with master toggle (§5.2)
  *  5.3.1  - 06/06/26 - skip eTag for in-transit members to force 200 on stale inTransit flag (§2.5)
  *  5.3.0  - 06/06/26 - exponential backoff for transient 5xx errors per member (§5.3)
  *  5.2.0  - 06/06/26 - async per-member location fetches; buildPlacesContext once per poll; in-flight guard (§4.1/§4.2/§7.1)
@@ -131,7 +133,13 @@ def mainPage() {
         }
 
         section(header("Notifications")) {
-            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.")
+            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
+            if (!isEmpty(settings.notifyDevices)) {
+                input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Turn off to silence all token-expiry alerts without removing your notification devices.", width: 6)
+                if (settings.notifyTokenExpiry != false) {
+                    input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
+                }
+            }
         }
 
         section(header("Logging")) {
@@ -525,7 +533,8 @@ String handleException(String tag, Exception e) {
 
 private void notifyTokenExpired() {
     if (isEmpty(settings.notifyDevices)) return
-    String msg = "Life360 token expired"
+    if (settings.notifyTokenExpiry == false) return
+    String msg = "Life360 token expired — re-paste a fresh access token"
     settings.notifyDevices.each { dev ->
         try {
             dev.deviceNotification(msg)
@@ -533,6 +542,32 @@ private void notifyTokenExpired() {
             log.error("notifyTokenExpired: ${dev?.displayName}: ${e}")
         }
     }
+    scheduleTokenExpiryReminder()
+}
+
+private void scheduleTokenExpiryReminder() {
+    unschedule("sendTokenExpiryReminder")
+    String freq = settings.notifyRepeatHours ?: "never"
+    if (freq == "never") return
+    int delaySecs = freq.toInteger() * 3600
+    runIn(delaySecs, "sendTokenExpiryReminder")
+    if (logEnable) log.debug("scheduleTokenExpiryReminder: next reminder in ${freq}h")
+}
+
+def sendTokenExpiryReminder() {
+    if (!state.tokenLikelyExpired) return          // token refreshed, stop chain
+    if (settings.notifyTokenExpiry == false) return // master toggle off
+    if (isEmpty(settings.notifyDevices)) return
+    String msg = "Life360 token still expired — re-paste a fresh access token"
+    settings.notifyDevices.each { dev ->
+        try {
+            dev.deviceNotification(msg)
+        } catch (e) {
+            log.error("sendTokenExpiryReminder: ${dev?.displayName}: ${e}")
+        }
+    }
+    log.warn("sendTokenExpiryReminder: token still expired, reminder sent")
+    scheduleTokenExpiryReminder()  // schedule the next repeat
 }
 
 private Integer readRetryAfterSecs(Exception e) {
@@ -640,11 +675,14 @@ def installed() {
  * called when user hits DONE on app (already installed)
  */
 def updated() {
-    log.debug("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}")
+    log.debug("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}, notifyTokenExpiry:${settings.notifyTokenExpiry}, notifyRepeatHours:${settings.notifyRepeatHours}")
     // user clicked Done — assume any pasted token is fresh; let polling resume
     state.tokenLikelyExpired = false
     state.failCount = 0
     state.rateLimitedUntilMs = null
+    unschedule("sendTokenExpiryReminder")  // clear any pending repeat reminder (§5.2)
+    state.memberCount = null        // re-baseline after any circle/membership config change
+    state.lastCirclesFetchMs = null // fire circles check on next poll tick
     createChildDevices()
     state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
@@ -761,20 +799,54 @@ def handleTimerFired() {
         }
     }
 
+    // circles check — at most once per minute; detects membership changes regardless of location fetch state
+    long lastCirclesFetchMs = (state.lastCirclesFetchMs ?: 0L) as long
+    if (now - lastCirclesFetchMs >= 60000L) {
+        state.lastCirclesFetchMs = now
+        def circlesParams = life360Params("/circles")
+        def cookies = state["cookies"]
+        if (cookies) circlesParams["headers"]["Cookie"] = cookies
+        asynchttpGet("handleCirclesPollResponse", circlesParams)
+    }
+
     if (!fetchLocations()) return
+}
 
-    // change things up every 10 minutes or so
-    Long updateTimeMs = state.updateTimeMs ?: 0
-    if (now > updateTimeMs) {
-        // update again in 5-10 minutes
-        Integer random = Math.abs(RNG.nextInt() % 300000) + 300000
-        state.updateTimeMs = now + random
-        if (logEnable) log.info "handleTimerFired: changing things up; ${random}ms"
+def handleCirclesPollResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        log.warn("fetchCircles: poll: network error: ${response.getErrorMessage()}")
+        return
+    }
+    captureCookiesAsync(response)
+    if (status != 200) {
+        if (logEnable) log.debug("fetchCircles: poll: unexpected status:${status}")
+        return
+    }
 
-        // re-schedule timer to add a little randomness
-        scheduleUpdates()
+    def circle = response.json?.circles?.find { it.id == settings.circle }
+    if (!circle) return
 
-        // this call doesn't use cookies
+    String circleName = showNamesInLogs() ? (circle.name ?: circle.id) : circle.id
+    int newCount = (circle.memberCount ?: "0").toInteger()
+
+    if (state.memberCount == null) {
+        state.memberCount = newCount
+        if (isEmpty(state.members)) {
+            log.info("fetchCircles: ${circleName}: memberCount:${newCount} — triggering initial member fetch")
+            fetchMembers()
+        } else {
+            if (logEnable) log.debug("fetchCircles: ${circleName}: memberCount:${newCount} (initialized)")
+        }
+        return
+    }
+
+    int prevCount = state.memberCount as int
+    if (newCount == prevCount) {
+        if (logEnable) log.debug("fetchCircles: ${circleName}: memberCount:${newCount} (no change)")
+    } else {
+        log.info("fetchCircles: ${circleName}: ${prevCount} → ${newCount}")
+        state.memberCount = newCount
         fetchMembers()
     }
 }
