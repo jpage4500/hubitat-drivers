@@ -12,6 +12,7 @@ import groovy.transform.Field
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.6.0  - 06/06/26 - Check Token button in STEP 1 with inline result; clears on fresh page open via one-shot pending flag
  *  5.5.0  - 06/06/26 - circles polled every poll tick (≤1/min) to detect membership changes; removes unconditional fetchMembers timer
  *  5.4.0  - 06/06/26 - configurable token-expiry repeat notifications with master toggle (§5.2)
  *  5.3.1  - 06/06/26 - skip eTag for in-transit members to force 200 on stale inTransit flag (§2.5)
@@ -74,6 +75,13 @@ mappings {
  * - otherwise, show phone number login page
  */
 def mainPage() {
+    // One-shot flag: checkToken() sets it so the result survives the one re-render
+    // after the button press. On every other page open we clear stale state.
+    if (state.tokenStatusPending) {
+        state.tokenStatusPending = false
+    } else {
+        state.tokenStatus = null
+    }
     dynamicPage(name: "mainPage", install: true, uninstall: true) {
         section() {
             href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external", width: 6
@@ -81,6 +89,10 @@ def mainPage() {
         }
         section(header("STEP 1: Access Token")) {
             input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true, width: 6
+            if (!isEmpty(access_token)) {
+                input("checkTokenBtn", "button", title: "Check Token")
+                if (state.tokenStatus) paragraph state.tokenStatus
+            }
         }
 
         if (!isEmpty(access_token)) {
@@ -161,6 +173,7 @@ def mainPage() {
                 paragraph "<small style='color:#888'>In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
             }
         }
+
     }
 }
 
@@ -193,6 +206,9 @@ def appButtonHandler(String button) {
         case "revokeViewLinkBtn":
             revokeViewLink()
             break
+        case "checkTokenBtn":
+            checkToken()
+            break
         default:
             log.debug("appButtonHandler: unhandled:${button}")
     }
@@ -218,6 +234,38 @@ def showMessage(text) {
         paragraph("<p style='color:red; font-weight: bold'>${text}</p>")
     }
 }
+
+// ---- Token check ------------------------------------------------------------
+
+private void checkToken() {
+    state.tokenStatusPending = true   // tell mainPage() to display the result on re-render
+    def params = life360Params("/users/me")
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    try {
+        httpGet(params) { response ->
+            captureCookies(response)
+            Integer status = response.status
+            if (status == 200) {
+                def user = response.data
+                String name = user?.firstName ?: "unknown"
+                log.info("checkToken: valid — id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
+                state.tokenStatus = "<span style='color:#080'>&#10003; Hi ${name}! Your token is valid.</span>"
+            } else if (status == 401 || status == 403) {
+                log.warn("checkToken: AUTH FAILURE (${status}) — token is likely expired or revoked")
+                state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — token appears expired or revoked.</span>"
+            } else {
+                log.warn("checkToken: unexpected status:${status}")
+                state.tokenStatus = "<span style='color:#a00'>&#10007; Unexpected response (${status}) checking token.</span>"
+            }
+        }
+    } catch (e) {
+        log.warn("checkToken: error: ${e.message}")
+        state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token — ${e.message}</span>"
+    }
+}
+
+// ---- end Token check --------------------------------------------------------
 
 def fetchCircles() {
     def params = life360Params("/circles")
@@ -681,6 +729,7 @@ def updated() {
     state.failCount = 0
     state.rateLimitedUntilMs = null
     unschedule("sendTokenExpiryReminder")  // clear any pending repeat reminder (§5.2)
+    state.tokenStatus = null        // clear so a freshly-pasted token doesn't show stale status
     state.memberCount = null        // re-baseline after any circle/membership config change
     state.lastCirclesFetchMs = null // fire circles check on next poll tick
     createChildDevices()
