@@ -218,10 +218,10 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Status:** FIXED in branch: feature/async-member-fetch — `buildPlacesContext()` added; called once in `fetchLocations()` and threaded through `fetchMemberLocation` → `handleMemberLocationResponse` → `notifyChildDevice`.
 
-### 4.3  App (`handleTimerFired`) — `fetchMembers()` is synchronous
+### 4.3  App — `fetchMembers()` is synchronous
 
-**Problem:** every 5–10 min the timer fires `fetchMembers()` using blocking `httpGet`. Blocks the scheduler thread for the duration.
-**Fix:** convert to `asynchttpGet` (same pattern as per-member location fetches).
+**Problem:** `fetchMembers()` used blocking `httpGet`, blocking the scheduler thread for the duration of the round-trip.
+**Fix:** convert to `asynchttpGet`. (The periodic forced timer that originally spawned this finding was replaced by circles-based on-demand detection — see §4.7.)
 
 **Status:** FIXED in branch: feature/async-member-fetch — `fetchMembers` now fires `asynchttpGet`; `handleMembersResponse` handles 200 and errors.
 
