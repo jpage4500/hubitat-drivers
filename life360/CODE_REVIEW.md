@@ -430,3 +430,5 @@ This is not an incremental change — it is a ground-up rewrite of the polling a
 Tiny call. Currently the app only discovers a bad token when a member fetch 401s (after potentially 3 failures). `GET /users/me` on startup or immediately after a token is pasted in `updated()` would give instant confirmation or a clear error — before the first poll tick fires.
 
 **Implementation:** fire async `GET /users/me` from `updated()` after a token change; on 200 log `"token valid: ${firstName} ${lastName}"`; on 401/403 immediately flip `state.tokenLikelyExpired` and notify.
+
+**Related — on-failure token check (planned, not yet implemented):** When `handleMemberLocationResponse` hits the 3rd consecutive 401/403 and is about to set `tokenLikelyExpired = true`, fire `checkToken()` inline first. This gives a definitive diagnosis (real expiry vs. transient auth blip) and also populates `state.tokenStatus` so the user sees the failure reason the next time they open settings — without having to press the Check Token button manually.
