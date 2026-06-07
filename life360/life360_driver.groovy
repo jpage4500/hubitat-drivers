@@ -157,7 +157,7 @@ def updated() {
 // @param thePlaces - all Life360 circles (locations)
 // @param home - Life360 circle which user selected as 'home'
 //
-// @return true if member is in transit (inTransit=true OR speed > 1)
+// @return true if member is in transit (per Life360 inTransit flag)
 boolean generatePresenceEvent(member, thePlaces, home) {
     if (member == null) return false
     //log.trace("generatePresenceEvent: member:${member}")
@@ -206,11 +206,16 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         || (prevLongitude == null || prevLongitude != longitude)
         || (prevAccuracy == null || prevAccuracy != accuracy))
 
+    // ── Raw Life360 payload (logged before any correction logic) ─────────────────
+    // Full location object — captures every field Life360 sends, including any not
+    // in the unofficial API spec. Enable debug logging to see this during a trip.
+    if (logEnable || parent?.getLogRawPayload()) log.info("RAW L360 ${displayMember(memberFirstName)}: ${location}")
+    // ─────────────────────────────────────────────────────────────────────────────
+
     // skip update if location, accuracy and battery have not changed
     if (!inTransit && speed <= 0 && !isLocationChanged
         && (prevBattery != null && prevBattery == battery)
         && (prevWifiState != null && prevWifiState.toBoolean() == wifiState)) {
-        // NOTE: uncomment to see 'no change' updates every <30> seconds
         if (logEnable) log.trace "generatePresenceEvent: No change: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
         return false
     }
@@ -218,7 +223,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.info "generatePresenceEvent: <strong>change</strong>: $latitude/$longitude, acc:$accuracy, b:$battery%, wifi:$wifiState, speed:${speed.round(2)}, inTransit:$inTransit"
+    if (logEnable) log.info "generatePresenceEvent: changed: lat:$latitude lng:$longitude acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s (${((speed * 2.23694)).round(2)}mph) inTransit:$inTransit isDriving:$isDriving"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -299,45 +304,30 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     speedUnits = (speed * (isMiles ? 2.23694 : 3.6)).round(2)
     distanceUnits = ((distanceAway / 1000) / ((isMiles ? 1.609344 : 1))).round(2)
 
-    // if transit threshold specified in preferences then use it; else, use info provided by Life360
+    // ── Motion state ─────────────────────────────────────────────────────────────
+    // Trust Life360's inTransit/isDriving flags directly.
+    // Manual thresholds (transitThreshold/drivingThreshold) let the user override
+    // with speed-based logic if they choose — otherwise Life360's values stand.
     if (transitThreshold.toDouble() > 0.0) {
         inTransit = (speedUnits >= transitThreshold.toDouble())
     }
-    // if driving threshold specified in preferences then use it; else, use info provided by Life360
     if (drivingThreshold.toDouble() > 0.0) {
         isDriving = (speedUnits >= drivingThreshold.toDouble())
     }
 
-    // *** Stale inTransit override (Life360 keeps inTransit=true for stationary members) ***
-    // If Life360 says we're in transit but speed is ~0 AND we haven't moved more than GPS
-    // accuracy since the last update, ignore the flag. This prevents the app's dynamic
-    // polling from being held active indefinitely by a stuck Life360 flag.
-    Double movedMeters = 0.0
-    if (prevLatitude != null && prevLongitude != null) {
-        movedMeters = haversine(prevLatitude, prevLongitude, latitude, longitude) * 1000.0
-    }
-    Double accuracyMeters = Math.max((prevAccuracy ?: 0) as double, (accuracy ?: 0) as double)
-    if (inTransit && speedUnits < 0.5d && movedMeters <= accuracyMeters) {
-        log.info("${displayMember(memberFirstName)}: ignoring stale Life360 inTransit flag (speed:${speedUnits}, moved:${movedMeters.round(0)}m within ${accuracyMeters.round(0)}m accuracy)")
-        inTransit = false
-    } else if (movedMeters > accuracyMeters && (inTransit || isDriving)) {
-        // Real movement — surface it as info so users can correlate polls with motion.
-        Double movedUnits = ((movedMeters / 1000.0) / (isMiles ? 1.609344 : 1.0)).round(2)
+    if (inTransit || isDriving) {
         boolean showMaps = true
         try { showMaps = (parent?.getShowMapsLink() != false) } catch (ignored) {}
-        String suffix = ""
-        if (showMaps) {
-            String mapsUrl = "https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}"
-            suffix = " — <a href='${mapsUrl}' target='_blank'>Google Maps link</a>"
-        }
-        log.info("${displayMember(memberFirstName)}: moved ${movedUnits} ${isMiles ? 'mi' : 'km'} @ ${speedUnits} ${isMiles ? 'mph' : 'kph'}${suffix}")
+        String suffix = showMaps ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
+        log.info("${displayMember(memberFirstName)}: moving @ ${speedUnits} ${isMiles ? 'mph' : 'kph'}${suffix}")
     }
+    if (logEnable || parent?.getLogRawPayload()) log.info("COMPUTED ${displayMember(memberFirstName)}: " +
+        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving}")
 
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
 
     if (logEnable && (isDriving || inTransit)) {
-        // *** On the move ***
-        log.debug "generatePresenceEvent: $sStatus, speedUnits:$speedUnits, transitThreshold: $transitThreshold, inTransit: $inTransit, drivingThreshold: $drivingThreshold, isDriving: $isDriving"
+        log.debug "generatePresenceEvent: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving"
     }
 
     sendEvent(name: "status", value: sStatus)

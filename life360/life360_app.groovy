@@ -75,12 +75,17 @@ mappings {
  * - otherwise, show phone number login page
  */
 def mainPage() {
-    // One-shot flag: checkToken() sets it so the result survives the one re-render
+    // One-shot flags: button handlers set these so the result survives the one re-render
     // after the button press. On every other page open we clear stale state.
     if (state.tokenStatusPending) {
         state.tokenStatusPending = false
     } else {
         state.tokenStatus = null
+    }
+    if (state.forceUpdateStatusPending) {
+        state.forceUpdateStatusPending = false
+    } else {
+        state.forceUpdateStatus = null
     }
     dynamicPage(name: "mainPage", install: true, uninstall: true) {
         section() {
@@ -157,6 +162,7 @@ def mainPage() {
         section(header("Logging")) {
             paragraph "<small style='color:#666'>Controls what appears in Hubitat's app/device logs. Turn the privacy switches OFF when sharing logs publicly.</small>"
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            input(name: "logRawPayload", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Log Raw Life360 Payloads", description: "Log the full location payload from Life360 on every update. Verbose — enable temporarily for diagnosis.")
             input(name: "logShowNames", type: "bool", defaultValue: "true", submitOnChange: "true", title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
             input(name: "logShowMapsLink", type: "bool", defaultValue: "true", submitOnChange: "true", title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
         }
@@ -171,6 +177,19 @@ def mainPage() {
             } else {
                 input("generateViewLinkBtn", "button", title: "Generate Map Link")
                 paragraph "<small style='color:#888'>In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
+            }
+        }
+
+        if (!isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)) {
+            section(header("Force Update")) {
+                paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
+                def forceMembers = state.members
+                    .findAll { settings.users.contains(it.id) }
+                    .collectEntries { [it.id, "${it.firstName} ${it.lastName}".trim()] }
+                    .sort { a, b -> a.value <=> b.value }
+                input "forceUpdateMember", "enum", multiple: false, required: false, title: "Member", options: forceMembers, submitOnChange: true, width: 6
+                input("forceUpdateBtn", "button", title: "Force Update")
+                if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
             }
         }
 
@@ -208,6 +227,9 @@ def appButtonHandler(String button) {
             break
         case "checkTokenBtn":
             checkToken()
+            break
+        case "forceUpdateBtn":
+            forceMemberUpdate(settings.forceUpdateMember)
             break
         default:
             log.debug("appButtonHandler: unhandled:${button}")
@@ -266,6 +288,88 @@ private void checkToken() {
 }
 
 // ---- end Token check --------------------------------------------------------
+
+// ---- Force Update -----------------------------------------------------------
+
+private void forceMemberUpdate(String memberId) {
+    if (isEmpty(memberId)) {
+        log.warn("forceMemberUpdate: no member selected")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Select a member first.</span>"
+        return
+    }
+    if (isEmpty(circle)) {
+        log.warn("forceMemberUpdate: no circle selected")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; No circle selected.</span>"
+        return
+    }
+    String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
+    String url = "${life360BaseUrl()}/circles/${circle}/members/${memberId}/request"
+    String body = groovy.json.JsonOutput.toJson([type: "location"])
+    String cookies = state["cookies"]
+
+    log.info("forceMemberUpdate: POST ${url}")
+    log.info("forceMemberUpdate: body: ${body}")
+    log.info("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
+    log.info("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
+    log.info("forceMemberUpdate: User-Agent: ${getHttpHeaders()['User-Agent']}")
+
+    def params = life360Params("/circles/${circle}/members/${memberId}/request")
+    params.contentType = "application/json"
+    params.body = body
+    if (cookies) params["headers"]["Cookie"] = cookies
+
+    log.debug("forceMemberUpdate: full params: ${params}")
+
+    state.forceUpdateStatusPending = true
+    state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
+    asynchttpPost("handleForceUpdateResponse", params, [memberId: memberId])
+    log.info("forceMemberUpdate: asynchttpPost fired for member:${memberName}")
+}
+
+def handleForceUpdateResponse(response, Map data) {
+    String memberId = data.memberId
+    Integer status = response.status
+    String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
+
+    log.info("forceMemberUpdate: response received — status:${status} member:${memberName}")
+
+    if (!status) {
+        String errMsg = response.getErrorMessage()
+        log.warn("forceMemberUpdate: null status (network-level failure) — ${errMsg}")
+        log.warn("forceMemberUpdate: hasError:${response.hasError()}")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
+        return
+    }
+
+    // log all response headers for diagnosis
+    try {
+        log.debug("forceMemberUpdate: response headers: ${response.headers}")
+    } catch (e) {
+        log.debug("forceMemberUpdate: could not read response headers: ${e.message}")
+    }
+
+    captureCookiesAsync(response)
+
+    if (status == 200) {
+        def result = response.json
+        log.info("forceMemberUpdate: 200 OK — raw json: ${result}")
+        String requestId = result?.requestId
+        String isPollable = result?.isPollable
+        log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
+        state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
+        runIn(6, "fetchLocations")
+    } else {
+        String errMsg = response.getErrorMessage()
+        String errBody = null
+        try { errBody = response.data?.toString() } catch (ignored) {}
+        log.warn("forceMemberUpdate: FAILED status:${status} member:${memberName}")
+        log.warn("forceMemberUpdate: errorMessage: ${errMsg}")
+        log.warn("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) — check logs for details</span>"
+    }
+}
+
+// ---- end Force Update -------------------------------------------------------
 
 def fetchCircles() {
     def params = life360Params("/circles")
@@ -429,10 +533,8 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     def cookies = state["cookies"]
     if (cookies) params["headers"]["Cookie"] = cookies
 
-    // skip eTag for in-transit members — forces a 200 so the driver can re-evaluate
-    // speed/movement and override a stale Life360 inTransit flag (§2.5)
     def tag = state["etag-${memberId}"]
-    if (tag && !isMemberInTransit(memberId)) params["headers"]["If-None-Match"] = tag
+    if (tag) params["headers"]["If-None-Match"] = tag
 
     asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx])
 }
@@ -705,6 +807,14 @@ boolean getShowMapsLink() {
     return (settings.logShowMapsLink == null) ? true : (settings.logShowMapsLink == true)
 }
 
+boolean getLogEnable() {
+    return logEnable == true
+}
+
+boolean getLogRawPayload() {
+    return settings.logRawPayload == true
+}
+
 // -------------------------------------------------------------------
 
 /**
@@ -723,7 +833,7 @@ def installed() {
  * called when user hits DONE on app (already installed)
  */
 def updated() {
-    log.debug("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}, notifyTokenExpiry:${settings.notifyTokenExpiry}, notifyRepeatHours:${settings.notifyRepeatHours}")
+    log.debug("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}, logRawPayload:${settings.logRawPayload}, notifyTokenExpiry:${settings.notifyTokenExpiry}, notifyRepeatHours:${settings.notifyRepeatHours}")
     // user clicked Done — assume any pasted token is fresh; let polling resume
     state.tokenLikelyExpired = false
     state.failCount = 0
