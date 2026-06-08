@@ -228,9 +228,9 @@ if (address1 != "Home" && inTransit) { ... }
 ### 4.5  Driver (`generatePresenceEvent`) — `savedPlaces` JSON sent on every member update
 
 **Problem:** `new groovy.json.JsonBuilder(thePlaces).toString()` runs every poll for every member; the places list rarely changes. 5 members × 6 polls/min = 30 JSON serializations + event writes per minute for static data.
-**Fix:** compare to `device.currentValue('savedPlaces')`; skip the event when unchanged.
+**Fix:** serialize once per poll in the app (`buildPlacesContext`), not once per member in the driver. (The earlier dedup-guard fix still serialized every poll to do the comparison, so it didn't remove the real waste — the N× repeat across members.)
 
-**Status:** FIXED in branch: feature/async-member-fetch — serialize to string first, skip `sendEvent` if value matches `device.currentValue('savedPlaces')`.
+**Status:** FIXED — `buildPlacesContext()` serializes `placesMap` to JSON once and passes the string through `notifyChildDevice` → `generatePresenceEvent`; the driver sends it directly (tolerating a raw Map from an older app). Hubitat still dedupes the event by value.
 
 ### 4.6  Driver (`generatePresenceEvent`) — `memberName` / `avatar` re-sent every poll
 
@@ -336,6 +336,14 @@ if (address1 != "Home" && inTransit) { ... }
 **Problem:** member first/last names from the Life360 API are stored in `state.members`, passed as function arguments (`memberObj.firstName`, `notifyChildDevice`, `generatePresenceEvent`), and written to device attributes throughout the app and driver. The current privacy controls (§6.3, `logShowNames`) only gate what appears in *log output* — real names exist everywhere else. A privacy-first design would pass member UUIDs internally and resolve to human-readable names only at the last moment (display/logging), so that names are never incidentally exposed through state dumps, debug output, or future code paths that don't know to call `displayMember()`.
 
 **Fix:** refactor internal APIs to pass `memberId` (UUID) rather than name strings. Look up the display name from `state.members` only at the point of user-visible output (logs, device labels, UI). Device attributes that are user-facing (e.g. `memberName`) are intentional and remain as-is.
+
+### 6.6  App (`forceMemberUpdate:321`) — full access token + cookies dumped to logs at `debug`
+
+**Problem:** `log.debug("forceMemberUpdate: full params: ${params}")` serializes the entire request map, which includes `headers.Authorization` (the complete `Bearer` access token) and `headers.Cookie` (`_cfuvid` / `__cf_bm` session cookies) in cleartext. The surrounding log lines in the same method deliberately truncate these (`Bearer ${access_token.take(8)}…`, `Cookie ${cookies.take(40)}…`), so this one line defeats that effort. Anyone who can read the Hubitat log — or any log the user pastes for troubleshooting — gets a working token that can read the whole circle's live location until it's rotated. Observed live on 2026-06-07.
+
+**Fix:** drop the full-params dump, or redact the sensitive headers before logging — e.g. log a shallow copy with `Authorization`/`Cookie` masked, matching the `take(8)`/`take(40)` truncation the rest of the method already uses. The `set-cookie` / response-header dump in `handleForceUpdateResponse` has the same exposure and should be redacted too.
+
+**Status:** OPEN.
 
 ---
 

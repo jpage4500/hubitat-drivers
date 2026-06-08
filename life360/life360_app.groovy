@@ -12,6 +12,7 @@ import groovy.transform.Field
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
  * Changes:
+ *  5.6.1  - 06/07/26 - serialize savedPlaces JSON once per poll in the app instead of once per member in the driver (§4.5)
  *  5.6.0  - 06/06/26 - Check Token button in STEP 1 with inline result; clears on fresh page open via one-shot pending flag
  *  5.5.0  - 06/06/26 - circles polled every poll tick (≤1/min) to detect membership changes; removes unconditional fetchMembers timer
  *  5.4.0  - 06/06/26 - configurable token-expiry repeat notifications with master toggle (§5.2)
@@ -1060,11 +1061,11 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     if (isEmpty(state.places)) return;
 
     // use pre-built context from fetchLocations() poll cycle, or build on the spot (§4.2)
-    Map placesMap = ctx?.placesMap
+    String placesJson = ctx?.placesJson
     def home = ctx?.home
-    if (placesMap == null) {
+    if (placesJson == null) {
         def built = buildPlacesContext()
-        placesMap = built.placesMap
+        placesJson = built.placesJson
         home = built.home
     }
 
@@ -1074,7 +1075,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
             // send location, places and home to device driver
-            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
+            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesJson, home)
             boolean prevInTransit = isMemberInTransit(memberId)
             if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
@@ -1095,7 +1096,10 @@ private Map buildPlacesContext() {
     for (rec in thePlaces) {
         placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
     }
-    return [placesMap: placesMap, home: home]
+    // serialize the places JSON once per poll — it's identical for every member,
+    // so the driver shouldn't re-serialize it N times (§4.5)
+    String placesJson = new groovy.json.JsonBuilder(placesMap).toString()
+    return [placesMap: placesMap, placesJson: placesJson, home: home]
 }
 
 void captureCookies(response) {

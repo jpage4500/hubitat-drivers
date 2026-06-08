@@ -154,7 +154,7 @@ def updated() {
 
 // called from Life360+ app
 // @param member - Life360 member object (user details)
-// @param thePlaces - all Life360 circles (locations)
+// @param thePlaces - pre-serialized JSON of all Life360 places (string); a raw Map is still accepted for backward compat
 // @param home - Life360 circle which user selected as 'home'
 //
 // @return true if member is in transit (per Life360 inTransit flag)
@@ -216,7 +216,9 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     sendEvent(name: "memberName", value: memberFullName)
 
     // *** Places List ***
-    sendEvent(name: "savedPlaces", value: new groovy.json.JsonBuilder(thePlaces).toString())
+    // app pre-serializes once per poll (§4.5); tolerate a raw Map from an older app
+    String savedPlacesValue = (thePlaces instanceof CharSequence) ? thePlaces.toString() : new groovy.json.JsonBuilder(thePlaces).toString()
+    sendEvent(name: "savedPlaces", value: savedPlacesValue)
 
     // *** Avatar ***
     String avatar
