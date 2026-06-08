@@ -60,9 +60,10 @@ Works with the HD+ dashboard: <https://joe-page-software.gitbook.io/hubitat-dash
 
 ## Related files in this repo
 
+- [CHANGELOG.md](CHANGELOG.md) — version-by-version history for both the app and the driver.
 - [CODE_REVIEW.md](CODE_REVIEW.md) — known bugs, performance items, UX gaps, security notes.
 - [STATE_REFERENCE.md](STATE_REFERENCE.md) — every setting, state var, scheduled job, and child-device attribute.
 
 ## History
 
-Originally "Life360 with States" → "Life360+" (continuation by Joe Page). See the change log at the top of [life360_app.groovy](life360_app.groovy) for the version-by-version history of API breaks and rescues.
+Originally "Life360 with States" → "Life360+" (continuation by Joe Page). See [CHANGELOG.md](CHANGELOG.md) for the version-by-version history of API breaks and rescues.
