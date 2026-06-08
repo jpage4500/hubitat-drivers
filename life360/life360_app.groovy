@@ -11,33 +11,8 @@ import groovy.transform.Field
  * Life360 companion app to track members' location in your circle
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
- * Changes:
- *  5.6.1  - 06/07/26 - serialize savedPlaces JSON once per poll in the app instead of once per member in the driver (§4.5)
- *  5.6.0  - 06/06/26 - Check Token button in STEP 1 with inline result; clears on fresh page open via one-shot pending flag
- *  5.5.0  - 06/06/26 - circles polled every poll tick (≤1/min) to detect membership changes; removes unconditional fetchMembers timer
- *  5.4.0  - 06/06/26 - configurable token-expiry repeat notifications with master toggle (§5.2)
- *  5.3.1  - 06/06/26 - skip eTag for in-transit members to force 200 on stale inTransit flag (§2.5)
- *  5.3.0  - 06/06/26 - exponential backoff for transient 5xx errors per member (§5.3)
- *  5.2.0  - 06/06/26 - async per-member location fetches; buildPlacesContext once per poll; in-flight guard (§4.1/§4.2/§7.1)
- *  5.1.3  - 05/09/26 - add /view endpoint to view members on a map
- *  5.1.2  - 05/01/26 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
- *  5.1.1 -  05/01/26 - add device notification when token expires
- *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
- *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
- *           when no successful update in N minutes; loud banner when token expired
- *  5.0.15 - 12/31/24 - minor fixes
- *  5.0.14 - 12/24/24 - Dynamic Polling
- *  5.0.13 - 12/24/24 - restore original scheduling routine
- *  5.0.10 - 12/21/24 - add some randomness
- *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
- *  5.0.8  - 12/18/24 - added cookies found by @user3774
- *  5.0.7  - 12/11/24 - try to match Home Assistant
- *  5.0.6  - 12/05/24 - return to older API version (keeping eTag support)
- *  5.0.5  - 11/12/24 - support eTag for locations call
- *  5.0.4  - 11/09/24 - use newer API
- *  5.0.2  - 11/03/24 - restore webhook
- *  5.0.0  - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
- *  4.0.0  -  02/08/24 - implement new Life360 API
+ * Changelog: see CHANGELOG.md alongside this file
+ *   https://github.com/jpage4500/hubitat-drivers/blob/master/life360/CHANGELOG.md
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
  * - please see that thread for full history of this app/driver
@@ -163,7 +138,7 @@ def mainPage() {
         section(header("Logging")) {
             paragraph "<small style='color:#666'>Controls what appears in Hubitat's app/device logs. Turn the privacy switches OFF when sharing logs publicly.</small>"
             input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
-            input(name: "logRawPayload", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Log Raw Life360 Payloads", description: "Log the full location payload from Life360 on every update. Verbose — enable temporarily for diagnosis.")
+            input(name: "logRawPayload", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only — don't share resulting logs.")
             input(name: "logShowNames", type: "bool", defaultValue: "true", submitOnChange: "true", title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
             input(name: "logShowMapsLink", type: "bool", defaultValue: "true", submitOnChange: "true", title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
         }
@@ -308,23 +283,27 @@ private void forceMemberUpdate(String memberId) {
     String body = groovy.json.JsonOutput.toJson([type: "location"])
     String cookies = state["cookies"]
 
-    log.info("forceMemberUpdate: POST ${url}")
-    log.info("forceMemberUpdate: body: ${body}")
-    log.info("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
-    log.info("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
-    log.info("forceMemberUpdate: User-Agent: ${getHttpHeaders()['User-Agent']}")
+    // Diagnostic chatter — gated behind logRawPayload. Includes URL (with circle/member UUIDs),
+    // partial Bearer token, partial Cloudflare cookie head, User-Agent.
+    if (getLogRawPayload()) {
+        log.info("forceMemberUpdate: POST ${url}")
+        log.info("forceMemberUpdate: body: ${body}")
+        log.info("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
+        log.info("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
+        log.info("forceMemberUpdate: User-Agent: ${getHttpHeaders()['User-Agent']}")
+    }
 
     def params = life360Params("/circles/${circle}/members/${memberId}/request")
     params.contentType = "application/json"
     params.body = body
     if (cookies) params["headers"]["Cookie"] = cookies
 
-    log.debug("forceMemberUpdate: full params: ${params}")
+    if (getLogRawPayload()) log.debug("forceMemberUpdate: full params: ${params}")
 
     state.forceUpdateStatusPending = true
     state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
     asynchttpPost("handleForceUpdateResponse", params, [memberId: memberId])
-    log.info("forceMemberUpdate: asynchttpPost fired for member:${memberName}")
+    log.info("forceMemberUpdate: sent for member:${memberName}")
 }
 
 def handleForceUpdateResponse(response, Map data) {
@@ -332,30 +311,29 @@ def handleForceUpdateResponse(response, Map data) {
     Integer status = response.status
     String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
 
-    log.info("forceMemberUpdate: response received — status:${status} member:${memberName}")
-
     if (!status) {
         String errMsg = response.getErrorMessage()
-        log.warn("forceMemberUpdate: null status (network-level failure) — ${errMsg}")
-        log.warn("forceMemberUpdate: hasError:${response.hasError()}")
+        log.warn("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
+        if (getLogRawPayload()) log.warn("forceMemberUpdate: hasError:${response.hasError()}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
         return
     }
 
-    // log all response headers for diagnosis
-    try {
-        log.debug("forceMemberUpdate: response headers: ${response.headers}")
-    } catch (e) {
-        log.debug("forceMemberUpdate: could not read response headers: ${e.message}")
+    if (getLogRawPayload()) {
+        try {
+            log.debug("forceMemberUpdate: response headers: ${response.headers}")
+        } catch (e) {
+            log.debug("forceMemberUpdate: could not read response headers: ${e.message}")
+        }
     }
 
     captureCookiesAsync(response)
 
     if (status == 200) {
         def result = response.json
-        log.info("forceMemberUpdate: 200 OK — raw json: ${result}")
         String requestId = result?.requestId
         String isPollable = result?.isPollable
+        if (getLogRawPayload()) log.info("forceMemberUpdate: 200 OK — raw json: ${result}")
         log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
         state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
         runIn(6, "fetchLocations")
@@ -363,9 +341,8 @@ def handleForceUpdateResponse(response, Map data) {
         String errMsg = response.getErrorMessage()
         String errBody = null
         try { errBody = response.data?.toString() } catch (ignored) {}
-        log.warn("forceMemberUpdate: FAILED status:${status} member:${memberName}")
-        log.warn("forceMemberUpdate: errorMessage: ${errMsg}")
-        log.warn("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
+        log.warn("forceMemberUpdate: FAILED status:${status} member:${memberName} — ${errMsg}")
+        if (getLogRawPayload()) log.warn("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) — check logs for details</span>"
     }
 }
