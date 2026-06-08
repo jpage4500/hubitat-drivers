@@ -337,14 +337,6 @@ if (address1 != "Home" && inTransit) { ... }
 
 **Fix:** refactor internal APIs to pass `memberId` (UUID) rather than name strings. Look up the display name from `state.members` only at the point of user-visible output (logs, device labels, UI). Device attributes that are user-facing (e.g. `memberName`) are intentional and remain as-is.
 
-### 6.6  App (`forceMemberUpdate:321`) — full access token + cookies dumped to logs at `debug`
-
-**Problem:** `log.debug("forceMemberUpdate: full params: ${params}")` serializes the entire request map, which includes `headers.Authorization` (the complete `Bearer` access token) and `headers.Cookie` (`_cfuvid` / `__cf_bm` session cookies) in cleartext. The surrounding log lines in the same method deliberately truncate these (`Bearer ${access_token.take(8)}…`, `Cookie ${cookies.take(40)}…`), so this one line defeats that effort. Anyone who can read the Hubitat log — or any log the user pastes for troubleshooting — gets a working token that can read the whole circle's live location until it's rotated. Observed live on 2026-06-07.
-
-**Fix:** drop the full-params dump, or redact the sensitive headers before logging — e.g. log a shallow copy with `Authorization`/`Cookie` masked, matching the `take(8)`/`take(40)` truncation the rest of the method already uses. The `set-cookie` / response-header dump in `handleForceUpdateResponse` has the same exposure and should be redacted too.
-
-**Status:** OPEN.
-
 ---
 
 ## 7. Async HTTP pile-up — forward-looking guidance
