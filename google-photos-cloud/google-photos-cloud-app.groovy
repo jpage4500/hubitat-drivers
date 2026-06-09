@@ -84,8 +84,7 @@ def mainPage() {
             showChildren()
         }
         section(header("Slideshow Settings")) {
-            input 'imgWidth', 'text', title: 'Image width (px)', defaultValue: '2048', submitOnChange: true
-            input 'imgHeight', 'text', title: 'Image height (px)', defaultValue: '1024', submitOnChange: true
+            input 'maxSize', 'number', title: 'Max image size (px, longest edge)', defaultValue: 2048, submitOnChange: true
             input 'refreshInterval', 'number', title: 'Refresh interval', defaultValue: 60, range: '2..3600', required: true, submitOnChange: true
             input 'refreshUnits', 'enum', title: 'Refresh interval -- units', defaultValue: 'seconds', options: ['seconds', 'minutes'], required: true, submitOnChange: true
             input 'shuffle', 'bool', title: 'Shuffle photo order?', defaultValue: false, submitOnChange: true
@@ -148,7 +147,6 @@ def showChildren() {
     def children = getChildDevices()
     // auto-refresh the page while EITHER a picker session is open (waiting for the user to pick) OR an upload
     // is running - so we catch the upload starting (it begins only after the user picks) and show its progress.
-    boolean autoRefresh = false
     if (children) {
         children.each { child ->
             def dni = child.deviceNetworkId
@@ -156,23 +154,18 @@ def showChildren() {
             def count = (info?.photos ?: []).size()
             paragraph "<b>${child.label}</b> &rarr; album <code>${info?.title ?: '(not created)'}</code> &mdash; ${count} photo(s)"
             if (info?.uploading) {
-                autoRefresh = true
-                def total = info.uploadTotal ?: 0
-                def done = info.uploadDone ?: 0
-                def pct = total > 0 ? Math.round((done * 100) / total) : 0
-                paragraph """<div style="margin:4px 0"><b>&#8635; Uploading ${done}/${total}&hellip;</b>
-                    <div style="background:#e0e0e0;border-radius:6px;height:14px;width:100%;max-width:300px;overflow:hidden">
-                    <div style="background:#4285f4;height:14px;width:${pct}%"></div></div></div>"""
+                paragraph "<b>&#8635; Uploading ${info.uploadDone ?: 0}/${info.uploadTotal ?: 0}&hellip;</b>"
             }
-            // Add Photos + Delete side by side (Hubitat 12-col grid: width 6 + 6 = one row).
-            input "pick_${dni}", 'button', title: "Add Photos to '${child.label}'", width: 6, submitOnChange: true
-            input "del_${dni}", 'button', title: "Delete '${child.label}'", width: 6, submitOnChange: true
+            // Add / Refresh / Delete on one row (Hubitat 12-col grid: 4 + 4 + 4).
+            // Refresh re-syncs the photo list from the Google album so photos removed/deleted there drop out.
+            input "pick_${dni}", 'button', title: "Add Photos to '${child.label}'", width: 4, submitOnChange: true
+            input "refresh_${dni}", 'button', title: "Refresh '${child.label}'", width: 4, submitOnChange: true
+            input "del_${dni}", 'button', title: "Delete '${child.label}'", width: 4, submitOnChange: true
             def sess = state.pickerSessions?.get(dni)
             if (sess?.pickerUri && now() < (sess.deadline ?: 0)) {
-                autoRefresh = true
                 def winName = ("gp_" + dni).replaceAll(/[^A-Za-z0-9_]/, "_")
-                // open the popup once (right after Add Photos), then clear the flag so later auto-refreshes
-                // don't reopen it - but keep the fallback link visible the whole time the session is open
+                // open the popup once (right after Add Photos), then clear the flag so a later page render
+                // doesn't reopen it - but keep the fallback link visible the whole time the session is open
                 def openScript = ""
                 if (sess.autoOpen) {
                     sess.autoOpen = false
@@ -181,17 +174,14 @@ def showChildren() {
                     state.pickerSessions = sessions
                     openScript = "<script>window.open('${sess.pickerUri}','${winName}','width=960,height=760,menubar=no,toolbar=no,location=no,resizable=yes,scrollbars=yes');</script>"
                 }
-                paragraph """${openScript}<small>&#128247; Picker is open &mdash; select photos and click Done. If the popup was blocked, <a href='${sess.pickerUri}' target='${winName}'>click here</a>. Times out in 10 min.</small>"""
+                def minsLeft = Math.max(0, Math.round((sess.deadline - now()) / 60000d) as Integer)
+                def expTime = new Date(sess.deadline as Long).format('h:mm a', location.timeZone)
+                // no auto-refresh - the upload runs in background; user clicks Refresh to see progress
+                paragraph """${openScript}<small>&#128247; Picker is open &mdash; select photos and click Done. If the popup was blocked, <a href='${sess.pickerUri}' target='${winName}'>click here</a>.<br>Times out in ${minsLeft} min (${expTime}).<br>Upload will happen automatically when done. Click <a href="#" onclick="location.reload();return false;">Refresh</a> to view progress.</small>"""
             }
         }
     } else {
         paragraph "No albums yet. Create one below."
-    }
-
-    // auto-reload while a session is open or an upload is running (config pages can't be pushed to; the
-    // picker poll + upload run in background jobs, so reloading just re-reads the latest progress from state).
-    if (autoRefresh) {
-        paragraph """<script>setTimeout(function(){ location.reload(); }, 4000);</script><small>&#8635; Auto-refreshing&hellip;</small>"""
     }
 
     if (state?.googleAccessToken == null) {
@@ -363,10 +353,30 @@ def appButtonHandler(btn) {
     } else if (btn?.startsWith('pick_')) {
         def dni = btn.substring('pick_'.length())
         startPickerSession(dni)
+    } else if (btn?.startsWith('refresh_')) {
+        def dni = btn.substring('refresh_'.length())
+        refreshAlbum(dni)
     } else if (btn?.startsWith('del_')) {
         def dni = btn.substring('del_'.length())
         deleteAlbumAndChild(dni)
     }
+}
+
+// re-sync the photo list from the Google album (reconciles photos the user removed/deleted there)
+def refreshAlbum(String dni) {
+    def before = (childState(dni)?.photos ?: []).size()
+    syncAlbum(dni, null, null)
+    def after = (childState(dni)?.photos ?: []).size()
+    def label = getChildDevice(dni)?.label ?: 'album'
+    log.info("refreshAlbum: '${label}' ${before} -> ${after} photo(s)")
+    if (after == 0) {
+        // album is now empty - clear the displayed image so it stops showing a removed photo
+        def child = getChildDevice(dni)
+        child?.sendEvent(name: 'image', value: '<img src="" />')
+        child?.sendEvent(name: 'total', value: 0)
+        child?.sendEvent(name: 'index', value: 0)
+    }
+    state.albumNote = "Refreshed '${label}': ${after} photo(s) available" + (after != before ? " (was ${before})" : "") + "."
 }
 
 // ----------------------------------------------------------------------------
@@ -514,11 +524,17 @@ def importPickedItems(String dni, String sessionId, String pageToken) {
             resp.data?.mediaItems?.each { item ->
                 // only photos (skip video re-upload for now)
                 if (item?.type == 'PHOTO' || item?.mediaFile?.mimeType?.startsWith('image/')) {
-                    list << [
-                        baseUrl : item.mediaFile.baseUrl,
-                        mimeType: item.mediaFile.mimeType ?: 'image/jpeg',
-                        filename: item.mediaFile.filename ?: "${item.id}.jpg"
-                    ]
+                    // skip the same photo picked more than once in this session (dedupe by picker item id)
+                    if (list.any { it.pickerId == item.id }) {
+                        logDebug("importPickedItems: skipping duplicate pick '${item.mediaFile?.filename}'")
+                    } else {
+                        list << [
+                            pickerId: item.id,
+                            baseUrl : item.mediaFile.baseUrl,
+                            mimeType: item.mediaFile.mimeType ?: 'image/jpeg',
+                            filename: item.mediaFile.filename ?: "${item.id}.jpg"
+                        ]
+                    }
                 }
             }
             queue[dni] = list
@@ -572,8 +588,14 @@ def processUploadQueue(data) {
 
 private boolean uploadOnePhoto(String dni, Map item) {
     try {
-        // 1) download bytes from the picked baseUrl (REQUIRES auth header; =d = original)
-        byte[] bytes = downloadBytes("${item.baseUrl}=d")
+        // 1) download bytes from the picked baseUrl (REQUIRES auth header).
+        // Use a RESIZED version (=w-h), NOT the original (=d): picker photos already exist in the user's
+        // library, and re-uploading byte-identical originals makes Google de-dupe them onto the existing
+        // (non-app-created) library item, which then 404s under readonly.appcreateddata. A resized copy has
+        // different bytes, so Google stores it as a genuine app-created item the app can read back.
+        // Size to the configured max (longest edge), so we store at the resolution we actually display.
+        def sz = maxSize ?: 2048
+        byte[] bytes = downloadBytes("${item.baseUrl}=w${sz}-h${sz}")
         if (bytes == null || bytes.length == 0) {
             log.warn("uploadOnePhoto: no bytes for ${item.filename}")
             return false
@@ -664,12 +686,16 @@ def endPickerSession(String dni) {
 // Album re-sync (optional nightly) - rebuild photo id list from the album
 // ----------------------------------------------------------------------------
 def syncAllAlbums() {
-    getChildDevices().each { syncAlbum(it.deviceNetworkId, null) }
+    getChildDevices().each { syncAlbum(it.deviceNetworkId, null, null) }
 }
 
-def syncAlbum(String dni, String pageToken) {
+// Rebuild the photo id list from the Google album via mediaItems:search. Accumulates across pages into
+// 'acc' and only commits at the very end - and only if non-empty - so a restricted/empty/failed search
+// never wipes a working list.
+def syncAlbum(String dni, String pageToken, List acc) {
     def info = childState(dni)
     if (!info?.albumId) return
+    if (acc == null) acc = []
     def body = [albumId: info.albumId, pageSize: 100]
     if (pageToken) body.pageToken = pageToken
     try {
@@ -678,13 +704,16 @@ def syncAlbum(String dni, String pageToken) {
                 log.warn("syncAlbum: ${resp.status} ${resp.data} (album search may be restricted under appcreateddata)")
                 return
             }
-            if (!pageToken) { info.photos = []; }
-            resp.data?.mediaItems?.each { info.photos << it.id }
-            putChildState(dni, info)
+            resp.data?.mediaItems?.each { acc << it.id }
             if (resp.data?.nextPageToken) {
-                syncAlbum(dni, resp.data.nextPageToken)
+                syncAlbum(dni, resp.data.nextPageToken, acc)
             } else {
-                logDebug("syncAlbum: ${dni} now has ${info.photos.size()} photo(s)")
+                // reaching here means we got HTTP 200 (errors throw and are caught below), so an empty
+                // result is a real "album is empty" - commit it. Restricted/failed searches never get here.
+                info.photos = acc
+                if ((info.index ?: 0) >= acc.size()) info.index = 0
+                putChildState(dni, info)
+                logDebug("syncAlbum: ${dni} now has ${acc.size()} photo(s)")
             }
         }
     } catch (e) {
@@ -698,7 +727,8 @@ def syncAlbum(String dni, String pageToken) {
 def resume() {
     unschedule(tick)
     def interval = (refreshInterval ?: 60) as Integer
-    if ((refreshUnits ?: 'seconds') == 'seconds') {
+    def units = refreshUnits ?: 'seconds'
+    if (units == 'seconds') {
         if (interval < 60) {
             def sec = (new Date().getSeconds() % interval)
             schedule("${sec}/${interval} * * ? * *", tick)
@@ -712,14 +742,43 @@ def resume() {
             runEvery1Hour(tick)
         }
     }
-    logDebug("resume: scheduled tick every ${interval} ${refreshUnits ?: 'seconds'}")
+    // media baseUrls expire after <=60 min and advancing (tick) refreshes them - so a separate refresh is
+    // only needed when a single photo stays on screen long enough to risk expiry. For typical short intervals
+    // the advance already keeps the URL fresh, so skip the extra job entirely.
+    unschedule(refreshCurrentPhotos)
+    def intervalSeconds = (units == 'minutes') ? interval * 60 : interval
+    if (intervalSeconds >= 2700) {
+        runEvery30Minutes(refreshCurrentPhotos)
+        logDebug("resume: tick every ${interval} ${units} (+ 30-min url refresh - long interval)")
+    } else {
+        logDebug("resume: tick every ${interval} ${units}")
+    }
+    // refresh now so a currently-stale image is fixed immediately on save/reboot
+    refreshCurrentPhotos()
 }
 
 def tick() {
+    logDebug("tick: advancing slideshow(s)")
     getChildDevices().each { child ->
         def dni = child.deviceNetworkId
         if (!childState(dni)?.paused) {
             getNextPhoto(dni)
+        }
+    }
+}
+
+// re-fetch a fresh baseUrl for each child's CURRENT photo without advancing (keeps the dashboard image
+// from expiring when the advance interval is long or the slideshow is paused/idle)
+def refreshCurrentPhotos() {
+    getChildDevices().each { child ->
+        def dni = child.deviceNetworkId
+        def info = childState(dni)
+        def photos = info?.photos ?: []
+        if (!photos.isEmpty()) {
+            def idx = (info.index ?: 0)
+            if (idx < 0 || idx >= photos.size()) idx = 0
+            logDebug("refreshCurrentPhotos: ${dni} refreshing url for index=${idx}")
+            getPhotoById(dni, photos[idx])
         }
     }
 }
@@ -802,10 +861,9 @@ def handlePhotoGet(resp, data) {
     def json = resp.json
     def child = getChildDevice(data.dni)
     if (child == null) return
-    def w = imgWidth ?: 2048
-    def h = imgHeight ?: 1024
+    def sz = maxSize ?: 2048
     if (json?.mediaMetadata?.containsKey('photo') || json?.mediaMetadata?.photo != null) {
-        def html = '<div style="box-sizing: content-box"><img style="height: 100%; width: 100%; object-fit: contain" src="' + "${json.baseUrl}=w${w}-h${h}" + '" /></div>'
+        def html = '<div style="box-sizing: content-box"><img style="height: 100%; width: 100%; object-fit: contain" src="' + "${json.baseUrl}=w${sz}-h${sz}" + '" /></div>'
         child.sendEvent(name: 'image', value: html)
         child.sendEvent(name: 'mediaType', value: 'photo')
     } else if (json?.mediaMetadata?.video != null) {
