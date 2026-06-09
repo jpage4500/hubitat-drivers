@@ -53,6 +53,13 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/file-manager-app/packageManifest.json",
       "description": "File Manager with multiple file uploads, folders and more"
+    },
+    {
+      "id": "c0e73f14-24eb-4822-a493-2475fdc913c5",
+      "name": "Google Photos Cloud",
+      "category": "Utility",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-photos-cloud/packageManifest.json",
+      "description": "Google Photos slideshow for Hubitat dashboards (Picker + app-created albums)"
     }
   ]
 }
