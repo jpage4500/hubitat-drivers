@@ -30,7 +30,7 @@ definition(
     author: 'Joe Page',
     description: 'Google Photos slideshow for Hubitat dashboards (Picker + app-created albums)',
     importUrl: 'https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-photos-cloud/google-photos-cloud-app.groovy',
-    category: 'Convenience',
+    category: 'Utility',
     oauth: true,
     iconUrl: '',
     iconX2Url: '',

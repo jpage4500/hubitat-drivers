@@ -1,0 +1,27 @@
+{
+  "packageName": "Google Photos Cloud",
+  "author": "Joe Page",
+  "version": "1.0.0",
+  "minimumHEVersion": "2.1.9",
+  "dateReleased": "2026-06-08",
+  "apps": [
+    {
+      "id": "63b5cfe3-50e7-4079-b1a8-01ab96f3ff4a",
+      "name": "",
+      "namespace": "",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-photos-cloud/google-photos-cloud-app.groovy",
+      "required": true,
+      "oauth": true,
+      "primary": false
+    }
+  ],
+  "drivers": [
+    {
+      "id": "fa593fee-b306-4a8f-83d7-e3424829afa8",
+      "name": "",
+      "namespace": "",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-photos-cloud/google-photos-cloud-device.groovy",
+      "required": true
+    }
+  ]
+}
