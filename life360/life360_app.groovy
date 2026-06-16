@@ -565,9 +565,10 @@ def handleMemberLocationResponse(response, Map data) {
         if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
 
     } else if (status == 401 || status == 403) {
+        String jarBefore = cookieJarSummary()
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
-        log.warn("fetchMemberLocation: AUTH (${status}); cleared session; failCount=${state.failCount}")
+        log.warn("fetchMemberLocation: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
         if (state.failCount >= 3) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
@@ -621,9 +622,10 @@ String handleException(String tag, Exception e) {
     }
     if (status == 401 || status == 403) {
         // ha-life360 treats 403 the same as 401: clear session, back off, surface to user.
+        String jarBefore = cookieJarSummary()
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
-        log.warn("${tag}: AUTH (${status}); cleared session; failCount=${state.failCount}")
+        log.warn("${tag}: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
         if (state.failCount >= 3) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
@@ -1092,8 +1094,31 @@ void captureCookies(response) {
         if (logEnable) log.trace("captureCookies: ${e.message}")
     }
     if (responseCookies) {
+        // sync path captures ALL Set-Cookie headers of one response at once, so a plain
+        // join is a complete, correct jar for this response.
         state["cookies"] = responseCookies.join(";")
+        if (logEnable) log.debug("captureCookies(sync): jar now [${cookieJarSummary()}]")
     }
+}
+
+/**
+ * Summarize the current cookie jar for logs. Always safe to log: shows cookie NAMES
+ * (e.g. "__cf_bm, _cfuvid") so you can confirm the Cloudflare cookies are present without
+ * leaking their values. When logRawPayload is on, also appends a short value head per cookie
+ * for deeper debugging. Used to watch jar health before/after a Cloudflare 403.
+ */
+private String cookieJarSummary() {
+    String jar = state["cookies"] ?: ""
+    if (!jar) return "empty"
+    boolean raw = getLogRawPayload()
+    return jar.tokenize(";").collect { entry ->
+        int eq = entry.indexOf("=")
+        if (eq <= 0) return entry
+        String name = entry.substring(0, eq)
+        if (!raw) return name
+        String val = entry.substring(eq + 1)
+        return "${name}=${val.take(8)}…"
+    }.join(", ")
 }
 
 void captureCookiesAsync(response) {
@@ -1103,15 +1128,16 @@ void captureCookiesAsync(response) {
         def cookie = response.headers?.get("Set-Cookie")
         if (cookie) {
             def cookieVal = cookie.tokenize(';|,')?.getAt(0)
-            if (cookieVal) {
-                String existing = state["cookies"] ?: ""
-                // replace existing __cf_bm entry if present, otherwise append
-                if (existing && !existing.contains(cookieVal.split("=")[0])) {
-                    state["cookies"] = existing + ";" + cookieVal
-                } else {
-                    state["cookies"] = cookieVal
+            // need a well-formed name=value to upsert; otherwise ignore this header
+            if (cookieVal && cookieVal.contains("=")) {
+                String name = cookieVal.substring(0, cookieVal.indexOf("="))
+                boolean isNew = mergeCookie(cookieVal)
+                if (logEnable) {
+                    log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'; jar now [${cookieJarSummary()}]")
                 }
-                if (logEnable) log.trace("captureCookiesAsync: ${cookieVal}")
+                if (getLogRawPayload()) log.trace("captureCookiesAsync: raw Set-Cookie head: ${cookieVal.take(60)}…")
+            } else if (logEnable) {
+                log.trace("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
             }
         }
     } catch (e) {
@@ -1120,10 +1146,32 @@ void captureCookiesAsync(response) {
 }
 
 /**
+ * Upsert a single "name=value" cookie into the jar, preserving every other cookie.
+ * Parse existing jar -> upsert this name -> re-serialize. This is the U1 fix: a rotating
+ * __cf_bm replaces only its own entry and never drops _cfuvid.
+ * Returns true if the cookie name was newly added, false if it updated an existing one.
+ */
+private boolean mergeCookie(String cookieVal) {
+    int eq = cookieVal.indexOf("=")
+    String name = cookieVal.substring(0, eq)
+    String value = cookieVal.substring(eq + 1)
+    Map<String, String> jar = [:]
+    (state["cookies"] ?: "").tokenize(";").each { entry ->
+        int e2 = entry.indexOf("=")
+        if (e2 > 0) jar[entry.substring(0, e2)] = entry.substring(e2 + 1)
+    }
+    boolean isNew = !jar.containsKey(name)
+    jar[name] = value
+    state["cookies"] = jar.collect { k, v -> "${k}=${v}" }.join(";")
+    return isNew
+}
+
+/**
  * Drop the session-bound cache (cookies + per-member etags). Mirrors what
  * ha-life360's coordinator does when it sees a LoginError before re-auth.
  */
 void clearSessionCache() {
+    if (logEnable) log.debug("clearSessionCache: dropping cookie jar [${cookieJarSummary()}] + etags/inflight/backoff (likely after auth failure)")
     state.remove("cookies")
     def toRemove = []
     state.each { k, v ->
