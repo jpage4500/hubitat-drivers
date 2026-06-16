@@ -1,8 +1,5 @@
 # Life360+ — Open TODO
 
-Single consolidated list of everything still open, merged from the former `CODE_REVIEW.md` and
-`REVIEW_FOLLOWUPS.md` (both now removed — their fixed items are done, this is what's left).
-
 Ranked by severity:
 
 - **UNSAFE** — load-bearing correctness; fix before next install.
