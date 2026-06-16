@@ -121,15 +121,16 @@ def mainPage() {
 
         section(header("Polling")) {
             input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", width: 6, options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
-            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling", description: "Increase polling frequency to 'Dynamic Refresh Rate' when a member is in motion. Polling returns to 'Default Refresh Rate' once they've stopped.")
+            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling", description: "Increase polling frequency to 'Dynamic Refresh Rate' when a member is in motion. Polling returns to 'Default Refresh Rate' once they've stopped. Only engages when the Dynamic Refresh Rate is faster than the Default Refresh Rate.")
             input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
         }
 
         section(header("Notifications")) {
-            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
-            if (!isEmpty(settings.notifyDevices)) {
-                input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Turn off to silence all token-expiry alerts without removing your notification devices.", width: 6)
-                if (settings.notifyTokenExpiry != false) {
+            input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
+            if (settings.notifyTokenExpiry != false) {
+                input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
+                if (!isEmpty(settings.notifyDevices)) {
+                    paragraph ""   // full-width spacer forces the dropdown onto its own row, below the device selector
                     input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
                 }
             }
@@ -206,6 +207,7 @@ def appButtonHandler(String button) {
             break
         case "forceUpdateBtn":
             forceMemberUpdate(settings.forceUpdateMember)
+            app.removeSetting("forceUpdateMember")   // reset the dropdown to blank; it's a fire-once action, not a persisted preference
             break
         default:
             log.debug("appButtonHandler: unhandled:${button}")
@@ -473,10 +475,6 @@ boolean fetchLocations() {
     // iterate over every selected member
     settings.users.each { memberId ->
         fetchMemberLocation(memberId, ctx)
-    }
-
-    if (settings.dynamicPolling) {
-        dynamicPolling()
     }
 
     return true
@@ -1056,9 +1054,15 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
             // send location, places and home to device driver
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesJson, home)
             boolean prevInTransit = isMemberInTransit(memberId)
-            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
+            boolean transitFlipped = (prevInTransit != inTransit)
+            if (transitFlipped && logEnable) log.trace("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
+            // Re-evaluate the polling rate the instant a member's transit state flips,
+            // using this fresh flag. The old synchronous dynamicPolling() call in
+            // fetchLocations() ran before the async responses landed, so it always read
+            // the previous tick's flags and lagged rate changes by a full poll cycle.
+            if (transitFlipped && settings.dynamicPolling) dynamicPolling()
         } else {
             log.error("notifyChildDevice: device not found: ${externalId}")
         }
