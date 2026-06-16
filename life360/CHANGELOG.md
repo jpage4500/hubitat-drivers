@@ -30,6 +30,10 @@ Performance, reliability, and operator-visibility work on top of `X.X.X`.
 ### Notifications
 - Token-expiry alerts now have a master enable toggle plus a configurable repeat interval (off / 2h / 6h / 12h / 24h / 48h); reminders self-cancel once a fresh token is pasted.
 
+### Reliability — Cloudflare cookie handling (load-bearing)
+- **Fixed a cookie-jar bug that could 403 the whole integration.** The async cookie capture replaced the entire jar with a single cookie whenever an incoming cookie name was already present — exactly the `__cf_bm` rotation case — silently dropping `_cfuvid`. Without both Cloudflare cookies, Life360 returns 403 within minutes and all polling stops; it failed silently and on a delay. Cookie capture now merges per cookie name (`mergeCookie()`: parse jar → upsert by name → re-serialize), so a rotating `__cf_bm` updates only its own entry and `_cfuvid` survives. See the README "Cookie handling" section.
+- Added cookie-jar diagnostics: `captureCookiesAsync` logs `added/updated '<name>'; jar now [...]` (debug), and auth failures log `jar-at-failure [...]` so a token problem (jar intact) is distinguishable from a cookie-path problem (jar missing a Cloudflare cookie). Cookie **names** are logged by default; values only under *Log Raw Life360 Payloads*.
+
 ### Driver behavior changes
 - Driver no longer applies the in-house speed/distance heuristic override for `inTransit` / `isDriving` — Life360's flags are trusted directly. Manual `transitThreshold` / `drivingThreshold` settings remain as explicit user overrides.
 - Manual `sendEvent` dedup guards in the driver removed; Hubitat's built-in value-based deduplication is now relied on.
