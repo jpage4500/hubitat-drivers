@@ -424,7 +424,10 @@ def handleMembersResponse(response, data) {
             def externalId = "${app.id}.${memberId}"
             if (!getChildDevice("${externalId}")) {
                 def member = state.members?.find { it.id == memberId }
-                notifyChildDevice(memberId, member)
+                // /circles/<id>/members doesn't always include location; the driver
+                // early-returns on a null location anyway, but guard explicitly so the
+                // intent is visible here and a future API change can't surprise us.
+                if (member?.location) notifyChildDevice(memberId, member)
             }
         }
     } else {

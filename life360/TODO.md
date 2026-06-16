@@ -1,16 +1,5 @@
 # Life360+ — Open TODO
 
-## NIT
-
-### Q1. `handleMembersResponse` calls `notifyChildDevice` without checking `location`
-
-`life360_app.groovy` (~L390): the driver's `generatePresenceEvent` early-returns when
-`member.location == null`, so this is benign today — but `/circles/<id>/members` doesn't always include
-`location` and a future API change could surface it. Add an explicit `if (member?.location)` guard so
-the intent is in the code.
-
----
-
 ## Larger / deferred
 
 ### D1. Pass member UUIDs internally; resolve names only at display (privacy hardening)
