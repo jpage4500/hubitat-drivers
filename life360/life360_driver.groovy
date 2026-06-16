@@ -304,6 +304,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     sendEvent(name: "userActivity", value: userActivity)
 
     // Set acceleration to active state if we are either moving or if we are anywhere outside home radius
+    // REPURPOSED CAPABILITY (§5.4): 'acceleration' active/inactive = in transit OR driving OR away from home (NOT physical acceleration)
     sendEvent(name: "acceleration", value: (inTransit || isDriving || memberPresence == "not present") ? "active" : "inactive")
 
     // *** Battery Level ***
@@ -313,10 +314,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     String powerSource = charge ? "DC" : "BTRY"
     sendEvent(name: "charge", value: charge)
     sendEvent(name: "powerSource", value: powerSource)
+    // REPURPOSED CAPABILITY (§5.4): 'contact' open/closed = charging / on battery (NOT a contact sensor)
     sendEvent(name: "contact", value: charge ? "open" : "closed")
 
     // *** Wifi ***
     sendEvent(name: "wifiState", value: wifiState)
+    // REPURPOSED CAPABILITY (§5.4): 'switch' on/off = WiFi connected / not (NOT a controllable switch)
     sendEvent(name: "switch", value: wifiState ? "on" : "off")
 
     // ** Member Features **
