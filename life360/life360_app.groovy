@@ -210,7 +210,7 @@ def appButtonHandler(String button) {
             app.removeSetting("forceUpdateMember")   // reset the dropdown to blank; it's a fire-once action, not a persisted preference
             break
         default:
-            log.debug("appButtonHandler: unhandled:${button}")
+            if (logEnable) log.debug("appButtonHandler: unhandled:${button}")
     }
 }
 
@@ -250,19 +250,62 @@ private void checkToken() {
                 def user = response.data
                 String name = user?.firstName ?: "unknown"
                 log.info("checkToken: valid — id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
+                captureUnitOfMeasure(user)
                 state.tokenStatus = "<span style='color:#080'>&#10003; Hi ${name}! Your token is valid.</span>"
             } else if (status == 401 || status == 403) {
-                log.warn("checkToken: AUTH FAILURE (${status}) — token is likely expired or revoked")
+                log.error("checkToken: AUTH FAILURE (${status}) — token is likely expired or revoked")
                 state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — token appears expired or revoked.</span>"
             } else {
-                log.warn("checkToken: unexpected status:${status}")
+                log.error("checkToken: unexpected status:${status}")
                 state.tokenStatus = "<span style='color:#a00'>&#10007; Unexpected response (${status}) checking token.</span>"
             }
         }
     } catch (e) {
-        log.warn("checkToken: error: ${e.message}")
+        log.error("checkToken: error: ${e.message}")
         state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token — ${e.message}</span>"
     }
+}
+
+/**
+ * Capture the user's units preference from a /users/me (or token) user object.
+ * Life360's settings.unitOfMeasure: "i" = imperial (miles/mph), "m" = metric (km/kph).
+ * Stored so the driver follows the user's Life360 app setting instead of a local toggle.
+ */
+private void captureUnitOfMeasure(user) {
+    def unit = user?.settings?.unitOfMeasure
+    if (unit && unit != state.unitOfMeasure) {
+        state.unitOfMeasure = unit
+        if (logEnable) log.debug("unitOfMeasure from Life360: ${unit == 'm' ? 'metric (km/kph)' : unit == 'i' ? 'imperial (miles/mph)' : unit}")
+    }
+}
+
+/**
+ * Async refresh of the user's Life360 units preference. Cheap GET /users/me, fire-and-forget;
+ * called on install and on Done so units track the account setting without user intervention.
+ */
+private void refreshUserSettings() {
+    if (isEmpty(access_token)) return
+    def params = life360Params("/users/me")
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    asynchttpGet("handleUserSettingsResponse", params)
+}
+
+def handleUserSettingsResponse(response, data) {
+    if (!response.status) return
+    captureCookiesAsync(response)
+    if (response.status == 200) captureUnitOfMeasure(response.json)
+}
+
+/**
+ * Units preference sourced from the user's Life360 account (settings.unitOfMeasure).
+ * @return true = miles/mph, false = km/kph, or null if not yet known (driver falls back
+ *         to its local isMiles toggle).
+ */
+Boolean getUnitIsMiles() {
+    if (state.unitOfMeasure == 'i') return true
+    if (state.unitOfMeasure == 'm') return false
+    return null
 }
 
 // ---- end Token check --------------------------------------------------------
@@ -288,11 +331,11 @@ private void forceMemberUpdate(String memberId) {
     // Diagnostic chatter — gated behind logRawPayload. Includes URL (with circle/member UUIDs),
     // partial Bearer token, partial Cloudflare cookie head, User-Agent.
     if (getLogRawPayload()) {
-        log.info("forceMemberUpdate: POST ${url}")
-        log.info("forceMemberUpdate: body: ${body}")
-        log.info("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
-        log.info("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
-        log.info("forceMemberUpdate: User-Agent: ${getHttpHeaders()['User-Agent']}")
+        log.trace("forceMemberUpdate: POST ${url}")
+        log.trace("forceMemberUpdate: body: ${body}")
+        log.trace("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
+        log.trace("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
+        log.trace("forceMemberUpdate: User-Agent: ${getHttpHeaders()['User-Agent']}")
     }
 
     def params = life360Params("/circles/${circle}/members/${memberId}/request")
@@ -300,7 +343,7 @@ private void forceMemberUpdate(String memberId) {
     params.body = body
     if (cookies) params["headers"]["Cookie"] = cookies
 
-    if (getLogRawPayload()) log.debug("forceMemberUpdate: full params: ${params}")
+    if (getLogRawPayload()) log.trace("forceMemberUpdate: full params: ${params}")
 
     state.forceUpdateStatusPending = true
     state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
@@ -315,15 +358,15 @@ def handleForceUpdateResponse(response, Map data) {
 
     if (!status) {
         String errMsg = response.getErrorMessage()
-        log.warn("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
-        if (getLogRawPayload()) log.warn("forceMemberUpdate: hasError:${response.hasError()}")
+        log.error("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: hasError:${response.hasError()}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
         return
     }
 
     if (getLogRawPayload()) {
         try {
-            log.debug("forceMemberUpdate: response headers: ${response.headers}")
+            log.trace("forceMemberUpdate: response headers: ${response.headers}")
         } catch (e) {
             log.debug("forceMemberUpdate: could not read response headers: ${e.message}")
         }
@@ -335,7 +378,7 @@ def handleForceUpdateResponse(response, Map data) {
         def result = response.json
         String requestId = result?.requestId
         String isPollable = result?.isPollable
-        if (getLogRawPayload()) log.info("forceMemberUpdate: 200 OK — raw json: ${result}")
+        if (getLogRawPayload()) log.trace("forceMemberUpdate: 200 OK — raw json: ${result}")
         log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
         state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
         runIn(6, "fetchLocations")
@@ -343,8 +386,8 @@ def handleForceUpdateResponse(response, Map data) {
         String errMsg = response.getErrorMessage()
         String errBody = null
         try { errBody = response.data?.toString() } catch (ignored) {}
-        log.warn("forceMemberUpdate: FAILED status:${status} member:${memberName} — ${errMsg}")
-        if (getLogRawPayload()) log.warn("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
+        log.error("forceMemberUpdate: FAILED status:${status} member:${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) — check logs for details</span>"
     }
 }
@@ -373,7 +416,7 @@ def fetchCircles() {
 
 def fetchPlaces() {
     if (isEmpty(circle)) {
-        log.debug("fetchPlaces: circle not set")
+        if (logEnable) log.debug("fetchPlaces: circle not set")
         return;
     }
 
@@ -398,7 +441,7 @@ def fetchPlaces() {
 
 def fetchMembers() {
     if (isEmpty(circle)) {
-        log.debug("fetchMembers: circle not set")
+        if (logEnable) log.debug("fetchMembers: circle not set")
         return;
     }
     def params = life360Params("/circles/${circle}/members")
@@ -408,7 +451,7 @@ def fetchMembers() {
 def handleMembersResponse(response, data) {
     Integer status = response.status
     if (!status) {
-        log.warn("fetchMembers: network error: ${response.getErrorMessage()}")
+        log.error("fetchMembers: network error: ${response.getErrorMessage()}")
         return
     }
 
@@ -441,10 +484,10 @@ def handleMembersResponse(response, data) {
  */
 boolean fetchLocations() {
     if (isEmpty(circle)) {
-        log.debug("fetchLocations: circle not set")
+        if (logEnable) log.debug("fetchLocations: circle not set")
         return false
     } else if (isEmpty(settings.users)) {
-        log.debug("fetchLocations: no users selected")
+        if (logEnable) log.debug("fetchLocations: no users selected")
         return false
     }
 
@@ -490,7 +533,7 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     Integer httpTimeout = clamp((state.pollIntervalSecs ?: 30) as int, 5, 30)
     if (inflightMs > 0 && (startMs - inflightMs) < ((httpTimeout + 2) * 1000L)) {
         String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
-        if (logEnable) log.trace("fetchMemberLocation: member:${memberName}: prior request pending, skipping")
+        if (logEnable) log.debug("fetchMemberLocation: member:${memberName}: prior request pending, skipping")
         return
     }
     // transient-error backoff (§5.3): skip if still in backoff window after a prior 5xx
@@ -499,7 +542,7 @@ def fetchMemberLocation(memberId, Map ctx = null) {
         if (logEnable) {
             String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
             long remainSecs = (long)((transientUntilMs - startMs) / 1000L)
-            log.trace("fetchMemberLocation: member:${memberName}: transient backoff ${remainSecs}s remaining, skipping")
+            log.debug("fetchMemberLocation: member:${memberName}: transient backoff ${remainSecs}s remaining, skipping")
         }
         return
     }
@@ -529,7 +572,7 @@ def handleMemberLocationResponse(response, Map data) {
     // Use response.status as the primary gate; null/zero means a network-level failure.
     Integer status = response.status
     if (!status) {
-        log.warn("fetchMemberLocation: member:${memberName}: network error: ${response.getErrorMessage()}")
+        log.error("fetchMemberLocation: member:${memberName}: network error: ${response.getErrorMessage()}")
         state.message = "Network error for member ${memberName}: ${response.getErrorMessage()}"
         return
     }
@@ -537,7 +580,7 @@ def handleMemberLocationResponse(response, Map data) {
     captureCookiesAsync(response)
 
     if (status == 200) {
-        if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
+        if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
         notifyChildDevice(memberId, response.json, ctx)
         state.failCount = 0
         state.tokenLikelyExpired = false
@@ -563,13 +606,13 @@ def handleMemberLocationResponse(response, Map data) {
             log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
             state.watchdogWarned = false
         }
-        if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
+        if (logEnable) log.debug("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
 
     } else if (status == 401 || status == 403) {
         String jarBefore = cookieJarSummary()
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
-        log.warn("fetchMemberLocation: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
+        log.error("fetchMemberLocation: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
         if (state.failCount >= 3) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
@@ -617,7 +660,7 @@ String handleException(String tag, Exception e) {
     try { status = e.response?.status } catch (ignored) { /* not all exceptions carry .response */ }
 
     if (e instanceof HttpTimeoutException || e instanceof SocketTimeoutException) {
-        log.warn("${tag}: TIMEOUT: ${e}")
+        log.error("${tag}: TIMEOUT: ${e}")
         state.message = "TIMEOUT: ${tag}"
         return "TIMEOUT"
     }
@@ -626,7 +669,7 @@ String handleException(String tag, Exception e) {
         String jarBefore = cookieJarSummary()
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
-        log.warn("${tag}: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
+        log.error("${tag}: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
         if (state.failCount >= 3) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
@@ -802,10 +845,11 @@ boolean getLogRawPayload() {
  * called when user hits DONE on app for the first time
  */
 def installed() {
-    log.debug("installed")
+    log.info("installed")
     createChildDevices()
     // re-schedule updates on reboot; TODO: is this needed?
     subscribe(location, 'systemStart', initialize)
+    refreshUserSettings()           // learn the account's units preference (settings.unitOfMeasure)
     state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
@@ -814,7 +858,7 @@ def installed() {
  * called when user hits DONE on app (already installed)
  */
 def updated() {
-    log.debug("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}, logRawPayload:${settings.logRawPayload}, notifyTokenExpiry:${settings.notifyTokenExpiry}, notifyRepeatHours:${settings.notifyRepeatHours}")
+    log.info("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}, logRawPayload:${settings.logRawPayload}, notifyTokenExpiry:${settings.notifyTokenExpiry}, notifyRepeatHours:${settings.notifyRepeatHours}")
     // user clicked Done — assume any pasted token is fresh; let polling resume
     state.tokenLikelyExpired = false
     state.failCount = 0
@@ -824,23 +868,24 @@ def updated() {
     state.memberCount = null        // re-baseline after any circle/membership config change
     state.lastCirclesFetchMs = null // fire circles check on next poll tick
     createChildDevices()
+    refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
     state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
 
 def initialize(evt) {
-    log.debug("initialize: ${evt.device} ${evt.value} ${evt.name}")
+    log.info("initialize: ${evt.device} ${evt.value} ${evt.name}")
     state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
 
 def initialize() {
-    log.debug("initialize")
+    log.info("initialize")
     state.message = null
 }
 
 def uninstalled() {
-    log.debug("uninstalled")
+    log.info("uninstalled")
     removeChildDevices(getChildDevices())
 }
 
@@ -879,7 +924,7 @@ def scheduleUpdates() {
     // don't tear down + re-arm the job. Stops scheduleUpdates() from re-firing the
     // same cron registration when called repeatedly from handleTimerFired/fetchLocations.
     if (!modeFlipped && state.scheduledBaseSecs != null && state.scheduledBaseSecs == baseSecs) {
-        if (logEnable) log.debug("scheduleUpdates: no-op (baseSecs:${baseSecs} unchanged)")
+        log.info("scheduleUpdates: no-op (baseSecs:${baseSecs} unchanged)")
         return
     }
 
@@ -901,8 +946,8 @@ def scheduleUpdates() {
     // log.info — visibility into polling-mode flips and (re)schedules in production
     if (modeFlipped) {
         log.info("scheduleUpdates: polling mode -> ${wantDynamic ? 'DYNAMIC' : 'STANDARD'}, baseSecs:${baseSecs}")
-    } else if (logEnable) {
-        log.debug("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
+    } else {
+        log.info("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
     }
 
     if (refreshSecs > 0 && refreshSecs < 60) {
@@ -955,7 +1000,7 @@ def handleTimerFired() {
 def handleCirclesPollResponse(response, data) {
     Integer status = response.status
     if (!status) {
-        log.warn("fetchCircles: poll: network error: ${response.getErrorMessage()}")
+        log.error("fetchCircles: poll: network error: ${response.getErrorMessage()}")
         return
     }
     captureCookiesAsync(response)
@@ -1058,7 +1103,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesJson, home)
             boolean prevInTransit = isMemberInTransit(memberId)
             boolean transitFlipped = (prevInTransit != inTransit)
-            if (transitFlipped && logEnable) log.trace("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
+            if (transitFlipped && logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
             // Re-evaluate the polling rate the instant a member's transit state flips,
@@ -1095,16 +1140,16 @@ void captureCookies(response) {
         response.getHeaders('Set-Cookie')?.each {
             def cookie = it.value?.tokenize(';|,')?.getAt(0)
             if (cookie) responseCookies << cookie
-            if (logEnable) log.trace("captureCookies: ${it.value}")
+            if (getLogRawPayload()) log.trace("captureCookies: raw Set-Cookie: ${it.value}")
         }
     } catch (e) {
-        if (logEnable) log.trace("captureCookies: ${e.message}")
+        log.error("captureCookies: ${e.message}")
     }
     if (responseCookies) {
         // sync path captures ALL Set-Cookie headers of one response at once, so a plain
         // join is a complete, correct jar for this response.
         state["cookies"] = responseCookies.join(";")
-        if (logEnable) log.debug("captureCookies(sync): jar now [${cookieJarSummary()}]")
+        if (getLogRawPayload()) log.trace("captureCookies(sync): jar now [${cookieJarSummary()}]")
     }
 }
 
@@ -1144,11 +1189,11 @@ void captureCookiesAsync(response) {
                 }
                 if (getLogRawPayload()) log.trace("captureCookiesAsync: raw Set-Cookie head: ${cookieVal.take(60)}…")
             } else if (logEnable) {
-                log.trace("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
+                log.debug("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
             }
         }
     } catch (e) {
-        if (logEnable) log.trace("captureCookiesAsync: ${e.message}")
+        log.error("captureCookiesAsync: ${e.message}")
     }
 }
 
