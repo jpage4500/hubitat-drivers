@@ -88,7 +88,7 @@ metadata {
 }
 
 preferences {
-    input "isMiles", "bool", title: "Units: Miles (false for Kilometer)", required: true, defaultValue: true
+    input "isMiles", "bool", title: "Units: Miles (fallback only — your Life360 account's units setting is used when available)", required: true, defaultValue: true
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
     input "saveHistory", "bool", title: "Save Location History", description: "Save recent locations (time/lat/lng) to 'history' attribute", required: true, defaultValue: false
 
@@ -128,7 +128,7 @@ def refresh() {
 def installed() {
     log.info "installed: Location Tracker User Driver Installed"
 
-    if (logEnable) log.info "installed: Setting attributes to initial values"
+    if (logEnable) log.debug "installed: Setting attributes to initial values"
 
     sendEvent(name: "address1prev", value: "No Data")
 }
@@ -189,12 +189,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         || prevLongitude == null || prevLongitude != longitude
         || prevAccuracy == null || prevAccuracy != accuracy)
 
-    if (logEnable || parent?.getLogRawPayload()) log.info("RAW L360 ${displayMember(memberFirstName)}: ${location}")
+    if (parent?.getLogRawPayload()) log.trace("RAW L360 ${displayMember(memberFirstName)}: ${location}")
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.info "generatePresenceEvent: changed: lat:$latitude lng:$longitude acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s (${((speed * 2.23694)).round(2)}mph) inTransit:$inTransit isDriving:$isDriving"
+    if (logEnable) log.debug "generatePresenceEvent: changed: lat:$latitude lng:$longitude acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s (${((speed * 2.23694)).round(2)}mph) inTransit:$inTransit isDriving:$isDriving"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -236,7 +236,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     String prevAddress = device.currentValue('address1')
     if (address1 != prevAddress) {
-        if (logEnable) log.info "generatePresenceEvent: address1:$address1, prevAddress = $prevAddress"
+        if (logEnable) log.debug "generatePresenceEvent: address1:$address1, prevAddress = $prevAddress"
         // Update old and current address information and trigger events
         sendEvent(name: "address1prev", value: prevAddress)
         sendEvent(name: "address1", value: address1)
@@ -266,13 +266,21 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     Double distanceUnits    // in user's preference of miles or km
     // check for iPhone reporting speed of -1
     if (speed == -1) speed = 0.0
-    speedUnits = (speed * (isMiles ? 2.23694 : 3.6)).round(2)
-    distanceUnits = ((distanceAway / 1000) / ((isMiles ? 1.609344 : 1))).round(2)
+    // Units follow the user's Life360 account setting (settings.unitOfMeasure) when the app
+    // has learned it; the local isMiles toggle is only a fallback until then.
+    Boolean useMiles = isMiles
+    try {
+        Boolean apiMiles = parent?.getUnitIsMiles()
+        if (apiMiles != null) useMiles = apiMiles
+    } catch (ignored) {}
+    speedUnits = (speed * (useMiles ? 2.23694 : 3.6)).round(2)
+    distanceUnits = ((distanceAway / 1000) / ((useMiles ? 1.609344 : 1))).round(2)
 
     // ── Motion state ─────────────────────────────────────────────────────────────
     // Trust Life360's inTransit/isDriving flags directly.
     // Manual thresholds (transitThreshold/drivingThreshold) let the user override
     // with speed-based logic if they choose — otherwise Life360's values stand.
+    boolean thresholdActive = (transitThreshold.toDouble() > 0.0 || drivingThreshold.toDouble() > 0.0)
     if (transitThreshold.toDouble() > 0.0) {
         inTransit = (speedUnits >= transitThreshold.toDouble())
     }
@@ -284,12 +292,14 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         boolean showMaps = true
         try { showMaps = (parent?.getShowMapsLink() != false) } catch (ignored) {}
         String suffix = showMaps ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
-        log.info("${displayMember(memberFirstName)}: moving @ ${speedUnits} ${isMiles ? 'mph' : 'kph'}${suffix}")
+        log.info("${displayMember(memberFirstName)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
     }
-    if (logEnable || parent?.getLogRawPayload()) log.info("COMPUTED ${displayMember(memberFirstName)}: " +
-        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving}")
+    // Only worth logging when a threshold override is in play — otherwise this just restates
+    // the RAW L360 flags (and the "moving @" line already shows the speed). §5.4 trust-the-payload.
+    if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName)}: " +
+        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} (threshold override)")
 
-    String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((isMiles) ? " miles from Home" : "km from Home")
+    String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : "km from Home")
 
     if (logEnable && (isDriving || inTransit)) {
         log.debug "generatePresenceEvent: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving"
@@ -380,7 +390,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "${binTransita}"
     if (address1 != "Home" && inTransit) {
         tileMap += " @ ${sprintf("%.1f", speed)} "
-        tileMap += isMiles ? "MPH" : "KPH"
+        tileMap += useMiles ? "MPH" : "KPH"
     }
     tileMap += "<br>Phone Lvl: ${battery} - ${powerSource} - "
     tileMap += wifiState ? "WiFi" : "No WiFi"
@@ -496,10 +506,10 @@ static def haversine(lat1, lon1, lat2, lon2) {
  * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
  */
 def sendHistory(msgValue) {
-    if (logEnable) log.trace "In sendHistory - nameValue: ${msgValue}"
+    if (logEnable) log.debug "In sendHistory - nameValue: ${msgValue}"
 
     if (msgValue == null || msgValue.contains("No Data")) {
-        if (logEnable) log.trace "In sendHistory - Nothing to report (No Data)"
+        if (logEnable) log.debug "In sendHistory - Nothing to report (No Data)"
     } else {
         try {
             if (state.list1 == null) state.list1 = []
@@ -554,11 +564,11 @@ def sendHistory(msgValue) {
  * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
  */
 def historyClearData() {
-    if (logEnable) log.trace "historyClearData"
+    if (logEnable) log.debug "historyClearData"
     // clear location history
     state.locationHistory = []
     state.list1 = []
-    if (logEnable) log.info "Clearing the data"
+    if (logEnable) log.debug "Clearing the data"
     String historyLog = "Waiting for Data..."
     sendEvent(name: "bpt-history", value: historyLog, displayed: true)
     sendEvent(name: "numOfCharacters", value: 0, displayed: true)
