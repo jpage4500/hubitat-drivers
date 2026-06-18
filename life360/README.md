@@ -20,6 +20,9 @@ There is no public Life360 API. Everything in the HTTP path was reverse-engineer
 - Optional all-members map view via a built-in `/view` endpoint (OpenStreetMap by default; Google Maps if a key is provided).
 - Optional per-member location history (off by default; up to 100 most-recent points kept in driver state, exposed as the compact `history` attribute).
 - Optional HTML tiles for dashboards (avatar, status, address, battery, WiFi, last update).
+- Token-expiry push notifications to configured devices when polling hits consecutive auth failures, with optional repeat reminders (2 h / 6 h / 12 h / 24 h / 48 h).
+- **Force Update** — push a GPS fix request to a member's phone from the app settings page; the next poll cycle picks up the fresh location (~5 seconds).
+- Speed and distance automatically follow the Life360 account's units preference (imperial or metric); the per-device `isMiles` toggle is a fallback only, used until the app fetches the account preference.
 
 ## What it doesn't do
 
