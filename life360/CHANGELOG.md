@@ -26,6 +26,7 @@ Performance, reliability, and operator-visibility work on top of `X.X.X`.
 ### New endpoints / capabilities
 - **Force Update** button on the settings page — POSTs `/circles/<id>/members/<id>/request` to push the member's phone for a fresh GPS fix. Confirmed working through Cloudflare WAF once cookies are present.
 - **Check Token** button (`GET /users/me`) with inline status in STEP 1, so a freshly-pasted token can be validated without waiting for a poll cycle to fail.
+- **Units auto-detection** — `GET /users/me` (invoked by the Check Token button and as a fire-and-forget on `installed()`/`updated()`) captures the Life360 account's units preference (`"i"` = imperial miles/mph, `"m"` = metric km/kph). The driver uses this to override the per-device `isMiles` fallback toggle, so units track the account setting without any manual configuration.
 
 ### Notifications
 - Token-expiry alerts now have a master enable toggle plus a configurable repeat interval (off / 2h / 6h / 12h / 24h / 48h); reminders self-cancel once a fresh token is pasted.

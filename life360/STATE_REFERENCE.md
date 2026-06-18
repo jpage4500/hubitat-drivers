@@ -44,6 +44,14 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | `members` | List | `fetchMembers()` | Raw response from `/v3/circles/<id>/members` for the user picker |
 | `accessToken` | String | `createAccessToken()` (OAuth) | Token used for the `/view` map endpoint URL |
 
+---
+
+## App: Account preferences (fetched from Life360)
+
+| Variable | Type | Set by | Notes |
+| --- | --- | --- | --- |
+| `unitOfMeasure` | String | `captureUnitOfMeasure()` (called from `checkToken()` and `handleUserSettingsResponse()`) | Life360 account units preference: `"i"` = imperial (miles/mph), `"m"` = metric (km/kph). Fetched on `installed()`, `updated()`, and Check Token. Read by `getUnitIsMiles()` and forwarded to child devices. Null until the first successful `GET /users/me`. |
+
 ### Session / HTTP plumbing
 
 | Variable | Type | Set by | Cleared by | Notes |
@@ -82,7 +90,6 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | --- | --- | --- | --- |
 | `tokenStatus` / `tokenStatusPending` | String / Boolean | `checkToken()` (Check Token button) | Token-validity result shown under STEP 1 |
 | `forceUpdateStatus` / `forceUpdateStatusPending` | String / Boolean | `forceMemberUpdate()` / `handleForceUpdateResponse` (Force Update button) | Force-update result shown in the Force Update section |
-| `accessToken` | String | `createAccessToken()` (OAuth) | Token embedded in the `/view` map endpoint URL |
 
 ### Error / health
 
@@ -92,7 +99,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | 200-OK response, `updated()` | When true, polling is short-circuited and slowed to 5 min; user-facing banner shown |
 | `rateLimitedUntilMs` | Long | `handleException` / `handleMemberLocationResponse` on 429 | 200-OK response, `updated()` | Honors `Retry-After`; polling skipped until this time |
 | `watchdogWarned` | Boolean | `handleTimerFired` watchdog (rising edge) | 200/304 success | Prevents the "no successful update" warning from spamming every tick |
-| `message` | String | various error paths | success / `updated()` | Red banner shown on the app's main page |
+| `message` | String | various error paths | 200-OK success / `updated()` / no-arg `initialize()` | Red banner shown on the app's main page |
 
 ---
 
@@ -127,7 +134,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Setting | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `isMiles` | bool | true | Distance/speed units: miles+mph (true) or km+kph (false) |
+| `isMiles` | bool | true | Distance/speed units: miles+mph (true) or km+kph (false). **Fallback only** — when the app has learned the Life360 account's units preference (`state.unitOfMeasure`) via `GET /users/me`, that takes priority and this toggle is ignored |
 | `generateHtml` | bool | false | Build `html` / `avatarHtml` tile attributes |
 | `transitThreshold` | number | 0 | Override Life360's `inTransit` — flip true at this speed (in display units); `0` = use Life360 |
 | `drivingThreshold` | number | 0 | Override Life360's `isDriving` — flip true at this speed; `0` = use Life360 |

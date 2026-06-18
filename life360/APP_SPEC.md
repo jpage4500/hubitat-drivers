@@ -7,7 +7,7 @@ track Life360 circle members as Hubitat presence/location devices.
 This spec is derived from four sources:
 
 - `hubitat-drivers-jpage4500/life360` — the currently *released* app/driver (synchronous, per-member polling).
-- `hubitat-drivers-fork/life360` — this fork: async per-member fetch, eTags, in-flight guards, backoff, force-update, circles-poll membership detection. Plus [CODE_REVIEW.md](CODE_REVIEW.md), [REVIEW_FOLLOWUPS.md](REVIEW_FOLLOWUPS.md), [STATE_REFERENCE.md](STATE_REFERENCE.md).
+- `hubitat-drivers-fork/life360` — this fork: async per-member fetch, eTags, in-flight guards, backoff, force-update, circles-poll membership detection. Plus [STATE_REFERENCE.md](STATE_REFERENCE.md). *(Note: `CODE_REVIEW.md` and `REVIEW_FOLLOWUPS.md` referenced throughout this spec were working documents that are not present in this directory — their findings are incorporated into the code and this spec.)*
 - `ha-life360` — the **real Home Assistant integration** (`pnbruckner`). The robust, low-maintenance reference; "just works." Plus `life360/life360`, its API client library.
 - `~/Desktop/life360.json` — the unofficial OpenAPI spec (`krconv/life360-api-docs`).
 
@@ -534,6 +534,10 @@ Surfaces:
 > use the same correct name→value cookie-merge (§0.2/§0.3) when it captures the response, and it should
 > respect account health: don't fire while `tokenLikelyExpired` or `rateLimitedUntilMs` is active —
 > there's no point asking a struggling service for *more* work.
+>
+> **Implementation note:** the current code (`forceMemberUpdate()` in `life360_app.groovy`) does not yet
+> guard on `tokenLikelyExpired` / `rateLimitedUntilMs` before posting. This is a known gap — see TODO.md
+> for the deferred fix.
 
 ---
 
@@ -670,6 +674,7 @@ the cruft** the fork accumulated around them. Target state:
 ### Keep
 - Setup cache: `circles`, `places`, `members` (refreshed by the slow membership loop, §4.2),
   `accessToken` (OAuth, for `/view` only).
+- Account preferences: `unitOfMeasure` (Life360 account units — `"i"`/`"m"` — fetched via `GET /users/me` on install/update/check-token; forwarded to child devices via `getUnitIsMiles()`; overrides each driver's local `isMiles` toggle).
 - Session: `cookies`, `deviceId`.
 - Per-member (the proven mechanism — kept): `etag-<memberId>` (per-member `If-None-Match`),
   `inflight-<memberId>` (per-member in-flight guard), `transientCount-<memberId>` /
