@@ -14,8 +14,6 @@ that don't call `displayMember()`.
 `state.members` only at the point of user-visible output (logs, device labels, UI). User-facing device
 attributes (e.g. `memberName`) are intentional and stay as-is.
 
-**Status:** not started — larger refactor, not blocking.
-
 ### D2. Names/avatars refresh from membership poll
 
 The once-per-minute circles poll detects roster changes via `memberCount` diff and calls
@@ -25,7 +23,7 @@ location response comes back with a 200.
 
 ---
 
-## Bugs found, not yet fixed
+## Bugs
 
 ### B1. `settings.pollFreq` NPE on fresh install (app, ~line 895)
 
