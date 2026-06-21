@@ -16,17 +16,12 @@ attributes (e.g. `memberName`) are intentional and stay as-is.
 
 **Status:** not started — larger refactor, not blocking.
 
-### D2. On-failure token check
+### D2. Names/avatars refresh from membership poll
 
-~~When `handleMemberLocationResponse` hits the 3rd consecutive 401/403 and is about to set
-`tokenLikelyExpired = true`, fire `checkToken()` (`GET /users/me`) inline first.~~
-
-**Implemented (exceeded scope):** `handleTimerFired` now fires an async `/users/me` probe
-(`probeTokenAfterExpiry` → `handleTokenProbeResponse`) on every timer tick while
-`tokenLikelyExpired` is set. A 200 response auto-recovers — clears the flag, resets
-failCount, restores normal polling — without any user action. This handles the original
-diagnosis goal *and* enables full auto-recovery from transient outages (Cloudflare blips,
-Life360 downtime, etc.).
+The once-per-minute circles poll detects roster changes via `memberCount` diff and calls
+`fetchMembers()` when it changes. It does not refresh names or avatars on existing child
+devices. Names rarely change in practice, but a renamed member would only update when their
+location response comes back with a 200.
 
 ---
 
