@@ -20,7 +20,7 @@ There is no public Life360 API. Everything in the HTTP path was reverse-engineer
 - Optional all-members map view via a built-in `/view` endpoint (OpenStreetMap by default; Google Maps if a key is provided).
 - Optional per-member location history (off by default; up to 100 most-recent points kept in driver state, exposed as the compact `history` attribute).
 - Optional HTML tiles for dashboards (avatar, status, address, battery, WiFi, last update).
-- Token-expiry push notifications to configured devices when polling hits consecutive auth failures, with optional repeat reminders (2 h / 6 h / 12 h / 24 h / 48 h).
+- Token-expiry push notifications to configured devices when polling hits consecutive auth failures, with optional repeat reminders (2 h / 6 h / 12 h / 24 h / 48 h). If the cause was a transient service issue, the app auto-recovers once Life360 responds normally — no need to re-paste a token.
 - **Force Update** — push a GPS fix request to a member's phone from the app settings page; the next poll cycle picks up the fresh location (~5 seconds).
 - Speed and distance automatically follow the Life360 account's units preference (imperial or metric); the per-device `isMiles` toggle is a fallback only, used until the app fetches the account preference.
 
@@ -87,11 +87,28 @@ tell a token problem (jar intact) from a cookie-path problem (jar missing a Clou
 
 ## Setup
 
-1. Install the app and driver code in Hubitat (Apps Code / Drivers Code → New → paste).
+1. Install the app and driver code in Hubitat (Apps Code / Drivers Code → New → paste each file).
 2. Add a user app instance: **Apps → Add user app → Life360+**.
-3. Paste your Life360 `access_token` (sign in at `life360.com`, open DevTools → Network, look for the bearer token in the request headers).
-4. Pick your circle, your HOME place, and which members to create child devices for.
-5. Choose a poll interval (default 60s).
+3. Obtain and paste your Life360 access token — see [Getting your access token](#getting-your-access-token) below.
+4. Click **Check Token** to confirm it's valid.
+5. Fetch and pick your circle, HOME place, and which members to track.
+6. Choose a poll interval (default 60s) and click Done.
+
+## Getting your access token
+
+There is no official Life360 API. The only known working method is to capture a bearer token from an already-authenticated browser session:
+
+1. In a desktop browser, go to `https://www.life360.com` and **sign in** with your Life360 account (complete any MFA prompts).
+2. Open **Developer Tools** (F12 or right-click → Inspect) and select the **Network** tab.
+3. Reload the page or navigate around the Life360 web app so API requests appear. Filter for `life360.com` requests.
+4. Click any request to `api-cloudfront.life360.com/v3/…` and look at its **Request Headers**. Find the line that starts with `Authorization: Bearer `.
+5. Copy **only the token** — the long string after `Bearer ` (not including the word `Bearer` or any quotes or spaces).
+6. Paste that token into **STEP 1: Access Token** in the app and click **Check Token** to verify.
+
+**Notes:**
+- The token is equivalent to your Life360 login password — treat it as a secret. Don't paste it into forum posts or screenshots.
+- Tokens expire server-side (no documented lifetime). When the app shows a "token expired" banner, repeat steps 1–6 to get a fresh token and paste it; clicking **Done** clears the expired flag.
+- The app will attempt to auto-recover if the issue was a transient service problem rather than a genuine expiry.
 
 Detailed walkthrough and community support: <https://community.hubitat.com/t/release-life360/118544>
 
@@ -99,7 +116,8 @@ Works with the HD+ dashboard: <https://joe-page-software.gitbook.io/hubitat-dash
 
 ## Related files in this repo
 
-- [CHANGELOG.md](CHANGELOG.md) — version-by-version history for both the app and the driver.
+- [CHANGELOG.md](CHANGELOG.md) — version-by-version history for both the app and the driver, including user-facing highlights for each release.
+- [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md) — developer-level delta vs. the upstream baseline (function names, error handling, state changes).
 - [STATE_REFERENCE.md](STATE_REFERENCE.md) — every setting, state var, scheduled job, and child-device attribute.
 - [TODO.md](TODO.md) — remaining known issues and follow-up work.
 

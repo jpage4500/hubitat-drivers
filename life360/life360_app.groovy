@@ -391,7 +391,7 @@ def handleForceUpdateResponse(response, Map data) {
 // ---- end Force Update -------------------------------------------------------
 
 def fetchCircles() {
-    def params = life360Params("/circles")
+    def params = life360Params("/circles", 4)
     try {
         httpGet(params) {
             response ->
@@ -416,7 +416,7 @@ def fetchPlaces() {
         return;
     }
 
-    def params = life360Params("/circles/${circle}/places.json")
+    def params = life360Params("/circles/${circle}/places")
     try {
         httpGet(params) {
             response ->
@@ -500,16 +500,7 @@ boolean fetchLocations() {
         return false
     }
 
-    // prevent calling this API too frequently (< 5 seconds)
-    if (state.lastUpdateMs != null) {
-        long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
-        if (lastAttempt < 5) {
-            //if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}s"
-            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}s"
-            return false
-        }
-    }
-    state.lastUpdateMs = currentTimeMs
+    if (logEnable) log.debug("fetchLocations: polling mode:${state.dynamicPollingActive ? 'DYNAMIC' : 'STANDARD'} interval:${state.pollIntervalSecs}s")
 
     // build places context once per poll cycle — reused for every member (§4.2)
     def ctx = buildPlacesContext()
@@ -753,15 +744,15 @@ private Integer readRetryAfterSecs(Exception e) {
     return null
 }
 
-private String life360BaseUrl() {
+private String life360BaseUrl(int version = 3) {
     // alternate base URL to try if cloudfront stops working:
-    // return "https://api.life360.com/v3"
-    return "https://api-cloudfront.life360.com/v3"
+    // return "https://api.life360.com/v${version}"
+    return "https://api-cloudfront.life360.com/v${version}"
 }
 
-private Map life360Params(String path) {
+private Map life360Params(String path, int version = 3) {
     return [
-        uri    : "${life360BaseUrl()}${path}",
+        uri    : "${life360BaseUrl(version)}${path}",
         headers: getHttpHeaders(),
         timeout: 30
     ]
@@ -979,7 +970,7 @@ def handleTimerFired() {
     long lastCirclesFetchMs = (state.lastCirclesFetchMs ?: 0L) as long
     if (now - lastCirclesFetchMs >= 60000L) {
         state.lastCirclesFetchMs = now
-        def circlesParams = life360Params("/circles")
+        def circlesParams = life360Params("/circles", 4)
         def cookies = state["cookies"]
         if (cookies) circlesParams["headers"]["Cookie"] = cookies
         asynchttpGet("handleCirclesPollResponse", circlesParams)
@@ -992,7 +983,6 @@ def handleTimerFired() {
         return
     }
 
-    if (logEnable) log.debug("handleTimerFired: polling mode:${state.dynamicPollingActive ? 'DYNAMIC' : 'STANDARD'} interval:${state.pollIntervalSecs}s")
     if (!fetchLocations()) return
 }
 
