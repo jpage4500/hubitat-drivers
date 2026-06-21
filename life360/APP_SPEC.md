@@ -1,5 +1,12 @@
 # Life360+ — Clean-Room App Specification (v2)
 
+> **Status: design document — the code is the truth.**
+> This spec was written before the implementation was complete. The code in
+> `life360_app.groovy` / `life360_driver.groovy` is the authoritative reference.
+> For live state/settings/attribute tables see [STATE_REFERENCE.md](STATE_REFERENCE.md).
+> For a developer-level delta from the upstream baseline see [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
+> Known divergences from this spec are noted inline below.
+
 A from-scratch specification for a rewritten Life360 Hubitat integration. The goal is the
 **least fragile, lowest-point-of-failure, fewest-moving-parts** design that still does the job:
 track Life360 circle members as Hubitat presence/location devices.
@@ -96,13 +103,11 @@ The two API capabilities the fork discovered remain useful, just repositioned:
 - **Capture cookies on EVERY response** — circles, members, location, force-update, `/users/me`,
   everything. This was the key insight of `3f78018`.
 - **Replay the accumulated cookie jar on EVERY request** via the `Cookie` header.
-- The cookie jar must be a **name→value merge/upsert**, never a whole-jar overwrite. (REVIEW_FOLLOWUPS
-  §1.1: the fork's *async* `captureCookiesAsync` had an overwrite bug that could drop `_cfuvid`.) The
-  rewrite captures from the async poll response (§0.3) but **must do the merge correctly** — parse the
-  existing jar into `name→value`, upsert this response's cookie(s), re-serialize. The sync
-  `captureCookies` is the correctness reference: it does `responseCookies.join(";")` across *all*
-  `Set-Cookie` headers of one response; the async path accumulates the per-response cookie into the
-  jar the same way, without ever clobbering the whole jar.
+- The cookie jar must be a **name→value merge/upsert**, never a whole-jar overwrite. Both
+  `captureCookies` (sync) and `captureCookiesAsync` (async) now call `mergeCookie()` — parse the
+  existing jar into `name→value`, upsert the incoming cookie by name, re-serialize. A rotating
+  `__cf_bm` updates only its own entry and `_cfuvid` is preserved. *(The earlier async overwrite
+  bug described in REVIEW_FOLLOWUPS §1.1, and a matching bug on the sync path, are both fixed.)*
 - Tokenizer note (CODE_REVIEW §1.3): `it.value?.tokenize(';|,')?.getAt(0)` is **not** a bug —
   `__cf_bm` is base64-url-safe (no commas) and `;` is always the first segment separator. Leave it.
 
@@ -112,11 +117,9 @@ The location loop fires one `asynchttpGet` **per selected member** per tick, plu
 call and force-update. Every one of those responses must run cookie capture (§0.2) — this is unchanged
 from the fork, which already does exactly this and works in production.
 
-**Cookie capture from async responses is proven** — the fork captures `__cf_bm`/`_cfuvid` from
-`asynchttpGet`/`asynchttpPost` responses today. The *only* defect REVIEW_FOLLOWUPS §1.1 found was the
-**merge logic** (a whole-jar overwrite that could drop `_cfuvid`), not the header extraction. v2 keeps
-async capture and **fixes the merge to a proper name→value upsert** (parse the existing jar → upsert
-this response's cookie(s) → re-serialize), matching the correctness of the sync `captureCookies` join.
+**Cookie capture from async responses is proven** — the integration captures `__cf_bm`/`_cfuvid` from
+`asynchttpGet`/`asynchttpPost` responses. Both the async and sync cookie capture paths now use
+`mergeCookie()` (name→value upsert). The overwrite bugs on both paths are fixed.
 
 > Because multiple async responses land close together (N members per tick), the merge must be a
 > read-modify-write **upsert keyed by cookie name**, and must tolerate concurrent updates — never
@@ -221,8 +224,8 @@ From `life360.json`. Base path `https://api-cloudfront.life360.com/v3`.
 | Purpose | Method + path | Notes |
 | --- | --- | --- |
 | Validate token | `GET /users/me` | Cheap. Run on token paste and on the 3rd consecutive auth failure for a definitive diagnosis. |
-| List circles | `GET /circles` | Setup only — populate the circle picker. (Tiny payload; could also be a fallback membership probe.) |
-| List places | `GET /circles/{circle}/places` | Setup only — populate the HOME picker. Released code uses `…/places.json`; the spec path is `…/places`. Keep whatever the working code uses; `.json` suffix is harmless. |
+| List circles | `GET /circles` | Setup only — populate the circle picker. Called at **v4** (all other endpoints remain v3). |
+| List places | `GET /circles/{circle}/places` | Setup only — populate the HOME picker. |
 | Poll an update request | `GET /circles/members/request/{requestId}` | Optional — to read the forced fix directly instead of waiting for the next tick. |
 
 ### 3.3 Explicitly NOT used
@@ -328,10 +331,8 @@ pollLocations():                                      # the scheduled timer hand
   if circle unset OR no members selected: return
   if rateLimitedUntilMs in future: return            # honor prior 429
   if tokenLikelyExpired: return                       # don't hammer a dead token
-  throttle: reject if < 5s since last loop start      # keep the existing guard
 
   ctx = buildPlacesContext()                          # serialize places ONCE per tick (§4.5)
-  maybeRefreshMembership()                             # slow cadence, rate-limited (§4.2)
 
   for memberId in settings.users:
     fetchMemberLocation(memberId, ctx)                # fires one asynchttpGet each
@@ -382,8 +383,8 @@ Notes:
   HA stays cheap at 5s and why we keep it. Do **not** resurrect the skip-etag-for-in-transit hack
   (CODE_REVIEW §9.1.1) — if Life360 says `304`, nothing changed.
 - **Dynamic-polling flags are fresh.** Because each member's `inTransit` flag is written in
-  `handleMemberResponse`, evaluate the rate switch *after* the batch lands (a short `runIn` re-check),
-  not inline in `pollLocations()` — the correct fix for REVIEW_FOLLOWUPS §2.2.
+  `handleMemberResponse`, the rate switch is evaluated there — inline in `notifyChildDevice` when
+  a member's transit state flips, not in `pollLocations()` which ran before async responses landed.
 - **`buildPlacesContext()` once per tick.** Serialize `placesJson` a single time and thread it through
   every `fetchMemberLocation` → `notifyChildDevice` (§4.5).
 
@@ -393,24 +394,27 @@ Mirrors HA's "Circles & Members list" coordinator. Runs on a **slow cadence** (r
 once per minute via `maybeRefreshMembership()`), not every location tick.
 
 ```
-maybeRefreshMembership():
-  if now - lastMembershipFetchMs < 60s: return
-  lastMembershipFetchMs = now
-  asynchttpGet("handleMembershipResponse", life360Params("/circles/${circle}"))   # +cookies
+maybeRefreshMembership():    # called from handleTimerFired, rate-limited to ≤once/min
+  if now - lastCirclesFetchMs < 60s: return
+  lastCirclesFetchMs = now
+  asynchttpGet("handleCirclesPollResponse", life360Params("/circles", 4))   # v4, +cookies
 
-handleMembershipResponse(response):
+handleCirclesPollResponse(response):
   captureCookies(response)
   if 200:
-    circle = response.json
-    if circle.memberCount != state.memberCount:        # roster changed
-      state.memberCount = circle.memberCount
-      reconcileChildDevices(circle.members)            # create missing / orphan-delete
-    refresh names/avatars from circle.members          # cheap, dedup by value
+    circle = response.json.circles.find { it.id == settings.circle }
+    newCount = circle.memberCount.toInteger()
+    if state.memberCount == null:                      # first baseline
+      state.memberCount = newCount
+      if state.members empty: fetchMembers()           # initial fetch
+    elif newCount != state.memberCount:                # roster changed
+      state.memberCount = newCount
+      fetchMembers()                                   # async GET /circles/{id}/members
 ```
 
-- `GET /circles/{id}` returns `memberCount` + embedded `members[]` — one cheap call to both detect
-  roster changes *and* refresh names/avatars. This is the one place the §9.2 all-members endpoint earns
-  its keep.
+> **Divergence from spec:** the code calls `GET /circles` (v4, full list) and plucks the selected
+> circle by id — not `GET /circles/{id}` (single circle). Name/avatar refresh and
+> `reconcileChildDevices` are not yet implemented; only `memberCount` change detection is.
 - **Carry forward the fork's `createChildDevices()` fixes** in `reconcileChildDevices()`:
   - `addChildDevice(…)` passes `null` for the hub id (let Hubitat pick), **not** the hardcoded `1234`
     (CODE_REVIEW §3.3 — fails on any non-`1234` hub / multi-hub installs).
@@ -448,7 +452,6 @@ still fetched with its own etag — they're just fetched more often).
 ### 4.4 Scheduler hygiene (carry forward, these were real bugs)
 
 - Always `unschedule()` before re-arming the location-loop job; never stack timers (CODE_REVIEW §2.6).
-- One shared `@Field static final Random RNG` for jitter, not `new Random()` per call (§8.6).
 - Re-arm on `systemStart` (hub reboot) via `subscribe(location, 'systemStart', initialize)`.
 
 ---
@@ -463,18 +466,18 @@ per-member backoff replaced by one clean, consistent per-member backoff helper.
 | --- | --- |
 | `200` | `notifyChildDevice`; store member etag; clear this member's `failCount`/`backoffUntil`; bump `lastSuccessMs`; clear `message`/watchdog |
 | `304` | clear this member's `backoffUntil`; bump `lastSuccessMs`; clear `message`/watchdog |
-| `401`/`403` | account-level: `clearSessionCache()` (drop cookies + **all** etags); `failCount++`; at `failCount >= 3` set `tokenLikelyExpired`, notify once, slow loop to 300s. **Also fire `GET /users/me`** for a definitive expired-vs-blip diagnosis; store `state.tokenStatus`. |
+| `401`/`403` | account-level: `clearSessionCache()` (drop cookies + **all** etags); `failCount++`; at `failCount >= 3` set `tokenLikelyExpired`, notify once, slow loop to 300s. While flagged, each 5-min tick fires `probeTokenAfterExpiry()` (`GET /users/me`); a 200 auto-recovers (clears flag, restores normal polling) without the user re-pasting a token. |
 | `429` | account-level: `rateLimitedUntilMs = now + (Retry-After ?: 60) + 10s` — pauses the whole loop |
-| `5xx`/`520`/`522`/`525`/timeout/no-status | **per-member** backoff — see below |
+| `5xx`/`520`/`522`/`525` | **per-member** backoff — see below |
 
-**Per-member transient backoff (clean version of the fork's §5.3).** Each member tracks its own
-`transientCount[memberId]` and `backoffUntil[memberId]`:
+**Per-member transient backoff.** Each member tracks its own
+`transientCount-<memberId>` and `transientUntilMs-<memberId>`:
 
-- `onMemberTransientFailure(memberId)`: `transientCount[memberId]++`;
-  `backoffUntil[memberId] = now + min(pollSecs * 2^(transientCount-1), 300s)` (exponential, capped at
-  5 min). `fetchMemberLocation` skips a member still inside its window. A flaky single member backs off
-  without penalizing the healthy ones.
-- Any `200`/`304` for that member clears its `transientCount`/`backoffUntil`.
+- On 5xx/520/522/525: `transientCount-<id>++`;
+  `transientUntilMs-<id> = now + min(pollSecs * 2^(count-1), 300s)` (exponential, capped at
+  5 min, shift exponent capped at 6 to prevent long overflow). `fetchMemberLocation` skips a member
+  still inside its window. A flaky single member backs off without penalizing the healthy ones.
+- Any `200`/`304` for that member clears its `transientCount`/`transientUntilMs`.
 - This is the same per-member backoff the fork shipped, just expressed as one helper instead of
   scattered inline logic — the cleanup, not a behavior change.
 
@@ -496,9 +499,8 @@ tick — CODE_REVIEW §3.6) and surface a banner.
 (Never/2/6/12/24/48h); master on/off toggle; cancel the chain when a fresh token is pasted in
 `updated()` (CODE_REVIEW §5.2).
 
-**`clearSessionCache()`** drops `cookies` and **all** per-member etags (`etag[*]`), plus per-member
-`inflight[*]` / `backoffUntil[*]` / `transientCount[*]` — a clean slate on auth failure, exactly like
-the fork.
+**`clearSessionCache()`** drops `cookies` and **all** per-member etags (`etag-*`), plus per-member
+`inflight-*` / `transientUntilMs-*` / `transientCount-*` — a clean slate on auth failure.
 
 ---
 
@@ -675,26 +677,23 @@ the cruft** the fork accumulated around them. Target state:
 - Setup cache: `circles`, `places`, `members` (refreshed by the slow membership loop, §4.2),
   `accessToken` (OAuth, for `/view` only).
 - Account preferences: `unitOfMeasure` (Life360 account units — `"i"`/`"m"` — fetched via `GET /users/me` on install/update/check-token; forwarded to child devices via `getUnitIsMiles()`; overrides each driver's local `isMiles` toggle).
-- Session: `cookies`, `deviceId`.
+- Session: `cookies`.
 - Per-member (the proven mechanism — kept): `etag-<memberId>` (per-member `If-None-Match`),
   `inflight-<memberId>` (per-member in-flight guard), `transientCount-<memberId>` /
-  `backoffUntil-<memberId>` (per-member exponential backoff), `inTransit-<memberId>` (drives dynamic
+  `transientUntilMs-<memberId>` (per-member exponential backoff), `inTransit-<memberId>` (drives dynamic
   polling).
-- Scheduling: `lastUpdateMs`, `lastSuccessMs` (newest success across members), `scheduledBaseSecs`,
-  `pollIntervalSecs`, `dynamicPollingActive`, `memberInTransit`, `lastMembershipFetchMs` (slow-loop
+- Scheduling: `lastSuccessMs` (newest success across members), `scheduledBaseSecs`,
+  `pollIntervalSecs`, `dynamicPollingActive`, `memberInTransit`, `lastCirclesFetchMs` (slow-loop
   rate-limit), `memberCount`.
 - Account-level health (shared across members): `failCount`, `tokenLikelyExpired`,
   `rateLimitedUntilMs`, `watchdogWarned`, `message`, `tokenStatus`.
 - UI one-shots: `tokenStatusPending`, `forceUpdateStatus(+Pending)`.
 
 ### Clean up (cruft removed, mechanism kept)
-- The fork's *scattered, inconsistent* per-member backoff bookkeeping (`transientCount-*` /
-  `transientUntilMs-*` written in several places) → one consistent helper writing
-  `transientCount-<id>` / `backoffUntil-<id>` (§5). Same per-member behavior, one code path.
-- `lastCirclesFetchMs` → renamed `lastMembershipFetchMs`; now gates the dedicated slow membership loop
-  (§4.2) rather than being folded into a one-big-call tick.
+- `state.deviceId` — removed (was generated, never read or sent).
+- `state.lastUpdateMs` — removed (client-invented 5s throttle; the cron owns the rate).
 - All the bandaid state from master (skip-etag flags, heuristic-correction scratch vars) → **gone**
-  (already removed in the fork; do not reintroduce).
+  (already removed; do not reintroduce).
 
 > Note: this is the *opposite* of the earlier draft's "delete all per-member keys" plan — that came
 > from the rejected one-big-call model. Per-member keys are the proven design; they stay.
@@ -790,7 +789,7 @@ the cruft around it. The table is mostly *keeps* and *cleanups*, not deletions.
 | Per-member `etag-<id>` (`If-None-Match`) | **Kept** | The efficiency core — idle members cost a near-free 304. |
 | Per-member in-flight guard `inflight-<id>` | **Kept** | Prevents pile-up; the right tool for per-member polling (fork §7.1). |
 | Per-member exponential backoff (§5.3) | **Kept, cleaned up** | Same behavior, expressed as one consistent helper instead of scattered inline logic. |
-| `captureCookiesAsync` (buggy merge) | **Kept, merge fixed** | Async capture is proven; fix the whole-jar overwrite to a name→value upsert (§0.3 / REVIEW_FOLLOWUPS §1.1). |
+| `captureCookies` / `captureCookiesAsync` | **Kept, both use `mergeCookie()`** | Both sync and async paths now do a proper name→value upsert via `mergeCookie()`. The overwrite bugs on both paths are fixed. |
 | Circles-poll membership timer (§4.7) | **Kept, formalized** | Becomes the explicit slow membership loop (`/circles/{id}` → `memberCount` + names), mirroring HA's list coordinator. |
 | `buildPlacesContext` threading (§4.2/§4.5) | **Kept** | Serialize places once per tick, thread to each member. |
 | `createChildDevices` fixes (§3.3/§3.4/§3.5/§4.4) | **Kept** | hub-id `null`, hoisted `getChildDevices`, orphan cleanup. |

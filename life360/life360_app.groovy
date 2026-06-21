@@ -619,7 +619,7 @@ def handleMemberLocationResponse(response, Map data) {
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
         state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
 
-    } else if (status in [502, 503, 504, 520]) {
+    } else if (status in [502, 503, 504, 520, 522, 525]) {
         int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
         state["transientCount-${memberId}"] = count
         int pollSecs = (state.pollIntervalSecs ?: 30) as int
@@ -970,7 +970,7 @@ def handleTimerFired() {
     long lastCirclesFetchMs = (state.lastCirclesFetchMs ?: 0L) as long
     if (now - lastCirclesFetchMs >= 60000L) {
         state.lastCirclesFetchMs = now
-        def circlesParams = life360Params("/circles", 4)
+        def circlesParams = life360Params("/circles")
         def cookies = state["cookies"]
         if (cookies) circlesParams["headers"]["Cookie"] = cookies
         asynchttpGet("handleCirclesPollResponse", circlesParams)
@@ -1166,23 +1166,18 @@ private Map buildPlacesContext() {
 }
 
 void captureCookies(response) {
-    def responseCookies = []
     try {
-        // Extract just the "Set-Cookie" headers from the Response.
         response.getHeaders('Set-Cookie')?.each {
-            def cookie = it.value?.tokenize(';|,')?.getAt(0)
-            if (cookie) responseCookies << cookie
+            def cookieVal = it.value?.tokenize(';|,')?.getAt(0)
             if (getLogRawPayload()) log.trace("captureCookies: raw Set-Cookie: ${it.value}")
+            if (cookieVal && cookieVal.contains("=")) {
+                mergeCookie(cookieVal)
+            }
         }
     } catch (e) {
         log.error("captureCookies: ${e.message}")
     }
-    if (responseCookies) {
-        // sync path captures ALL Set-Cookie headers of one response at once, so a plain
-        // join is a complete, correct jar for this response.
-        state["cookies"] = responseCookies.join(";")
-        if (getLogRawPayload()) log.trace("captureCookies(sync): jar now [${cookieJarSummary()}]")
-    }
+    if (getLogRawPayload()) log.trace("captureCookies(sync): jar now [${cookieJarSummary()}]")
 }
 
 /**
