@@ -171,7 +171,11 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // -- name --
     String memberFirstName = (member.firstName) ? member.firstName : ""
     String memberLastName = (member.lastName) ? member.lastName : ""
-    // -- home --
+    // -- home -- (null if the selected place was removed from Life360; treat as absent)
+    if (home == null) {
+        log.warn("generatePresenceEvent: home place not found — check that the selected HOME place still exists in Life360")
+        return false
+    }
     Double homeLatitude = toDouble(home.latitude)
     Double homeLongitude = toDouble(home.longitude)
     Double homeRadius = toDouble(home.radius)
@@ -299,7 +303,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName)}: " +
         "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} (threshold override)")
 
-    String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : "km from Home")
+    String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : " km from Home")
 
     if (logEnable && (isDriving || inTransit)) {
         log.debug "generatePresenceEvent: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving"
