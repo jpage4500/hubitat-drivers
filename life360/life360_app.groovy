@@ -559,8 +559,13 @@ def handleMemberLocationResponse(response, Map data) {
     // Use response.status as the primary gate; null/zero means a network-level failure.
     Integer status = response.status
     if (!status) {
-        log.error("fetchMemberLocation: member:${memberName}: network error: ${response.getErrorMessage()}")
-        state.message = "Network error for member ${memberName}: ${response.getErrorMessage()}"
+        int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
+        state["transientCount-${memberId}"] = count
+        int pollSecs = (state.pollIntervalSecs ?: 30) as int
+        int shift = Math.min(count - 1, 6)
+        long delaySecs = Math.min((long)(pollSecs * (1L << shift)), 300L)
+        state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
+        log.warn("fetchMemberLocation: NETWORK ERROR x${count} for member:${memberName}: ${response.getErrorMessage()}; backing off ${delaySecs}s")
         return
     }
 
