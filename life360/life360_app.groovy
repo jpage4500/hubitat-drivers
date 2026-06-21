@@ -985,7 +985,53 @@ def handleTimerFired() {
         asynchttpGet("handleCirclesPollResponse", circlesParams)
     }
 
+    // when the token is flagged expired, probe /users/me instead of fetching locations —
+    // auto-recovers if the service healed (Cloudflare blip, transient outage, etc.)
+    if (state.tokenLikelyExpired) {
+        probeTokenAfterExpiry()
+        return
+    }
+
     if (!fetchLocations()) return
+}
+
+/**
+ * Async /users/me probe fired by handleTimerFired when tokenLikelyExpired is set.
+ * On 200: service is back — clear the flag and resume normal polling automatically.
+ * On 401/403: token still dead — stay in degraded mode, reminders continue.
+ * On network error or other status: stay quiet and try again next tick.
+ */
+private void probeTokenAfterExpiry() {
+    if (isEmpty(access_token)) return
+    def params = life360Params("/users/me")
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    asynchttpGet("handleTokenProbeResponse", params)
+}
+
+def handleTokenProbeResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        // network-level failure — stay quiet, try again next tick
+        if (logEnable) log.debug("tokenProbe: network error — ${response.getErrorMessage()}")
+        return
+    }
+    captureCookiesAsync(response)
+    if (status == 200) {
+        // service is back — auto-recover
+        log.info("tokenProbe: 200 OK — token is valid; auto-recovering from expired state")
+        captureUnitOfMeasure(response.json)
+        state.tokenLikelyExpired = false
+        state.failCount = 0
+        state.rateLimitedUntilMs = null
+        state.message = null
+        unschedule("sendTokenExpiryReminder")
+        scheduleUpdates()   // restore normal polling rate
+    } else if (status == 401 || status == 403) {
+        if (logEnable) log.debug("tokenProbe: ${status} — token still expired; waiting for user to re-paste")
+    } else {
+        if (logEnable) log.debug("tokenProbe: unexpected status ${status} — will retry next tick")
+    }
 }
 
 def handleCirclesPollResponse(response, data) {
