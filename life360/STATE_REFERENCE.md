@@ -57,7 +57,6 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | Variable | Type | Set by | Cleared by | Notes |
 | --- | --- | --- | --- | --- |
 | `cookies` | String | `captureCookies` / `captureCookiesAsync` (via `mergeCookie`) | `clearSessionCache()` (auth errors) | `Cookie` header value (`__cf_bm` + `_cfuvid`) sent on subsequent requests. Merged by name so a rotating `__cf_bm` never drops `_cfuvid` |
-| `deviceId` | String (UUID) | `getHttpHeaders()` first call | never | Stable per-install identifier sent to Life360 |
 | `etag-<memberId>` | String | `handleMemberLocationResponse` on 200 OK | `clearSessionCache()` | Per-member `If-None-Match` value for 304-not-modified responses |
 | `inflight-<memberId>` | Long (epoch ms) | `fetchMemberLocation` before `asynchttpGet` | `handleMemberLocationResponse` / `clearSessionCache()` | In-flight marker; prevents async-HTTP pile-up |
 | `transientCount-<memberId>` | Integer | `handleMemberLocationResponse` on 5xx (502/503/504/520) | 200/304 success, `clearSessionCache()` | Consecutive-transient-error streak; drives exponential backoff |
@@ -67,7 +66,6 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 
 | Variable | Type | Set by | Notes |
 | --- | --- | --- | --- |
-| `lastUpdateMs` | Long | `fetchLocations()` | Throttle: rejects calls < 5s apart |
 | `lastSuccessMs` | Long | `handleMemberLocationResponse` on 200/304 | Watchdog input; triggers warn if stale > `max(pollFreq×10, 10min)` |
 | `scheduledBaseSecs` | Integer | `scheduleUpdates()` | Last base interval armed (no jitter). No-op guard: skips re-arming the cron when the rate hasn't changed. Reset to `null` by `installed`/`updated`/`initialize` to force a re-arm |
 | `pollIntervalSecs` | Integer | `scheduleUpdates()` | Current effective poll interval; used for the per-request HTTP timeout and 5xx backoff base |
@@ -96,7 +94,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | Variable | Type | Set by | Cleared by | Notes |
 | --- | --- | --- | --- | --- |
 | `failCount` | Integer | `handleException` / `handleMemberLocationResponse` on 401/403 | 200-OK response, `updated()` | Auth-failure streak; triggers `tokenLikelyExpired` at ≥3 |
-| `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | 200-OK response, `updated()` | When true, polling is short-circuited and slowed to 5 min; user-facing banner shown |
+| `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | `handleTokenProbeResponse` on 200 (auto-recovery), `updated()` | When true, normal polling is short-circuited and slowed to 5 min. Each 5-min tick fires `probeTokenAfterExpiry()` (async `GET /users/me`); a 200 response auto-recovers — clears this flag, resets `failCount`, restores normal polling. A 401/403 probe stays quiet and retries next tick. |
 | `rateLimitedUntilMs` | Long | `handleException` / `handleMemberLocationResponse` on 429 | 200-OK response, `updated()` | Honors `Retry-After`; polling skipped until this time |
 | `watchdogWarned` | Boolean | `handleTimerFired` watchdog (rising edge) | 200/304 success | Prevents the "no successful update" warning from spamming every tick |
 | `message` | String | various error paths | 200-OK success / `updated()` / no-arg `initialize()` | Red banner shown on the app's main page |
@@ -107,10 +105,10 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Handler | Schedule | Set by | Purpose |
 | --- | --- | --- | --- |
-| `handleTimerFired` | `0/<refreshSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *` | `scheduleUpdates()` | Each tick: run the stale-data watchdog, poll `/circles` at most once per minute to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then call `fetchLocations()` |
+| `handleTimerFired` | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *` | `scheduleUpdates()` | Each tick: run the stale-data watchdog, poll `/circles` at most once per minute to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then either probe `/users/me` (when `tokenLikelyExpired`) or call `fetchLocations()` |
 | `sendTokenExpiryReminder` | one-shot `runIn(<notifyRepeatHours>h)`, self-rescheduling | `notifyTokenExpired()` / `scheduleTokenExpiryReminder()` | Repeats the token-expiry notification while `tokenLikelyExpired` stays true; chain stops once the token is refreshed or `notifyRepeatHours = never` |
 
-`refreshSecs` = `pollFreq` (or `dynamicPollFreq` when dynamic polling is active) + 0–4s random jitter. The fixed periodic `fetchMembers` timer was removed — membership is now detected via the once-per-minute `/circles` poll-count diff in `handleTimerFired`.
+`baseSecs` = `pollFreq` (or `dynamicPollFreq` when dynamic polling is active); forced to 300 when `tokenLikelyExpired`. The fixed periodic `fetchMembers` timer was removed — membership is now detected via the once-per-minute `/circles` poll-count diff in `handleTimerFired`.
 
 ---
 

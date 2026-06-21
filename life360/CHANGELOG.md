@@ -8,95 +8,58 @@ Last published release on [the community thread](https://community.hubitat.com/t
 
 ---
 
-## Y.Y.Y — feature/async-member-fetch (unreleased)
+## Y.Y.Y — unreleased
 
-Performance, reliability, and operator-visibility work on top of `X.X.X`.
+Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integration now stays online** through Cloudflare cookie rotations and transient Life360 outages that previously caused permanent silent failures.
 
-### Performance
-- Per-member location fetches converted from blocking `httpGet` to `asynchttpGet`, with a per-member in-flight guard so a slow Life360 response can't pile up requests when the next poll tick fires.
-- Per-member exponential backoff on transient 5xx errors (1×, 2×, 4× the poll interval, capped at 5 min) instead of hammering the API at full rate.
-- `fetchMembers()` converted to async.
-- `buildPlacesContext()` runs once per poll cycle instead of rebuilding the sorted places map per member.
-- `savedPlaces` JSON serialized once in the app and passed through to the driver, instead of re-serializing for every member every tick.
-- `createChildDevices()` hoists `getChildDevices()` outside the loop.
+### Reliability
 
-### Polling / scheduling
-- Circles endpoint polled once per poll tick (rate-limited to ≤1/min) to detect membership changes; replaces the fixed unconfigurable `fetchMembers()` timer.
+**Cloudflare cookie bug fixed.** Life360 sits behind Cloudflare, which issues two cookies: `_cfuvid` (stable) and `__cf_bm` (rotates every ~30 min). The async cookie handler was overwriting the entire cookie jar with just the fresh rotating cookie each time `__cf_bm` refreshed — silently dropping `_cfuvid`. Without both, Cloudflare returns 403 within minutes and polling goes completely dark. The failure was delayed and silent, which made it look like a Life360 outage. Fixed: cookie updates now merge by name so only the rotating entry is replaced. See [Cookie handling](README.md#cookie-handling-load-bearing--dont-break-this) in the README.
 
-### New endpoints / capabilities
-- **Force Update** button on the settings page — POSTs `/circles/<id>/members/<id>/request` to push the member's phone for a fresh GPS fix. Confirmed working through Cloudflare WAF once cookies are present.
-- **Check Token** button (`GET /users/me`) with inline status in STEP 1, so a freshly-pasted token can be validated without waiting for a poll cycle to fail.
-- **Units auto-detection** — `GET /users/me` (invoked by the Check Token button and as a fire-and-forget on `installed()`/`updated()`) captures the Life360 account's units preference (`"i"` = imperial miles/mph, `"m"` = metric km/kph). The driver uses this to override the per-device `isMiles` fallback toggle, so units track the account setting without any manual configuration.
+**Auto-recovery from token-expired state.** Three consecutive 401/403 errors still flag the token as likely expired and slow polling to 5-minute ticks — but the app now probes `/users/me` on each of those ticks. The moment Life360 responds normally (service healed, transient blip cleared), polling resumes at the normal rate automatically. Previously the integration was permanently dead until you manually re-pasted a token.
+
+### New capabilities
+
+- **Force Update** — settings-page button that POSTs a location-refresh request to a member's phone. Life360 signals the device for a fresh GPS fix (~5 seconds), which the next poll cycle picks up.
+- **Check Token** — validates your access token with an inline success/failure result on the settings page, including a "Hi, name!" confirmation. Also re-reads the account's units preference.
+- **Units auto-detected** — speed and distance follow your Life360 account's imperial/metric preference, fetched automatically from `/users/me`. The per-device `isMiles` toggle is a fallback only.
+- **Dynamic polling reacts immediately** — when a member starts or stops moving, the polling rate switches on the same tick instead of lagging a full cycle.
+
+### Settings page
+
+"Other Options" reorganized into focused **Polling**, **Notifications**, **Logging**, and **Map View** sections. New **STEP 5: Verify Connectivity** shows how long ago the last successful fetch was. Map View has explicit Generate/Revoke buttons for the OAuth link.
 
 ### Notifications
-- Token-expiry alerts now have a master enable toggle plus a configurable repeat interval (off / 2h / 6h / 12h / 24h / 48h); reminders self-cancel once a fresh token is pasted.
 
-### Reliability — Cloudflare cookie handling (load-bearing)
-- **Fixed a cookie-jar bug that could 403 the whole integration.** The async cookie capture replaced the entire jar with a single cookie whenever an incoming cookie name was already present — exactly the `__cf_bm` rotation case — silently dropping `_cfuvid`. Without both Cloudflare cookies, Life360 returns 403 within minutes and all polling stops; it failed silently and on a delay. Cookie capture now merges per cookie name (`mergeCookie()`: parse jar → upsert by name → re-serialize), so a rotating `__cf_bm` updates only its own entry and `_cfuvid` survives. See the README "Cookie handling" section.
-- Added cookie-jar diagnostics: `captureCookiesAsync` logs `added/updated '<name>'; jar now [...]` (debug), and auth failures log `jar-at-failure [...]` so a token problem (jar intact) is distinguishable from a cookie-path problem (jar missing a Cloudflare cookie). Cookie **names** are logged by default; values only under *Log Raw Life360 Payloads*.
+Token-expiry alerts now have a master enable/disable toggle plus a configurable repeat reminder (2 h / 6 h / 12 h / 24 h / 48 h / never). Reminders stop automatically when a fresh token is pasted or auto-recovery succeeds.
 
-### Driver behavior changes
-- Driver no longer applies the in-house speed/distance heuristic override for `inTransit` / `isDriving` — Life360's flags are trusted directly. Manual `transitThreshold` / `drivingThreshold` settings remain as explicit user overrides.
-- Manual `sendEvent` dedup guards in the driver removed; Hubitat's built-in value-based deduplication is now relied on.
-- New driver helper `displayMember()` honors the parent app's "Include Names in Logs" privacy toggle for log output.
+### Privacy
 
-### Diagnostics
-- **Log Raw Life360 Payloads** toggle (default off) — logs the raw `location` map and the post-threshold computed state per member per poll. Used during the §2.5 heuristic-revert investigation; leave off in normal use.
+Two opt-in logging toggles under app settings → Logging, both default on: **Include Names and Places in Logs** (off = UUIDs only, safe for sharing) and **Include Google Maps Link in Logs** (off = coordinates omitted from the "moved" log line).
+
+### Performance
+
+All member location fetches are now async, with a per-member in-flight guard so a slow Life360 response can't pile up duplicate requests. Exponential backoff on repeated 5xx errors (capped at 5 min) instead of hammering the API at full rate. Places context is built once per poll cycle and shared across all member fetches.
+
+### Bug fixes
+
+Against the 5.1.3 / 5.1.4 baseline:
+
+- `pollFreq = 0` (Disabled) now reliably disables polling — unconditional jitter was causing it to run at 1–4s regardless.
+- `scheduleUpdates()` no longer stacks overlapping timers when called from `updated()` / `initialize()` / `handleTimerFired` in the same cycle.
+- `installed()` correctly seeds `address1prev` as `"No Data"` (was crashing with wrong attribute name and value).
+- `historyClearData` no longer throws `MissingPropertyException` and now clears the attributes it's supposed to.
+- "Has arrived" / "has left" in `descriptionText` now generates correctly (operator precedence fix).
+- HTML tile speed display fixed (same precedence issue).
+- Orphan child devices removed when a member is deselected from `settings.users`.
+- `addChildDevice` no longer passes hardcoded hub ID `1234`.
+- Watchdog warning fires only on the rising edge instead of repeating every tick.
+- Null guards added for `settings.users`, stale `home` place, and missing `location.since` — these previously caused NPE-aborted updates in normal operation.
+- Metric "km from Home" status now has correct spacing.
 
 ### Documentation
-- CODE_REVIEW updated through §4 / §5 / §7 / §9 with status markers, the §2.5 revert history, and §9 (undocumented Life360 API capabilities: force-update, single-circle fetch, `/users/me` validation).
-- README expanded; STATE_REFERENCE kept in sync with new state vars and settings.
 
----
-
-## X.X.X — fix/life360-bugs-cleanup-docs (unreleased)
-
-First documentation pass plus a sweep of bugs, code-quality items, and UX defects against the published 5.1.3 / 5.1.4 baseline.
-
-### Bug fixes (see CODE_REVIEW §2 / §3)
-- `pollFreq = 0` (Disabled) no longer silently runs at 1–4 second polling because of unconditional jitter.
-- Scheduler churn fixed: `scheduleUpdates()` tracks the currently-armed base rate and short-circuits no-op re-arms instead of stacking overlapping timers from `updated()` / `initialize()` / `handleTimerFired`.
-- Dynamic-polling lockup against a stale Life360 `inTransit` flag mitigated (root cause documented in CODE_REVIEW §2.5; force-update endpoint added later in `Y.Y.Y` as the real fix).
-- `installed()` no longer sends an event with the wrong attribute name; `address1prev` is properly seeded as `"No Data"`.
-- `historyClearData` no longer throws `MissingPropertyException` and now clears the attributes it's supposed to clear.
-- `sendHistory` HTML template uses the actually-defined `avatarFontSize` preference (was referencing undefined `fontSize`).
-- `descriptionText` "has arrived" / "has left" ternary parenthesization fix (was always "arrived").
-- HTML tile speed-display condition fix (the inner ternary was always truthy).
-- `addChildDevice` no longer hardcodes hub ID `1234`.
-- Dead `vcId` check removed from `createChildDevices`.
-- Orphan child devices are removed when a member is deselected from `settings.users`.
-- Watchdog warning only fires on the rising edge instead of every poll tick.
-- `location.since` is null-guarded so a missing field can't abort `generatePresenceEvent` mid-update.
-- When the token is flagged expired, polling slows to 5 minutes instead of firing at full rate while every call early-returns.
-
-### Code quality (CODE_REVIEW §8)
-- Shared `@Field static final Random` RNG (was allocating per `scheduleUpdates` / `handleTimerFired` tick).
-- `getChildDevices()` hoisted out of inner loop.
-- Dead code removed: `strToDate`, `state.presence`, `state.status`, `state.update`, duplicate `attribute "battery"` (covered by `capability "Battery"`).
-- `haversine` made `static`.
-- `int sEpoch` → `long` to avoid Y2K38 overflow in the HTML tile.
-- Implicit Groovy globals (`placesMap`, `sortedPlaces`, `sortedMembers`, `thePlaces`, `theMembers`) given `def`.
-- Log unit mismatch fixed (seconds reported as `ms`).
-
-### UX
-- Settings page restructured: STEP 5 "Verify Connectivity" with last-successful-fetch indicator; "Other Options" split into focused **Polling**, **Notifications**, **Logging**, **Map View** sections.
-- "Refesh" → "Refresh" typo.
-- Google Maps API key help text moved out of `description:` (placeholder text) into a `paragraph` with a bolded security note.
-- Half-row width for all inputs so short enums don't render comically wide.
-- Map View: explicit "Generate Map Link" / "Revoke Map Link" buttons with clearer OAuth instructions.
-- `/view` HTML response now specifies UTF-8 charset.
-- `fetchCircles` and similar log lines include the entity they fetched instead of an empty trailing colon.
-
-### Privacy / security (CODE_REVIEW §6)
-- New **Logging** section with two opt-in toggles, both default ON:
-  - *Include Names and Places in Logs* — when off, member/place/circle names are replaced with UUIDs.
-  - *Include Google Maps Link in Logs* — when off, the "moved" info log omits the satellite-view URL.
-- README and inline app-page warnings call out that the `/view` link contains a live access token and that the Google Maps API key is necessarily embedded in page HTML (lock it down with HTTP-referrer + API restrictions in Google Cloud Console).
-
-### Documentation (new)
-- [README.md](README.md) rewritten.
-- [CODE_REVIEW.md](CODE_REVIEW.md) added — findings ranked by severity with status markers.
-- [STATE_REFERENCE.md](STATE_REFERENCE.md) added — every setting, state var, scheduled job, subscription, and child-device attribute.
+[README.md](README.md) rewritten. [CODE_REVIEW.md](CODE_REVIEW.md) added (findings by severity). [STATE_REFERENCE.md](STATE_REFERENCE.md) added (every setting, state var, scheduled job, and attribute). Developer-level change details in [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
 
 ---
 
