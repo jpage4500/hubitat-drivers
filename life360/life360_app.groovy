@@ -1,9 +1,5 @@
 import java.net.http.HttpTimeoutException
 import java.net.SocketTimeoutException
-import groovy.transform.Field
-
-// §8.6 — shared RNG so we don't allocate one per scheduleUpdates/handleTimerFired tick
-@Field static final Random RNG = new Random()
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
@@ -463,7 +459,7 @@ def handleMembersResponse(response, data) {
         state.message = null
 
         // notify child devices for members that don't have one yet
-        settings.users.each { memberId ->
+        settings.users?.each { memberId ->
             def externalId = "${app.id}.${memberId}"
             if (!getChildDevice("${externalId}")) {
                 def member = state.members?.find { it.id == memberId }
@@ -593,8 +589,10 @@ def handleMemberLocationResponse(response, Map data) {
             log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
             state.watchdogWarned = false
         }
-        // AsyncResponse headers are a Map — no getFirstHeader()
-        def eTag = response.headers?.get("l360-etag")
+        // AsyncResponse headers are a plain Map — keys are case-sensitive, but HTTP headers
+        // are case-insensitive by spec; search case-insensitively so a server casing change
+        // can't silently disable the 304 optimization.
+        def eTag = response.headers?.find { it.key?.equalsIgnoreCase("l360-etag") }?.value
         if (eTag) state["etag-${memberId}"] = eTag
 
     } else if (status == 304) {
@@ -634,7 +632,8 @@ def handleMemberLocationResponse(response, Map data) {
         int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
         state["transientCount-${memberId}"] = count
         int pollSecs = (state.pollIntervalSecs ?: 30) as int
-        long delaySecs = Math.min((long)(pollSecs * (1L << (count - 1))), 300L)
+        int shift = Math.min(count - 1, 6)   // cap to prevent long overflow before Math.min clamps
+        long delaySecs = Math.min((long)(pollSecs * (1L << shift)), 300L)
         state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
         log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
         state.message = "TRANSIENT ${status} x${count} on fetchMemberLocation member:${memberName}"
@@ -769,10 +768,6 @@ private Map life360Params(String path) {
 }
 
 Map getHttpHeaders() {
-    if (isEmpty(state.deviceId)) {
-        state.deviceId = UUID.randomUUID().toString()
-    }
-
     // try to match these headers:
     // - https://github.com/pnbruckner/life360/blob/master/life360/const.py#L7
     // - https://github.com/pnbruckner/life360/blob/master/life360/api.py#L46
@@ -933,29 +928,25 @@ def scheduleUpdates() {
     state.scheduledBaseSecs = baseSecs
     state.pollIntervalSecs = baseSecs
 
-    // pollFreq=0 means Disabled — don't add jitter (would land in 1..4s polling) and don't schedule
+    // pollFreq=0 means Disabled
     if (baseSecs <= 0) {
         log.info("scheduleUpdates: polling DISABLED (pollFreq=0)")
         return
     }
 
-    // add some randomness to this value (between 0 and 5 seconds)
-    Integer random = Math.abs(RNG.nextInt() % 5)
-    Integer refreshSecs = baseSecs + random
-
     // log.info — visibility into polling-mode flips and (re)schedules in production
     if (modeFlipped) {
         log.info("scheduleUpdates: polling mode -> ${wantDynamic ? 'DYNAMIC' : 'STANDARD'}, baseSecs:${baseSecs}")
     } else {
-        log.info("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
+        log.info("scheduleUpdates: baseSecs:${baseSecs}, pollFreq:${settings.pollFreq}, dynamicPollFreq:${settings.dynamicPollFreq}")
     }
 
-    if (refreshSecs > 0 && refreshSecs < 60) {
+    if (baseSecs < 60) {
         // seconds
-        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
-    } else if (refreshSecs > 0) {
+        schedule("0/${baseSecs} * * * * ? *", handleTimerFired)
+    } else {
         // mins
-        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
+        schedule("0 */${(baseSecs / 60).toInteger()} * * * ? *", handleTimerFired)
     }
 }
 
@@ -1047,6 +1038,10 @@ def createChildDevices() {
         String externalId = "${app.id}.${memberId}"
         if (!childMap.containsKey(externalId)) {
             def member = state.members.find { it.id == memberId }
+            if (member == null) {
+                log.warn("createChildDevices: member ${memberId} not found in state.members — skipping")
+                return
+            }
             def memberName = member.firstName
             log.info "createChildDevices: Creating Life360 Device: ${showNamesInLogs() ? memberName : memberId}"
             try {
