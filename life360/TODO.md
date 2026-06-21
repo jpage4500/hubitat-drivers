@@ -18,10 +18,12 @@ attributes (e.g. `memberName`) are intentional and stay as-is.
 
 ### D2. On-failure token check
 
-When `handleMemberLocationResponse` hits the 3rd consecutive 401/403 and is about to set
-`tokenLikelyExpired = true`, fire `checkToken()` (`GET /users/me`) inline first. Gives a definitive
-diagnosis (real expiry vs. transient auth blip) and populates `state.tokenStatus` so the user sees the
-reason next time they open settings — without pressing the Check Token button.
+~~When `handleMemberLocationResponse` hits the 3rd consecutive 401/403 and is about to set
+`tokenLikelyExpired = true`, fire `checkToken()` (`GET /users/me`) inline first.~~
 
-**Status:** planned, not implemented. (The standalone Check Token button + the `updated()` validation
-already exist; this only adds the automatic on-failure path.)
+**Implemented (exceeded scope):** `handleTimerFired` now fires an async `/users/me` probe
+(`probeTokenAfterExpiry` → `handleTokenProbeResponse`) on every timer tick while
+`tokenLikelyExpired` is set. A 200 response auto-recovers — clears the flag, resets
+failCount, restores normal polling — without any user action. This handles the original
+diagnosis goal *and* enables full auto-recovery from transient outages (Cloudflare blips,
+Life360 downtime, etc.).
