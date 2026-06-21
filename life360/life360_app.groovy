@@ -992,6 +992,7 @@ def handleTimerFired() {
         return
     }
 
+    if (logEnable) log.debug("handleTimerFired: polling mode:${state.dynamicPollingActive ? 'DYNAMIC' : 'STANDARD'} interval:${state.pollIntervalSecs}s")
     if (!fetchLocations()) return
 }
 
