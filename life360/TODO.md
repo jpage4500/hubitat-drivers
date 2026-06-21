@@ -35,21 +35,6 @@ install, `settings.pollFreq` is null until the user opens the app and hits Done 
 
 **Fix:** `(settings.pollFreq ?: "60").toInteger()` and same for `dynamicPollFreq`.
 
-### B2. HTML tile shows speed in m/s, labelled MPH/KPH (driver, ~line 396)
-
-The tile uses the raw `speed` value (m/s from Life360) but appends "MPH" or "KPH". The
-already-converted `speedUnits` variable should be used instead.
-
-**Fix:** replace `speed` with `speedUnits` in the tile speed display line.
-
-### B3. HTML tile reads `since` from stale device state (driver, ~line 373)
-
-`long sEpoch = (device.currentValue('since') ?: 0L) as long` re-reads the previously
-stored device attribute instead of using the `since` variable already computed earlier in
-`generatePresenceEvent`. On a brand-new device this produces epoch 1970.
-
-**Fix:** use the local `since` variable directly.
-
 ### B4. `transitThreshold`/`drivingThreshold` NPE if driver preference is null (driver, ~line 288)
 
 `transitThreshold.toDouble()` throws if the preference is null (fresh device before Done

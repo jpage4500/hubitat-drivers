@@ -369,8 +369,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     else if (inTransit) binTransita = "Moving"
     else binTransita = "Not Moving"
 
-    // §8.13: long to avoid Y2K38 overflow once 'since' epoch exceeds 2^31 seconds
-    long sEpoch = (device.currentValue('since') ?: 0L) as long
+    long sEpoch = since ?: 0L
     if (sEpoch == 0L) {
         theDate = use(groovy.time.TimeCategory) {
             new Date(0)
@@ -393,7 +392,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${binTransita}"
     if (address1 != "Home" && inTransit) {
-        tileMap += " @ ${sprintf("%.1f", speed)} "
+        tileMap += " @ ${sprintf("%.1f", speedUnits)} "
         tileMap += useMiles ? "MPH" : "KPH"
     }
     tileMap += "<br>Phone Lvl: ${battery} - ${powerSource} - "
