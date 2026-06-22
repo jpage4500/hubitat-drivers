@@ -13,6 +13,12 @@
  **/
 
 import java.text.SimpleDateFormat
+import groovy.transform.Field
+
+@Field static final int    HUBITAT_TILE_MAX_CHARS  = 1024    // Hubitat dashboard tile character limit
+@Field static final int    MAX_HISTORY_ENTRIES     = 100     // max location history entries kept in state
+@Field static final long   LAT_LNG_PRECISION       = 100000L // 1e5 — 5 decimal places (~1m GPS precision)
+@Field static final double GPS_JITTER_METERS       = 5.0     // minimum movement to record a new history entry
 
 metadata {
     definition(name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
@@ -31,6 +37,7 @@ metadata {
         attribute "longitude", "number"
         attribute "accuracy", "number"
         attribute "lastUpdated", "date"
+        attribute "lastLocationUpdate", "date"
 
         // driving data
         attribute "inTransit", "enum", ["true", "false"]
@@ -72,6 +79,12 @@ metadata {
         // HTML attributes (optional)
         attribute "avatarHtml", "string"
         attribute "html", "string"
+
+        // legacy Life360 Tracker app compatibility attributes
+        attribute "bpt-history", "string"
+        attribute "numOfCharacters", "number"
+        attribute "lastLogMessage", "string"
+        attribute "lastMap", "string"
 
         command "refresh"
         // Trigger to manually force subscribe to / revalidate webhook to Life360 push notifications
@@ -151,8 +164,9 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     if (location == null) return false
 
     // -- location --
-    Double latitude = toDouble(location.latitude)
-    Double longitude = toDouble(location.longitude)
+    // round to 5 decimal places (~1m precision) — matches history storage and avoids spurious sub-meter jitter
+    Double latitude = Math.round(toDouble(location.latitude) * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
+    Double longitude = Math.round(toDouble(location.longitude) * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
     Integer accuracy = toDouble(location.accuracy).round(0).toInteger()
     Integer battery = toDouble(location.battery).round(0).toInteger()
     Boolean wifiState = toBool(location.wifiState)
@@ -181,7 +195,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     Double homeRadius = toDouble(home.radius)
 
     String address1 = (location.name) ? location.name : location.address1
-    String address2 = (location.address2) ? location.address2 : location.shortaddress
 
     // -- previous values (used for address history and location history) --
     Double prevLatitude = device.currentValue('latitude')
@@ -403,7 +416,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     tileMap += "</table></div>"
 
     int tileDevice1Count = tileMap.length()
-    if (tileDevice1Count > 1024) log.warn "generatePresenceEvent: Too many characters to display on Dashboard (${tileDevice1Count})"
+    if (tileDevice1Count > HUBITAT_TILE_MAX_CHARS) log.warn "generatePresenceEvent: Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
     return inTransit
 }
@@ -416,13 +429,13 @@ def saveLocationHistory(Double latitude, Double longitude, Long timeMs) {
         if (state.locationHistory == null) state.locationHistory = []
 
         // round lat/lng to 5 decimals (~1m precision) to keep entries compact
-        Double latRounded = Math.round(latitude * 100000) / 100000.0
-        Double lngRounded = Math.round(longitude * 100000) / 100000.0
+        Double latRounded = Math.round(latitude * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
+        Double lngRounded = Math.round(longitude * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
 
         state.locationHistory.add(0, [timeMs, latRounded, lngRounded])
 
         // cap at 100 entries
-        while (state.locationHistory.size() > 100) {
+        while (state.locationHistory.size() > MAX_HISTORY_ENTRIES) {
             state.locationHistory.remove(state.locationHistory.size() - 1)
         }
 
@@ -458,13 +471,13 @@ def getHistory() {
             Double latDeg = entry[1] as Double
             Double lngDeg = entry[2] as Double
             Long sec = (entry[0] as Long).intdiv(1000)
-            Long lat100k = Math.round(latDeg * 100000) as Long
-            Long lng100k = Math.round(lngDeg * 100000) as Long
+            Long lat100k = Math.round(latDeg * LAT_LNG_PRECISION) as Long
+            Long lng100k = Math.round(lngDeg * LAT_LNG_PRECISION) as Long
 
-            // skip subsequent entries that haven't moved >5m from the previous emitted entry (GPS jitter)
+            // skip subsequent entries that haven't moved >GPS_JITTER_METERS from the previous emitted entry
             if (prevSec != null) {
-                Double meters = haversine(prevLat100k / 100000.0, prevLng100k / 100000.0, latDeg, lngDeg) * 1000.0
-                if (meters < 5.0) continue
+                Double meters = haversine(prevLat100k / LAT_LNG_PRECISION, prevLng100k / LAT_LNG_PRECISION, latDeg, lngDeg) * 1000.0
+                if (meters < GPS_JITTER_METERS) continue
             }
 
             String token
@@ -474,7 +487,7 @@ def getHistory() {
                 token = "|${sec - prevSec},${lat100k - prevLat100k},${lng100k - prevLng100k}"
             }
 
-            if (sb.length() + token.length() > 1024) break
+            if (sb.length() + token.length() > HUBITAT_TILE_MAX_CHARS) break
             sb.append(token)
             prevSec = sec
             prevLat100k = lat100k
@@ -540,7 +553,7 @@ def sendHistory(msgValue) {
 
             for (i = 0; i < intNumOfLines && i < listSize1; i++) {
                 combined = theData1.length() + lines1[i].length()
-                if (combined < 1006) {
+                if (combined < HUBITAT_TILE_MAX_CHARS - 18) {
                     theData1 += "${lines1[i]}<br>"
                 }
             }
@@ -549,7 +562,7 @@ def sendHistory(msgValue) {
             if (logEnable) log.debug "theData1 - ${theData1.replace("<", "!")}"
 
             dataCharCount1 = theData1.length()
-            if (dataCharCount1 <= 1024) {
+            if (dataCharCount1 <= HUBITAT_TILE_MAX_CHARS) {
                 if (logEnable) log.debug "What did I Say Attribute - theData1 - ${dataCharCount1} Characters"
             } else {
                 theData1 = "Too many characters to display on Dashboard (${dataCharCount1})"
