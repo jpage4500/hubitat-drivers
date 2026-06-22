@@ -1,5 +1,14 @@
 import java.net.http.HttpTimeoutException
 import java.net.SocketTimeoutException
+import groovy.transform.Field
+
+@Field static final int    TOKEN_EXPIRED_POLL_SECS   = 300   // slow-poll rate when token is flagged expired
+@Field static final int    AUTH_FAIL_THRESHOLD        = 3     // consecutive 401/403s before flagging token expired
+@Field static final int    DEFAULT_POLL_SECS          = 30    // fallback when pollIntervalSecs is not yet set
+@Field static final int    HTTP_TIMEOUT_SECS          = 30    // default HTTP request timeout
+@Field static final int    SECS_PER_MIN               = 60    // boundary between seconds and minutes cron expressions
+@Field static final int    RATE_LIMIT_BUFFER_SECS     = 10    // extra seconds added to Retry-After on 429
+@Field static final int    RATE_LIMIT_FALLBACK_SECS   = 60    // fallback Retry-After when header is absent
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
@@ -517,7 +526,7 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     // in-flight guard (§7.1): skip if a prior request for this member is still pending
     long startMs = new Date().getTime()
     long inflightMs = (state["inflight-${memberId}"] ?: 0L) as long
-    Integer httpTimeout = clamp((state.pollIntervalSecs ?: 30) as int, 5, 30)
+    Integer httpTimeout = clamp((state.pollIntervalSecs ?: DEFAULT_POLL_SECS) as int, 5, DEFAULT_POLL_SECS)
     if (inflightMs > 0 && (startMs - inflightMs) < ((httpTimeout + 2) * 1000L)) {
         String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
         if (logEnable) log.debug("fetchMemberLocation: member:${memberName}: prior request pending, skipping")
@@ -561,9 +570,9 @@ def handleMemberLocationResponse(response, Map data) {
     if (!status) {
         int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
         state["transientCount-${memberId}"] = count
-        int pollSecs = (state.pollIntervalSecs ?: 30) as int
+        int pollSecs = (state.pollIntervalSecs ?: DEFAULT_POLL_SECS) as int
         int shift = Math.min(count - 1, 6)
-        long delaySecs = Math.min((long)(pollSecs * (1L << shift)), 300L)
+        long delaySecs = Math.min((long)(pollSecs * (1L << shift)), (long)TOKEN_EXPIRED_POLL_SECS)
         state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
         log.warn("fetchMemberLocation: NETWORK ERROR x${count} for member:${memberName}: ${response.getErrorMessage()}; backing off ${delaySecs}s")
         return
@@ -607,7 +616,7 @@ def handleMemberLocationResponse(response, Map data) {
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
         log.error("fetchMemberLocation: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
-        if (state.failCount >= 3) {
+        if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
@@ -619,7 +628,7 @@ def handleMemberLocationResponse(response, Map data) {
     } else if (status == 429) {
         Integer retryAfter = null
         try { retryAfter = response.headers?.get('Retry-After')?.toInteger() } catch (ignored) {}
-        Integer delaySecs = (retryAfter ?: 60) + 10
+        Integer delaySecs = (retryAfter ?: RATE_LIMIT_FALLBACK_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
         state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
@@ -627,9 +636,9 @@ def handleMemberLocationResponse(response, Map data) {
     } else if (status in [502, 503, 504, 520, 522, 525]) {
         int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
         state["transientCount-${memberId}"] = count
-        int pollSecs = (state.pollIntervalSecs ?: 30) as int
+        int pollSecs = (state.pollIntervalSecs ?: DEFAULT_POLL_SECS) as int
         int shift = Math.min(count - 1, 6)   // cap to prevent long overflow before Math.min clamps
-        long delaySecs = Math.min((long)(pollSecs * (1L << shift)), 300L)
+        long delaySecs = Math.min((long)(pollSecs * (1L << shift)), (long)TOKEN_EXPIRED_POLL_SECS)
         state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
         log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
         state.message = "Transient error (${status}) x${count} for member:${memberName} — backing off ${delaySecs}s, will retry automatically"
@@ -665,7 +674,7 @@ String handleException(String tag, Exception e) {
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
         log.error("${tag}: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
-        if (state.failCount >= 3) {
+        if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
@@ -682,7 +691,7 @@ String handleException(String tag, Exception e) {
     }
     if (status == 429) {
         Integer retryAfter = readRetryAfterSecs(e)
-        Integer delaySecs = (retryAfter ?: 60) + 10
+        Integer delaySecs = (retryAfter ?: RATE_LIMIT_FALLBACK_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
         log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
         state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
@@ -759,7 +768,7 @@ private Map life360Params(String path, int version = 3) {
     return [
         uri    : "${life360BaseUrl(version)}${path}",
         headers: getHttpHeaders(),
-        timeout: 30
+        timeout: HTTP_TIMEOUT_SECS
     ]
 }
 
@@ -860,7 +869,6 @@ def updated() {
     state.lastCirclesFetchMs = null // fire circles check on next poll tick
     createChildDevices()
     refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
-    state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
     scheduleUpdates()
 }
 
@@ -870,10 +878,6 @@ def initialize(evt) {
     scheduleUpdates()
 }
 
-def initialize() {
-    log.info("initialize")
-    state.message = null
-}
 
 def uninstalled() {
     log.info("uninstalled")
@@ -906,7 +910,7 @@ def scheduleUpdates() {
     // rate (10s on aggressive installs). 5 min is fast enough to pick up a fresh
     // token quickly without spamming the scheduler.
     if (state.tokenLikelyExpired) {
-        baseSecs = 300
+        baseSecs = TOKEN_EXPIRED_POLL_SECS
         wantDynamic = false
     }
 
@@ -939,12 +943,10 @@ def scheduleUpdates() {
         log.info("scheduleUpdates: baseSecs:${baseSecs}, pollFreq:${settings.pollFreq}, dynamicPollFreq:${settings.dynamicPollFreq}")
     }
 
-    if (baseSecs < 60) {
-        // seconds
+    if (baseSecs < SECS_PER_MIN) {
         schedule("0/${baseSecs} * * * * ? *", handleTimerFired)
     } else {
-        // mins
-        schedule("0 */${(baseSecs / 60).toInteger()} * * * ? *", handleTimerFired)
+        schedule("0 */${(baseSecs / SECS_PER_MIN).toInteger()} * * * ? *", handleTimerFired)
     }
 }
 

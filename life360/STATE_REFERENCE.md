@@ -167,7 +167,7 @@ Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue(
 | `accuracy` | number | GPS uncertainty radius in meters (lower = better fix) |
 | `address1` | string | Current place/address (`"Home"` when inside HOME radius; `"No Data"` if missing) |
 | `address1prev` | string | Previous value of `address1` when it changes |
-| `lastLocationUpdate` | date | When `address1` last changed (NOT every poll). Emitted via `sendEvent` but not declared in the driver's `attribute` block |
+| `lastLocationUpdate` | date | When `address1` last changed (NOT every poll) |
 | `lastUpdated` | date | When this driver event batch last ran (every poll that reaches the driver) |
 | `since` | number | Epoch seconds — Life360's "at current address since" timestamp |
 | `status` | string | `"At Home"` or `"<x.x> miles from Home"` |
@@ -208,9 +208,9 @@ Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue(
 | `avatarHtml` | string (HTML) | `<img>` of the avatar |
 | `html` | string (HTML) | Full dashboard tile (avatar + status + address + battery + WiFi + last-update) |
 
-### External-integration attributes (emitted, not declared)
+### External-integration attributes
 
-These are written by the "Life360 Tracker" external app via the driver's `sendHistory`/`sendTheMap` commands, not by `generatePresenceEvent`. None are declared in the driver's `attribute` block — they exist only because something calls `sendEvent` with that name.
+These are written by the "Life360 Tracker" external app via the driver's `sendHistory`/`sendTheMap` commands, not by `generatePresenceEvent`.
 
 | Attribute | Type | Meaning |
 | --- | --- | --- |
