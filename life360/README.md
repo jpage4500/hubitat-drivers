@@ -119,7 +119,7 @@ Works with the HD+ dashboard: <https://joe-page-software.gitbook.io/hubitat-dash
 - [CHANGELOG.md](CHANGELOG.md) — version-by-version history for both the app and the driver, including user-facing highlights for each release.
 - [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md) — developer-level delta vs. the upstream baseline (function names, error handling, state changes).
 - [STATE_REFERENCE.md](STATE_REFERENCE.md) — every setting, state var, scheduled job, and child-device attribute.
-- [TODO.md](TODO.md) — remaining known issues and follow-up work.
+- [APP_SPEC.md](APP_SPEC.md) — clean-room design specification (the code is authoritative; the spec records intent and notes any divergences).
 
 ## History
 

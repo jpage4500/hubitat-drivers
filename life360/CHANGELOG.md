@@ -24,6 +24,7 @@ Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integratio
 - **Check Token** — validates your access token with an inline success/failure result on the settings page, including a "Hi, name!" confirmation. Also re-reads the account's units preference.
 - **Units auto-detected** — speed and distance follow your Life360 account's imperial/metric preference, fetched automatically from `/users/me`. The per-device `isMiles` toggle is a fallback only.
 - **Dynamic polling reacts immediately** — when a member starts or stops moving, the polling rate switches on the same tick instead of lagging a full cycle.
+- **Membership auto-sync** — a once-per-minute circles poll watches the circle's member count; when it changes, the member list is refreshed and child devices are reconciled (new members get a device, departed members' devices are removed) and existing devices get refreshed names/avatars — no need to reopen the app.
 
 ### Settings page
 
@@ -59,7 +60,7 @@ Against the 5.1.3 / 5.1.4 baseline:
 
 ### Documentation
 
-[README.md](README.md) rewritten. [CODE_REVIEW.md](CODE_REVIEW.md) added (findings by severity). [STATE_REFERENCE.md](STATE_REFERENCE.md) added (every setting, state var, scheduled job, and attribute). Developer-level change details in [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
+[README.md](README.md) rewritten. [STATE_REFERENCE.md](STATE_REFERENCE.md) added (every setting, state var, scheduled job, and attribute). [APP_SPEC.md](APP_SPEC.md) records the clean-room design (the code is authoritative). Developer-level change details in [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
 
 ---
 

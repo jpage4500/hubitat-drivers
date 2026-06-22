@@ -27,7 +27,7 @@
 
 ### Error handling
 - Auth failures (`401`/`403`) in `handleMemberLocationResponse` now log `jar-at-failure [...]` (cookie names) before clearing session, distinguishing a token problem from a cookie-path problem.
-- Per-member exponential transient backoff for `502`/`503`/`504`/`520`: `state["transientCount-${memberId}"]` increments on each consecutive error; delay = `min(pollSecs * 2^(count-1), 300s)`. Bit-shift exponent capped at 6 to prevent `long` overflow. Clears on success.
+- Per-member exponential transient backoff for `502`/`503`/`504`/`520`/`522`/`525` **and** network-level failures (no HTTP status): `state["transientCount-${memberId}"]` increments on each consecutive error; delay = `min(pollSecs * 2^(count-1), 300s)`. Bit-shift exponent capped at 6 to prevent `long` overflow. Clears on success.
 - Rate-limit (`429`) handling extracts `Retry-After` header from async response headers (Map lookup, not `getFirstHeader`), adds 10s margin.
 - `clearSessionCache()` extended to also remove `inflight-*`, `transientCount-*`, `transientUntilMs-*` keys in addition to `etag-*` and `cookies`.
 - Watchdog fires only on the rising edge (`state.watchdogWarned` flag); previously logged on every tick after threshold exceeded.
@@ -40,7 +40,8 @@
 
 ### New endpoints
 - **Force Update:** `POST /circles/<circleId>/members/<memberId>/request` with `body: {type: "location"}` via `forceMemberUpdate()` → `asynchttpPost` → `handleForceUpdateResponse`. Schedules `fetchLocations` 6 seconds later on success. UI: member dropdown + **Force Update** button in a section gated on `!isEmpty(settings.users)`.
-- **Circles poll:** `handleTimerFired` fires `asynchttpGet` to `GET /circles` once per minute (rate-limited via `state.lastCirclesFetchMs`). `handleCirclesPollResponse` compares `circle.memberCount` against `state.memberCount`; triggers `fetchMembers()` on change or on first-seen baseline.
+- **Circles poll:** `handleTimerFired` fires `asynchttpGet` to `GET /circles` (v3) once per minute (rate-limited via `state.lastCirclesFetchMs`). `handleCirclesPollResponse` compares `circle.memberCount` against `state.memberCount`; triggers `fetchMembers()` on change or on first-seen baseline. (v3 is used for the poll because the v4 `/circles` list response returns `memberCount:"0"`; the setup-only Fetch Circles button uses v4 for its richer circle data.)
+- **Membership → device reconciliation:** `handleMembersResponse` (the `fetchMembers` callback) now calls `createChildDevices()` on a 200 — creating devices for newly selected members, removing orphans — and pushes refreshed name/avatar/location to every selected member that has a device. Previously the membership poll refreshed only `state.members`; device create/cleanup happened solely on `installed()`/`updated()`.
 
 ### Child device management
 - `createChildDevices()` hoists `getChildDevices()` once into a `Map childMap` keyed by DNI (was O(N²) hub device-list walks).
