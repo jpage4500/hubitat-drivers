@@ -199,12 +199,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // -- previous values (used for address history and location history) --
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
-    Integer prevAccuracy = device.currentValue('accuracy')
-
-    // detect if lat/lng/accuracy changed — used for location history gating
-    Boolean isLocationChanged = (prevLatitude == null || prevLatitude != latitude
-        || prevLongitude == null || prevLongitude != longitude
-        || prevAccuracy == null || prevAccuracy != accuracy)
 
     if (parent?.getLogRawPayload()) log.trace("RAW L360 ${displayMember(memberFirstName)}: ${location}")
 
@@ -245,7 +239,6 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // Where we think we are now is either at a named place or at address1
     // or perhaps we are on the free version of Life360 (address1  = null)
     if (address1 == null || address1 == "") address1 = "No Data"
-    if (address2 == null || address2 == "") address2 = "No Data"
 
     // *** Address ***
     // If we are present then we are Home...
@@ -385,6 +378,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     else binTransita = "Not Moving"
 
     long sEpoch = since ?: 0L
+    def theDate
     if (sEpoch == 0L) {
         theDate = use(groovy.time.TimeCategory) {
             new Date(0)
@@ -399,7 +393,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
 
-    tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
+    String tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
     tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
     tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" : address1}</a><br>"
@@ -533,11 +527,12 @@ def sendHistory(msgValue) {
             if (state.list1 == null) state.list1 = []
 
             def date = new Date()
-            newDate = date.format("E HH:mm")
+            String newDate = date.format("E HH:mm")
 
-            last = "${newDate} - ${msgValue}"
+            String last = "${newDate} - ${msgValue}"
             state.list1.add(0, last)
 
+            int listSize1
             if (state.list1) {
                 listSize1 = state.list1.size()
             } else {
@@ -549,10 +544,10 @@ def sendHistory(msgValue) {
             String result1 = state.list1.join(";")
             def lines1 = result1.split(";")
 
-            theData1 = "<div style='overflow:auto;height:90%'><table style='text-align:left;font-size:${avatarFontSize}px'><tr><td>"
+            String theData1 = "<div style='overflow:auto;height:90%'><table style='text-align:left;font-size:${avatarFontSize}px'><tr><td>"
 
-            for (i = 0; i < intNumOfLines && i < listSize1; i++) {
-                combined = theData1.length() + lines1[i].length()
+            for (int i = 0; i < intNumOfLines && i < listSize1; i++) {
+                int combined = theData1.length() + lines1[i].length()
                 if (combined < HUBITAT_TILE_MAX_CHARS - 18) {
                     theData1 += "${lines1[i]}<br>"
                 }
@@ -561,7 +556,7 @@ def sendHistory(msgValue) {
             theData1 += "</table></div>"
             if (logEnable) log.debug "theData1 - ${theData1.replace("<", "!")}"
 
-            dataCharCount1 = theData1.length()
+            int dataCharCount1 = theData1.length()
             if (dataCharCount1 <= HUBITAT_TILE_MAX_CHARS) {
                 if (logEnable) log.debug "What did I Say Attribute - theData1 - ${dataCharCount1} Characters"
             } else {
@@ -597,7 +592,7 @@ def historyClearData() {
  * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
  */
 def sendTheMap(theMap) {
-    lastMap = "${theMap}"
+    String lastMap = "${theMap}"
     sendEvent(name: "lastMap", value: lastMap, displayed: true)
 }
 
