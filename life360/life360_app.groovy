@@ -329,14 +329,13 @@ private void forceMemberUpdate(String memberId) {
         return
     }
     String memberName = showNamesInLogs() ? (state.members?.find { it.id == memberId }?.firstName ?: memberId) : memberId
-    String url = "${life360BaseUrl()}/circles/${circle}/members/${memberId}/request"
     String body = groovy.json.JsonOutput.toJson([type: "location"])
     String cookies = state["cookies"]
 
     // Diagnostic chatter — gated behind logRawPayload. Includes URL (with circle/member UUIDs),
     // partial Bearer token, partial Cloudflare cookie head, User-Agent.
     if (getLogRawPayload()) {
-        log.trace("forceMemberUpdate: POST ${url}")
+        log.trace("forceMemberUpdate: POST ${life360BaseUrl()}/circles/${circle}/members/${memberId}/request")
         log.trace("forceMemberUpdate: body: ${body}")
         log.trace("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
         log.trace("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
@@ -620,7 +619,7 @@ def handleMemberLocationResponse(response, Map data) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
-            if (!wasExpired) { notifyTokenExpired(); scheduleUpdates() }
+            if (!wasExpired) { scheduleUpdates(); notifyTokenExpired() }
         } else {
             state.message = "AUTH ERROR (${status}) on fetchMemberLocation member:${memberName}; cleared session, will retry"
         }
@@ -847,7 +846,6 @@ boolean getLogRawPayload() {
 def installed() {
     log.info("installed")
     createChildDevices()
-    // re-schedule updates on reboot; TODO: is this needed?
     subscribe(location, 'systemStart', initialize)
     refreshUserSettings()           // learn the account's units preference (settings.unitOfMeasure)
     state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
@@ -1171,7 +1169,7 @@ private Map buildPlacesContext() {
     // serialize the places JSON once per poll — it's identical for every member,
     // so the driver shouldn't re-serialize it N times (§4.5)
     String placesJson = new groovy.json.JsonBuilder(placesMap).toString()
-    return [placesMap: placesMap, placesJson: placesJson, home: home]
+    return [placesJson: placesJson, home: home]
 }
 
 void captureCookies(response) {
