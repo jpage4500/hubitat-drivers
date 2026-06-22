@@ -39,9 +39,9 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 
 | Variable | Type | Set by | Notes |
 | --- | --- | --- | --- |
-| `circles` | List | `fetchCircles()` | Raw response from `/v3/circles` for the circle picker |
-| `places` | List | `fetchPlaces()` | Raw response from `/v3/circles/<id>/places.json` for the HOME picker |
-| `members` | List | `fetchMembers()` | Raw response from `/v3/circles/<id>/members` for the user picker |
+| `circles` | List | `fetchCircles()` | Raw response from `/v4/circles` for the circle picker (the setup button uses v4; the once-per-minute membership poll uses v3) |
+| `places` | List | `fetchPlaces()` | Raw response from `/v3/circles/<id>/places` for the HOME picker |
+| `members` | List | `fetchMembers()` | Raw response from `/v3/circles/<id>/members` for the user picker. A successful fetch also runs `createChildDevices()` (create new / remove orphaned) and pushes refreshed name/avatar/location to existing devices |
 | `accessToken` | String | `createAccessToken()` (OAuth) | Token used for the `/view` map endpoint URL |
 
 ---
@@ -59,8 +59,8 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | `cookies` | String | `captureCookies` / `captureCookiesAsync` (via `mergeCookie`) | `clearSessionCache()` (auth errors) | `Cookie` header value (`__cf_bm` + `_cfuvid`) sent on subsequent requests. Merged by name so a rotating `__cf_bm` never drops `_cfuvid` |
 | `etag-<memberId>` | String | `handleMemberLocationResponse` on 200 OK | `clearSessionCache()` | Per-member `If-None-Match` value for 304-not-modified responses |
 | `inflight-<memberId>` | Long (epoch ms) | `fetchMemberLocation` before `asynchttpGet` | `handleMemberLocationResponse` / `clearSessionCache()` | In-flight marker; prevents async-HTTP pile-up |
-| `transientCount-<memberId>` | Integer | `handleMemberLocationResponse` on 5xx (502/503/504/520) | 200/304 success, `clearSessionCache()` | Consecutive-transient-error streak; drives exponential backoff |
-| `transientUntilMs-<memberId>` | Long (epoch ms) | `handleMemberLocationResponse` on 5xx | 200/304 success, `clearSessionCache()` | Skip this member's fetch until this time (capped 300s backoff) |
+| `transientCount-<memberId>` | Integer | `handleMemberLocationResponse` on 5xx (502/503/504/520/522/525) or a network-level error (no status) | 200/304 success, `clearSessionCache()` | Consecutive-transient-error streak; drives exponential backoff (shift exponent capped at 6 to avoid `long` overflow) |
+| `transientUntilMs-<memberId>` | Long (epoch ms) | `handleMemberLocationResponse` on 5xx or network error | 200/304 success, `clearSessionCache()` | Skip this member's fetch until this time (capped 300s backoff) |
 
 ### Polling / scheduling
 
@@ -77,8 +77,8 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 
 | Variable | Type | Set by | Notes |
 | --- | --- | --- | --- |
-| `memberCount` | Integer | `handleCirclesPollResponse` | Baseline circle member count; a change vs the circles poll triggers `fetchMembers()`. Reset to `null` by `updated()` to re-baseline |
-| `lastCirclesFetchMs` | Long | `handleTimerFired` | Throttles the `/circles` membership poll to at most once per minute |
+| `memberCount` | Integer | `handleCirclesPollResponse` | Baseline circle member count from the once-per-minute v3 `/circles` poll; a change triggers `fetchMembers()` (which reconciles child devices and refreshes names/avatars). On first baseline, also triggers an initial `fetchMembers()` if `state.members` is empty. Reset to `null` by `updated()` to re-baseline |
+| `lastCirclesFetchMs` | Long | `handleTimerFired` | Throttles the v3 `/circles` membership poll to at most once per minute. Reset to `null` by `updated()` so the next tick re-checks membership |
 
 ### UI one-shot status (button results)
 
@@ -105,7 +105,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Handler | Schedule | Set by | Purpose |
 | --- | --- | --- | --- |
-| `handleTimerFired` | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *` | `scheduleUpdates()` | Each tick: run the stale-data watchdog, poll `/circles` at most once per minute to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then either probe `/users/me` (when `tokenLikelyExpired`) or call `fetchLocations()` |
+| `handleTimerFired` | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *` | `scheduleUpdates()` | Each tick: run the stale-data watchdog, poll v3 `/circles` at most once per minute to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then either probe `/users/me` (when `tokenLikelyExpired`) or call `fetchLocations()` |
 | `sendTokenExpiryReminder` | one-shot `runIn(<notifyRepeatHours>h)`, self-rescheduling | `notifyTokenExpired()` / `scheduleTokenExpiryReminder()` | Repeats the token-expiry notification while `tokenLikelyExpired` stays true; chain stops once the token is refreshed or `notifyRepeatHours = never` |
 
 `baseSecs` = `pollFreq` (or `dynamicPollFreq` when dynamic polling is active); forced to 300 when `tokenLikelyExpired`. The fixed periodic `fetchMembers` timer was removed — membership is now detected via the once-per-minute `/circles` poll-count diff in `handleTimerFired`.

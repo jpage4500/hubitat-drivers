@@ -284,12 +284,14 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // Trust Life360's inTransit/isDriving flags directly.
     // Manual thresholds (transitThreshold/drivingThreshold) let the user override
     // with speed-based logic if they choose — otherwise Life360's values stand.
-    boolean thresholdActive = (transitThreshold.toDouble() > 0.0 || drivingThreshold.toDouble() > 0.0)
-    if (transitThreshold.toDouble() > 0.0) {
-        inTransit = (speedUnits >= transitThreshold.toDouble())
+    double transitThresholdD = (transitThreshold ?: 0).toDouble()
+    double drivingThresholdD = (drivingThreshold ?: 0).toDouble()
+    boolean thresholdActive = (transitThresholdD > 0.0 || drivingThresholdD > 0.0)
+    if (transitThresholdD > 0.0) {
+        inTransit = (speedUnits >= transitThresholdD)
     }
-    if (drivingThreshold.toDouble() > 0.0) {
-        isDriving = (speedUnits >= drivingThreshold.toDouble())
+    if (drivingThresholdD > 0.0) {
+        isDriving = (speedUnits >= drivingThresholdD)
     }
 
     if (inTransit || isDriving) {

@@ -458,16 +458,16 @@ def handleMembersResponse(response, data) {
         if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
         state.message = null
 
-        // notify child devices for members that don't have one yet
+        // sync child devices: create for newly selected members, remove departed ones
+        createChildDevices()
+
+        // push refreshed name/avatar/location to all selected members that have a device
         settings.users?.each { memberId ->
-            def externalId = "${app.id}.${memberId}"
-            if (!getChildDevice("${externalId}")) {
-                def member = state.members?.find { it.id == memberId }
-                // /circles/<id>/members doesn't always include location; the driver
-                // early-returns on a null location anyway, but guard explicitly so the
-                // intent is visible here and a future API change can't surprise us.
-                if (member?.location) notifyChildDevice(memberId, member)
-            }
+            def member = state.members?.find { it.id == memberId }
+            // /circles/<id>/members doesn't always include location; the driver
+            // early-returns on a null location anyway, but guard explicitly so the
+            // intent is visible here and a future API change can't surprise us.
+            if (member?.location) notifyChildDevice(memberId, member)
         }
     } else {
         log.error("fetchMembers: bad response:${status}")
@@ -622,7 +622,7 @@ def handleMemberLocationResponse(response, Map data) {
         Integer delaySecs = (retryAfter ?: 60) + 10
         state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
+        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
 
     } else if (status in [502, 503, 504, 520, 522, 525]) {
         int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
@@ -632,7 +632,7 @@ def handleMemberLocationResponse(response, Map data) {
         long delaySecs = Math.min((long)(pollSecs * (1L << shift)), 300L)
         state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
         log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
-        state.message = "TRANSIENT ${status} x${count} on fetchMemberLocation member:${memberName}"
+        state.message = "Transient error (${status}) x${count} for member:${memberName} — backing off ${delaySecs}s, will retry automatically"
 
     } else {
         log.error("fetchMemberLocation: unexpected response:${status} for member:${memberName}")
@@ -685,12 +685,12 @@ String handleException(String tag, Exception e) {
         Integer delaySecs = (retryAfter ?: 60) + 10
         state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
         log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
+        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
         return "RATE_LIMIT"
     }
     if (status != null && (status == 502 || status == 503 || status == 504 || status == 520)) {
         log.warn("${tag}: TRANSIENT (${status}); will retry next tick")
-        state.message = "TRANSIENT ${status} on ${tag}"
+        state.message = "Transient error (${status}) — will retry automatically"
         return "TRANSIENT"
     }
     def err = null
@@ -891,12 +891,14 @@ def refresh() {
 def scheduleUpdates() {
     // pick the desired base rate (no jitter), so we can detect no-op rebuilds
     Integer baseSecs
+    int pollFreq = (settings.pollFreq ?: "60").toInteger()
+    int dynamicPollFreq = (settings.dynamicPollFreq ?: "20").toInteger()
     boolean wantDynamic = (settings.dynamicPolling && state.memberInTransit
-        && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger()))
+        && (pollFreq > dynamicPollFreq))
     if (wantDynamic) {
-        baseSecs = settings.dynamicPollFreq.toInteger()
+        baseSecs = dynamicPollFreq
     } else {
-        baseSecs = settings.pollFreq.toInteger()
+        baseSecs = pollFreq
     }
 
     // when token is flagged expired, slow polling to 5 minutes — fetchLocations
