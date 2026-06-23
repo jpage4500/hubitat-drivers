@@ -17,8 +17,14 @@ import groovy.transform.Field
 
 @Field static final int    HUBITAT_TILE_MAX_CHARS  = 1024    // Hubitat dashboard tile character limit
 @Field static final int    MAX_HISTORY_ENTRIES     = 100     // max location history entries kept in state
+@Field static final int    MAX_HISTORY_LOG_LINES   = 10      // max lines shown in the bpt-history tile
+@Field static final int    HISTORY_TILE_FOOTER_LEN = 18      // byte length of "</table></div>" closing tag
 @Field static final long   LAT_LNG_PRECISION       = 100000L // 1e5 — 5 decimal places (~1m GPS precision)
-@Field static final double GPS_JITTER_METERS       = 5.0     // minimum movement to record a new history entry
+@Field static final double GPS_JITTER_METERS       = 5.0      // minimum movement to record a new history entry
+@Field static final double MS_TO_MPH               = 2.23694  // m/s → miles per hour
+@Field static final double MS_TO_KPH               = 3.6      // m/s → kilometres per hour
+@Field static final double KM_PER_MI               = 1.609344 // kilometres per mile (divisor for km→mi)
+@Field static final double EARTH_RADIUS_KM         = 6372.8   // mean Earth radius in km (used in haversine)
 
 metadata {
     definition(name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
@@ -72,9 +78,9 @@ metadata {
         attribute "history", "string"
 
         // hubitat device states
-        attribute "contact", "string"
-        attribute "acceleration", "string"
-        attribute "switch", "string"
+        attribute "contact", "enum", ["open", "closed"]
+        attribute "acceleration", "enum", ["active", "inactive"]
+        attribute "switch", "enum", ["on", "off"]
 
         // HTML attributes (optional)
         attribute "avatarHtml", "string"
@@ -140,10 +146,6 @@ def refresh() {
 
 def installed() {
     log.info "installed: Location Tracker User Driver Installed"
-
-    if (logEnable) log.debug "installed: Setting attributes to initial values"
-
-    sendEvent(name: "address1prev", value: "No Data")
 }
 
 def updated() {
@@ -162,6 +164,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     //log.trace("generatePresenceEvent: member:${member}")
     def location = member.location
     if (location == null) return false
+
+    // hoist parent IPC calls once per event — avoids repeated cross-device calls in the hot path
+    boolean showNames = true
+    try { showNames = (parent?.getShowNamesInLogs() != false) } catch (ignored) {}
+    boolean showMapsLink = true
+    try { showMapsLink = (parent?.getShowMapsLink() != false) } catch (ignored) {}
 
     // -- location --
     // round to 5 decimal places (~1m precision) — matches history storage and avoids spurious sub-meter jitter
@@ -200,12 +208,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
 
-    if (parent?.getLogRawPayload()) log.trace("RAW L360 ${displayMember(memberFirstName)}: ${location}")
+    if (parent?.getLogRawPayload()) log.trace("RAW L360 ${displayMember(memberFirstName, showNames)}: ${location}")
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.debug "generatePresenceEvent: changed: lat:$latitude lng:$longitude acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s (${((speed * 2.23694)).round(2)}mph) inTransit:$inTransit isDriving:$isDriving"
+    if (logEnable) log.debug "generatePresenceEvent: changed: lat:$latitude lng:$longitude acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s inTransit:$inTransit isDriving:$isDriving"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -222,10 +230,10 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     String avatarHtml
     if (member.avatar != null) {
         avatar = member.avatar
-        avatarHtml = "<img src= \"${avatar}\">"
+        avatarHtml = avatar.startsWith("http") ? "<img src=\"${avatar}\">" : ""
     } else {
-        avatar = "not set"
-        avatarHtml = "not set"
+        avatar = ""
+        avatarHtml = ""
     }
     sendEvent(name: "avatar", value: avatar)
 
@@ -283,8 +291,8 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         Boolean apiMiles = parent?.getUnitIsMiles()
         if (apiMiles != null) useMiles = apiMiles
     } catch (ignored) {}
-    speedUnits = (speed * (useMiles ? 2.23694 : 3.6)).round(2)
-    distanceUnits = ((distanceAway / 1000) / ((useMiles ? 1.609344 : 1))).round(2)
+    speedUnits = (speed * (useMiles ? MS_TO_MPH : MS_TO_KPH)).round(2)
+    distanceUnits = ((distanceAway / 1000) / (useMiles ? KM_PER_MI : 1)).round(2)
 
     // ── Motion state ─────────────────────────────────────────────────────────────
     // Trust Life360's inTransit/isDriving flags directly.
@@ -301,14 +309,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     }
 
     if (inTransit || isDriving) {
-        boolean showMaps = true
-        try { showMaps = (parent?.getShowMapsLink() != false) } catch (ignored) {}
-        String suffix = showMaps ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
-        log.info("${displayMember(memberFirstName)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
+        String suffix = showMapsLink ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
+        log.info("${displayMember(memberFirstName, showNames)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
     }
     // Only worth logging when a threshold override is in play — otherwise this just restates
     // the RAW L360 flags (and the "moving @" line already shows the speed). §5.4 trust-the-payload.
-    if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName)}: " +
+    if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName, showNames)}: " +
         "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} (threshold override)")
 
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : " km from Home")
@@ -319,8 +325,8 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     sendEvent(name: "status", value: sStatus)
 
-    sendEvent(name: "inTransit", value: inTransit)
-    sendEvent(name: "isDriving", value: isDriving)
+    sendEvent(name: "inTransit", value: inTransit.toString())
+    sendEvent(name: "isDriving", value: isDriving.toString())
     sendEvent(name: "speed", value: speedUnits)
     sendEvent(name: "distance", value: distanceUnits)
     sendEvent(name: "userActivity", value: userActivity)
@@ -333,20 +339,21 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     sendEvent(name: "battery", value: battery)
 
     // *** Charging State ***
-    String powerSource = charge ? "DC" : "BTRY"
-    sendEvent(name: "charge", value: charge)
+    String powerSource = charge ? "dc" : "battery"   // canonical Power Source capability enum values
+    String powerSourceDisplay = charge ? "DC" : "BTRY"  // abbreviated form used in tile display only
+    sendEvent(name: "charge", value: charge.toString())
     sendEvent(name: "powerSource", value: powerSource)
     // REPURPOSED CAPABILITY (§5.4): 'contact' open/closed = charging / on battery (NOT a contact sensor)
     sendEvent(name: "contact", value: charge ? "open" : "closed")
 
     // *** Wifi ***
-    sendEvent(name: "wifiState", value: wifiState)
+    sendEvent(name: "wifiState", value: wifiState.toString())
     // REPURPOSED CAPABILITY (§5.4): 'switch' on/off = WiFi connected / not (NOT a controllable switch)
     sendEvent(name: "switch", value: wifiState ? "on" : "off")
 
     // ** Member Features **
     if (member.features != null) {
-        sendEvent(name: "shareLocation", value: member.features.shareLocation)
+        sendEvent(name: "shareLocation", value: toBool(member.features.shareLocation).toString())
     }
 
     // ** Member Communications **
@@ -372,10 +379,10 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
     sendEvent(name: "avatarHtml", value: avatarHtml)
 
-    String binTransita
-    if (isDriving) binTransita = "Driving"
-    else if (inTransit) binTransita = "Moving"
-    else binTransita = "Not Moving"
+    String motionLabel
+    if (isDriving) motionLabel = "Driving"
+    else if (inTransit) motionLabel = "Moving"
+    else motionLabel = "Not Moving"
 
     long sEpoch = since ?: 0L
     def theDate
@@ -394,17 +401,17 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     String theMap = "https://www.google.com/maps/search/?api=1&query=" + latitude.toString() + "," + longitude.toString()
 
     String tileMap = "<div style='overflow:auto;height:90%'><table width='100%'>"
-    tileMap += "<tr><td width='25%' align=center><img src='${avatar}' height='${avatarSize}%'>"
+    tileMap += "<tr><td width='25%' align=center>${(avatar && avatar.startsWith("http")) ? "<img src='${avatar}' height='${avatarSize}%'>" : ""}"
     tileMap += "<td width='75%'><p style='font-size:${avatarFontSize}px'>"
-    tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" : address1}</a><br>"
+    tileMap += "At: <a href='${theMap}' target='_blank'>${address1 == "No Data" ? "Between Places" : escapeHtml(address1)}</a><br>"
     tileMap += "Since: ${dateSince}<br>"
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
-    tileMap += "${binTransita}"
+    tileMap += "${motionLabel}"
     if (address1 != "Home" && inTransit) {
         tileMap += " @ ${sprintf("%.1f", speedUnits)} "
         tileMap += useMiles ? "MPH" : "KPH"
     }
-    tileMap += "<br>Phone Lvl: ${battery} - ${powerSource} - "
+    tileMap += "<br>Phone Lvl: ${battery} - ${powerSourceDisplay} - "
     tileMap += wifiState ? "WiFi" : "No WiFi"
     tileMap += "<br><p style='width:100%'>${lastUpdated}</p>"
     tileMap += "</table></div>"
@@ -457,7 +464,6 @@ def getHistory() {
     try {
         def entries = state.locationHistory ?: []
         StringBuilder sb = new StringBuilder("1")
-        int count = 0
         Long prevSec = null
         Long prevLat100k = null
         Long prevLng100k = null
@@ -476,7 +482,7 @@ def getHistory() {
 
             String token
             if (prevSec == null) {
-                token = "|${sec},${lat100k / 100000.0},${lng100k / 100000.0}"
+                token = "|${sec},${lat100k / (LAT_LNG_PRECISION as double)},${lng100k / (LAT_LNG_PRECISION as double)}"
             } else {
                 token = "|${sec - prevSec},${lat100k - prevLat100k},${lng100k - prevLng100k}"
             }
@@ -486,7 +492,6 @@ def getHistory() {
             prevSec = sec
             prevLat100k = lat100k
             prevLng100k = lng100k
-            count++
         }
 
         String result = sb.toString()
@@ -501,7 +506,7 @@ def getHistory() {
 
 // §8.12: pure math, no instance state — make static
 static def haversine(lat1, lon1, lat2, lon2) {
-    Double R = 6372.8
+    Double R = EARTH_RADIUS_KM
     // In kilometers
     Double dLat = Math.toRadians(lat2 - lat1)
     Double dLon = Math.toRadians(lon2 - lon1)
@@ -532,23 +537,16 @@ def sendHistory(msgValue) {
             String last = "${newDate} - ${msgValue}"
             state.list1.add(0, last)
 
-            int listSize1
-            if (state.list1) {
-                listSize1 = state.list1.size()
-            } else {
-                listSize1 = 0
-            }
+            int listSize1 = state.list1.size()
 
-            int intNumOfLines = 10
-            if (listSize1 > intNumOfLines) state.list1.removeAt(intNumOfLines)
-            String result1 = state.list1.join(";")
-            def lines1 = result1.split(";")
+            if (listSize1 > MAX_HISTORY_LOG_LINES) state.list1.removeAt(MAX_HISTORY_LOG_LINES)
+            def lines1 = state.list1
 
             String theData1 = "<div style='overflow:auto;height:90%'><table style='text-align:left;font-size:${avatarFontSize}px'><tr><td>"
 
-            for (int i = 0; i < intNumOfLines && i < listSize1; i++) {
+            for (int i = 0; i < MAX_HISTORY_LOG_LINES && i < listSize1; i++) {
                 int combined = theData1.length() + lines1[i].length()
-                if (combined < HUBITAT_TILE_MAX_CHARS - 18) {
+                if (combined < HUBITAT_TILE_MAX_CHARS - HISTORY_TILE_FOOTER_LEN) {
                     theData1 += "${lines1[i]}<br>"
                 }
             }
@@ -592,34 +590,47 @@ def historyClearData() {
  * for compatibility with Life360 Tracker app (https://community.hubitat.com/t/release-life360-tracker-works-with-the-life360-app/18276)
  */
 def sendTheMap(theMap) {
-    String lastMap = "${theMap}"
-    sendEvent(name: "lastMap", value: lastMap, displayed: true)
+    sendEvent(name: "lastMap", value: theMap.toString(), displayed: true)
+}
+
+/**
+ * Minimal HTML entity escaper for Hubitat's sandboxed Groovy.
+ * Uses String.replace() chains — no regex — to stay sandbox-safe.
+ * '&' must be replaced first to prevent double-escaping.
+ */
+static String escapeHtml(String s) {
+    if (s == null) return ""
+    return s.replace("&", "&amp;")
+             .replace("<", "&lt;")
+             .replace(">", "&gt;")
+             .replace("\"", "&quot;")
+             .replace("'", "&#39;")
 }
 
 /**
  * null-safe toDouble()
  */
 static double toDouble(Object object) {
-    if (object) return object.toDouble()
+    if (object != null) return object.toDouble()
     else return 0
 }
 
 /**
- * null-safe toBool()
+ * null-safe toBool() — handles Life360 "1"/"0" strings and native JSON booleans
  */
 static boolean toBool(Object object) {
-    if (object) return object == "1"
-    else return false
+    if (object == null) return false
+    if (object instanceof Boolean) return object
+    return object == "1"
 }
 
 /**
  * If the parent app has "Include Names and Places in Logs" enabled (default),
  * return the supplied firstName; otherwise return the memberId parsed from
  * device.deviceNetworkId = "${app.id}.${memberId}".
+ * showNames must be pre-resolved by the caller (hoisted from the hot path).
  */
-private String displayMember(String firstName) {
-    boolean showNames = true
-    try { showNames = (parent?.getShowNamesInLogs() != false) } catch (ignored) {}
+private String displayMember(String firstName, boolean showNames) {
     if (showNames) return firstName
     String dni = device.deviceNetworkId ?: ""
     int dot = dni.indexOf('.')

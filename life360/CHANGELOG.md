@@ -10,6 +10,46 @@ Last published release on [the community thread](https://community.hubitat.com/t
 
 ## Y.Y.Y — unreleased
 
+### 2026-06-23 — second audit pass (all items closed)
+
+Bug fixes, security hardening, and code hygiene from an exhaustive fresh audit of both files.
+
+**Bugs fixed:**
+- **"Since:" tile field showed ~year 55,000.** `sEpoch.seconds` was treating a Unix epoch timestamp as a `TimeCategory` duration. Fixed: `new Date(sEpoch * 1000L)`.
+- **Stored XSS in map view.** Member names and addresses from the Life360 API were injected raw into the `<script>` block of both map HTML builders via `JsonBuilder`. `JsonBuilder` does not HTML-escape `<`/`>`, so a member name containing `</script>` could inject arbitrary JS. Fixed: encode `&`/`<`/`>` as JSON unicode escapes (`&`/`<`/`>`) after serialization.
+- **Token-expiry reminder silently cancelled on poll-rate change.** `scheduleUpdates()` calls `unschedule()` (no arg), which cancels every scheduled job including the token-expiry reminder chain. If the token was already expired and the user clicked Done with a different poll frequency, the reminder was killed and never re-armed. Fixed: `if (state.tokenLikelyExpired) notifyTokenExpired()` after `unschedule()`.
+- **In-flight keys not cleared on hub restart.** A hub reboot mid-request left `inflight-<memberId>` keys set permanently, blocking all future polls for those members. Fixed: `initialize()` now calls `clearSessionCache()` before re-arming the schedule.
+- **`handleTokenProbeResponse`: flag-clear could be skipped by a parse error.** `captureUnitOfMeasure(response.json)` ran before `state.tokenLikelyExpired = false`. If the 200 response had a garbled body, the exception left the app stuck in slow-poll despite a valid auth response. Fixed: state clears moved before the JSON parse.
+
+**Security:**
+- Google Maps API key was embedded in `<script src>` without HTML-encoding. A `"` in the key would break out of the attribute. Fixed: `&`/`"`/`<`/`>` encoded before embedding.
+
+**Error handling:**
+- `handleUserSettingsResponse` 200 path called `response.json` without try/catch (every other async handler had this guard). Fixed.
+- `response.getErrorMessage()` returned null in six handlers; GString rendered the literal string `"null"` in logs and the UI banner. Fixed: `?: "(no details)"` on all call sites.
+
+**API correctness:**
+- `sendEvent` for `inTransit`, `isDriving`, `charge`, `wifiState` passed a Groovy `Boolean` — coercion to `"true"`/`"false"` string was implicit. Fixed: `.toString()` explicit.
+- `shareLocation` was sent as `"1"`/`"0"` (raw Life360 API value). Rules comparing `== "true"` silently failed. Fixed: `toBool(...).toString()`.
+- `contact`, `acceleration`, `switch` attributes were declared as `"string"` instead of proper `"enum"` types, suppressing Hubitat's built-in dashboard tile support for those capabilities. Fixed.
+
+**Platform/Groovy:**
+- `toDouble(0)`: `if (object)` treated integer `0` as falsy (Groovy truthiness), returning 0 via the null branch. Fixed: `if (object != null)`.
+- `settings.pollFreq?.toString() ?: "60"` before `.toInteger()` — prevents failure if Hubitat returns the enum setting as an `Integer`.
+
+**Cleanup:**
+- Single-arg `displayMember(String)` overload had no call sites — deleted.
+- Named constants added: `FORCE_UPDATE_FETCH_DELAY_SECS`, `CIRCLES_API_VERSION`, `MAX_BACKOFF_SHIFT` (app); `EARTH_RADIUS_KM`, `KM_PER_MI` (driver; `KM_TO_MI` renamed).
+- `/ 100000.0` in `getHistory()` now uses `(LAT_LNG_PRECISION as double)`.
+- `binTransita` renamed `motionLabel`.
+- Bool settings `defaultValue:` changed from strings (`"false"`) to boolean literals.
+- Commented-out log lines in `dynamicPolling()` removed.
+- Unreachable `else { listSize1 = 0 }` branch in `sendHistory()` removed.
+
+---
+
+### 2026-06-22 — first full audit pass
+
 Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integration now stays online** through Cloudflare cookie rotations and transient Life360 outages that previously caused permanent silent failures.
 
 ### Reliability
