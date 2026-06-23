@@ -4,6 +4,49 @@
 
 ---
 
+## Post-baseline audit fixes (2026-06-22 / 2026-06-23)
+
+### Security
+
+- **Stored XSS in map view (SEC-1).** `membersJson` was injected raw into `<script>` blocks in `buildMapHtml` and `buildGoogleMapHtml`. `JsonBuilder` does not HTML-escape `<`/`>`, so a Life360 member name containing `</script>` could execute arbitrary JS in any browser loading the map page. Fixed: post-process `membersJson` with `.replace("&","\\u0026").replace("<","\\u003c").replace(">","\\u003e")` — valid JSON unicode escapes that the HTML parser never sees as tag boundaries.
+- **API key injection (SEC-2).** Google Maps API key embedded in `<script src>` attribute without HTML-encoding. A `"` in the key could break out of the attribute. Fixed: encode `&`/`"`/`<`/`>` before embedding.
+
+### Bug fixes
+
+- **`sEpoch.seconds` wrong epoch calculation (DRIVER-BUG-3).** `use(TimeCategory) { new Date(0) + sEpoch.seconds }` treated the Unix timestamp as a duration, producing dates ~55,000 years in the future. Fixed: `new Date(sEpoch * 1000L)`.
+- **`unschedule()` killed the token-expiry reminder chain (BUG-SCHED).** `scheduleUpdates()` calls `unschedule()` (no argument), which cancels every scheduled job. If the token was already expired when the user clicked Done with a different poll frequency, the reminder chain was silently killed and never re-armed. Fixed: `if (state.tokenLikelyExpired) notifyTokenExpired()` immediately after `unschedule()`.
+- **In-flight keys survived hub restart (STATE-2).** `inflight-<memberId>` is set before `asynchttpGet` and cleared in the callback. A hub reboot mid-request meant the callback never fired and the key was never cleared, permanently blocking that member's poll loop. Fixed: `initialize()` now calls `clearSessionCache()` before re-arming the schedule.
+- **`handleTokenProbeResponse` could stay stuck in slow-poll on a garbled 200 (ERR-2).** `captureUnitOfMeasure(response.json)` ran before `state.tokenLikelyExpired = false`. A Cloudflare interstitial on a 200 would throw and leave the flag set despite a valid auth response. Fixed: all state clears moved before the JSON parse.
+
+### Error handling
+
+- **`handleUserSettingsResponse` missing try/catch on `response.json` (ERR-1).** Every other async callback's 200 path wraps `response.json` in try/catch; this one was missed. Fixed.
+- **`response.getErrorMessage()` returning null (ERR-4).** Six handlers embedded the result directly in GStrings; when null, it rendered as the literal string `"null"` in logs and the UI banner. Fixed: `?: "(no details)"` on all call sites.
+
+### API / attribute correctness
+
+- **Implicit Boolean coercion in `sendEvent` (API-1).** `inTransit`, `isDriving`, `charge`, `wifiState` were passed as Groovy `Boolean` to `sendEvent`. Hubitat coerces to string, but it's implicit. Fixed: `.toString()` explicit on each.
+- **`shareLocation` sent as `"1"`/`"0"` (API-5).** Life360 API returns `"1"`/`"0"` for this field; it was passed through raw. Any Rule Machine rule comparing `shareLocation == "true"` silently never matched. Fixed: `toBool(member.features.shareLocation).toString()`.
+- **`contact`, `acceleration`, `switch` declared as `"string"` (API-4).** Hubitat's built-in dashboard tile support for Contact Sensor, Acceleration Sensor, and Switch capabilities requires the attribute declared as `enum`. Fixed: proper `enum` declarations with canonical value lists.
+
+### Groovy / platform
+
+- **`toDouble(0)` falsy-zero (GROOVY-1).** `if (object) return object.toDouble()` — Groovy evaluates integer `0` as false, so a legitimately-zero speed value took the null branch. Functionally harmless (result was still `0.0`) but logically wrong. Fixed: `if (object != null)`.
+- **`settings.pollFreq.toInteger()` on Integer (GROOVY-2).** Hubitat sometimes returns enum settings as `Integer`; calling `.toInteger()` on an `Integer` fails in the sandbox. Fixed: `settings.pollFreq?.toString() ?: "60"` before `.toInteger()`.
+
+### Named constants
+
+Added to eliminate magic literals: `FORCE_UPDATE_FETCH_DELAY_SECS = 6`, `CIRCLES_API_VERSION = 4`, `MAX_BACKOFF_SHIFT = 6` (app); `EARTH_RADIUS_KM = 6372.8`, `KM_PER_MI = 1.609344` (driver; renamed from `KM_TO_MI`). Replaced `/ 100000.0` in `getHistory()` with `(LAT_LNG_PRECISION as double)`. Bool `input` `defaultValue:` changed from string literals (`"false"`) to boolean literals.
+
+### Dead code
+
+- Single-arg `displayMember(String firstName)` overload had no call sites (all callers use the two-arg form with pre-resolved `showNames`). Deleted.
+- Renamed `binTransita` → `motionLabel` (legacy naming artifact).
+- Removed commented-out log lines in `dynamicPolling()`.
+- Removed unreachable `else { listSize1 = 0 }` branch in `sendHistory()` (list is guaranteed non-null by the guard two lines above).
+
+---
+
 ## App (`life360_app.groovy`)
 
 ### Async fetch architecture
