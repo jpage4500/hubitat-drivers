@@ -48,22 +48,6 @@ Two opt-in logging toggles under app settings → Logging, both default on: **In
 
 All member location fetches are now async, with a per-member in-flight guard so a slow Life360 response can't pile up duplicate requests. Exponential backoff on repeated 5xx errors (capped at 5 min) instead of hammering the API at full rate. Places context is built once per poll cycle and shared across all member fetches.
 
-### Bug fixes
-
-- The **"Since:" field** in the HTML dashboard tile now shows the correct date and time. (It was calculating from the wrong epoch baseline, producing dates in the year ~55,000.)
-- `shareLocation` attribute now sends `"true"`/`"false"` — Rule Machine rules comparing `shareLocation == "true"` previously always failed silently.
-- `contact`, `acceleration`, and `switch` attributes now properly declared as enum types, which enables Hubitat's built-in dashboard tile support for those capabilities.
-- `pollFreq = 0` (Disabled) now reliably disables polling — unconditional jitter was causing it to run at 1–4s regardless.
-- `scheduleUpdates()` no longer stacks overlapping timers when called from `updated()` / `initialize()` / `handleTimerFired` in the same cycle.
-- `historyClearData` no longer throws `MissingPropertyException` and now clears the attributes it's supposed to.
-- "Has arrived" / "has left" in `descriptionText` now generates correctly (operator precedence fix).
-- HTML tile speed display fixed (same precedence issue).
-- Orphan child devices removed when a member is deselected from `settings.users`.
-- `addChildDevice` no longer passes hardcoded hub ID `1234`.
-- Watchdog warning fires only on the rising edge instead of repeating every tick.
-- Null guards added for `settings.users`, stale `home` place, and missing `location.since` — these previously caused NPE-aborted updates in normal operation.
-- Metric "km from Home" status now has correct spacing.
-
 ### Documentation
 
 [README.md](README.md) rewritten. [STATE_REFERENCE.md](STATE_REFERENCE.md) added (every setting, state var, scheduled job, and attribute). [APP_SPEC.md](APP_SPEC.md) records the clean-room design (the code is authoritative). Developer-level change details in [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
@@ -74,23 +58,23 @@ All member location fetches are now async, with a per-member in-flight guard so 
 
 Versions below come directly from the `Changes:` block previously at the top of [life360_app.groovy](life360_app.groovy).
 
-- `5.1.3`  - 05/09/26 - add `/view` endpoint to view members on a map
-- `5.1.2`  - 05/01/26 - merge in changes by iEnam: API change (`api-cloudfront.life360.com`); better cookie handling
-- `5.1.1`  - 05/01/26 - add device notification when token expires
-- `5.1.0`  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in `handleException`; clear cookies + etags on auth error; backoff on rate-limit; watchdog warns when no successful update in N minutes; loud banner when token expired
+- `5.1.3` - 05/09/26 - add `/view` endpoint to view members on a map
+- `5.1.2` - 05/01/26 - merge in changes by iEnam: API change (`api-cloudfront.life360.com`); better cookie handling
+- `5.1.1` - 05/01/26 - add device notification when token expires
+- `5.1.0` - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in `handleException`; clear cookies + etags on auth error; backoff on rate-limit; watchdog warns when no successful update in N minutes; loud banner when token expired
 - `5.0.15` - 12/31/24 - minor fixes
 - `5.0.14` - 12/24/24 - Dynamic Polling
 - `5.0.13` - 12/24/24 - restore original scheduling routine
 - `5.0.10` - 12/21/24 - add some randomness
-- `5.0.9`  - 12/19/24 - try a different API when hitting 403 error
-- `5.0.8`  - 12/18/24 - added cookies found by @user3774
-- `5.0.7`  - 12/11/24 - try to match Home Assistant
-- `5.0.6`  - 12/05/24 - return to older API version (keeping eTag support)
-- `5.0.5`  - 11/12/24 - support eTag for locations call
-- `5.0.4`  - 11/09/24 - use newer API
-- `5.0.2`  - 11/03/24 - restore webhook
-- `5.0.0`  - 11/01/24 - fix Life360+ support (requires manual entry of `access_token`)
-- `4.0.0`  - 02/08/24 - implement new Life360 API
+- `5.0.9` - 12/19/24 - try a different API when hitting 403 error
+- `5.0.8` - 12/18/24 - added cookies found by @user3774
+- `5.0.7` - 12/11/24 - try to match Home Assistant
+- `5.0.6` - 12/05/24 - return to older API version (keeping eTag support)
+- `5.0.5` - 11/12/24 - support eTag for locations call
+- `5.0.4` - 11/09/24 - use newer API
+- `5.0.2` - 11/03/24 - restore webhook
+- `5.0.0` - 11/01/24 - fix Life360+ support (requires manual entry of `access_token`)
+- `4.0.0` - 02/08/24 - implement new Life360 API
 
 ---
 
@@ -98,21 +82,21 @@ Versions below come directly from the `Changes:` block previously at the top of 
 
 Versions below come directly from the `Changes:` block previously at the top of [life360_driver.groovy](life360_driver.groovy). The driver had its own version stream that ran parallel to (and sometimes diverged from) the app; from `X.X.X` onward the two files share a single version line.
 
-- `5.1.4`  - 06/30/26 - add history preference
+- `5.1.4` - 06/30/26 - add history preference
 - `5.0.15` - 12/31/24 - minor fixes
 - `5.0.12` - 12/24/24 - Dynamic Polling (mpalermo73)
 - `5.0.12` - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
 - `5.0.11` - 12/22/24 - bugfix when polling > 1 min
 - `5.0.10` - 12/21/24 - add some randomness
-- `5.0.9`  - 12/19/24 - try a different API when hitting 403 error
-- `5.0.8`  - 12/18/24 - added cookies found by @user3774
-- `5.0.7`  - 12/11/24 - try to match Home Assistant
-- `5.0.6`  - 12/05/24 - return to older API version (keeping eTag support)
-- `5.0.5`  - 11/12/24 - support eTag for locations call
-- `5.0.4`  - 11/09/24 - use newer API
-- `5.0.2`  - 11/03/24 - restore webhook
-- `5.0.0`  - 11/01/24 - fix Life360+ support (requires manual entry of `access_token`)
-- `4.0.0`  - 02/08/24 - implement new Life360 API
+- `5.0.9` - 12/19/24 - try a different API when hitting 403 error
+- `5.0.8` - 12/18/24 - added cookies found by @user3774
+- `5.0.7` - 12/11/24 - try to match Home Assistant
+- `5.0.6` - 12/05/24 - return to older API version (keeping eTag support)
+- `5.0.5` - 11/12/24 - support eTag for locations call
+- `5.0.4` - 11/09/24 - use newer API
+- `5.0.2` - 11/03/24 - restore webhook
+- `5.0.0` - 11/01/24 - fix Life360+ support (requires manual entry of `access_token`)
+- `4.0.0` - 02/08/24 - implement new Life360 API
 
 ---
 
