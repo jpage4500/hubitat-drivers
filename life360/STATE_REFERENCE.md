@@ -116,7 +116,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Source | Event | Handler |
 | --- | --- | --- |
-| `location` (Hubitat) | `systemStart` | `initialize` (re-schedules polling on hub reboot) |
+| `location` (Hubitat) | `systemStart` | `initialize` — calls `clearSessionCache()` (clears in-flight keys left from before the restart) then re-schedules polling |
 
 ---
 
@@ -153,10 +153,10 @@ Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue(
 | --- | --- | --- | --- |
 | Presence Sensor | `presence` | `present` / `not present` | Inside HOME radius |
 | Battery | `battery` | 0–100 | Phone battery % |
-| Power Source | `powerSource` | `DC` / `BTRY` | Charging source |
-| Switch | `switch` | `on` / `off` | **Repurposed:** WiFi connected (on) or not (off) |
-| Contact Sensor | `contact` | `open` / `closed` | **Repurposed:** charging (open) or on battery (closed) |
-| Acceleration Sensor | `acceleration` | `active` / `inactive` | **Repurposed:** in transit OR driving OR not at home |
+| Power Source | `powerSource` | `dc` / `battery` | Charging source (Hubitat canonical enum values; the HTML tile displays `DC`/`BTRY` for compactness but the attribute itself is lowercase) |
+| Switch | `switch` | `on` / `off` | **Repurposed:** WiFi connected (on) or not (off). Declared as `enum ["on","off"]` |
+| Contact Sensor | `contact` | `open` / `closed` | **Repurposed:** charging (open) or on battery (closed). Declared as `enum ["open","closed"]` |
+| Acceleration Sensor | `acceleration` | `active` / `inactive` | **Repurposed:** in transit OR driving OR not at home. Declared as `enum ["active","inactive"]` |
 
 ### Location
 
@@ -190,7 +190,7 @@ Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue(
 | --- | --- | --- |
 | `charge` | enum `true`/`false` | Phone is charging |
 | `wifiState` | enum `true`/`false` | Phone is on WiFi |
-| `shareLocation` | string | Life360 member sharing flag |
+| `shareLocation` | string | Life360 member sharing flag (`"true"`/`"false"`) |
 
 ### Identity
 

@@ -58,9 +58,10 @@ returns `[uri, headers: getHttpHeaders(), timeout: 30]`. The `Cookie` header is 
   re-serializes. A rotating `__cf_bm` updates only its own entry and `_cfuvid` survives. Both capture
   paths call `mergeCookie()`. (Overwriting the jar on rotation silently drops `_cfuvid` and causes a
   delayed Cloudflare 403 — the failure that has killed the integration before.)
-- The cookie value is taken as the first segment before `;` or `,`:
-  `it.value?.tokenize(';|,')?.getAt(0)`. This is correct — `__cf_bm` is base64-url-safe (no commas)
-  and `;` is always the first separator. A well-formed `name=value` is required before upserting.
+- The cookie value is taken as the first segment before `;`:
+  `it.value?.tokenize(';')?.getAt(0)`. This is correct — `__cf_bm` is base64-url-safe (no commas),
+  and `;` is always the attribute separator. Splitting on `,` was wrong and removed. A well-formed
+  `name=value` is required before upserting.
 
 `cookieJarSummary()` logs cookie **names** only by default (safe to always log), optionally with
 8-char value heads under `logRawPayload`. It is logged on auth failure (`jar-at-failure [...]`) so a
@@ -355,11 +356,18 @@ Called from `installed()`, `updated()`, and `handleMembersResponse` (on a 200). 
   the rate hasn't changed and a schedule already exists. Reset to `null` by `installed`/`updated`/
   `initialize` to force a re-arm. Prevents the triple-fire churn when called from several paths in one
   cycle.
+- **`unschedule()` kills all jobs including the token-expiry reminder chain.** After calling
+  `unschedule()`, immediately re-arm the reminder if the token is currently expired:
+  `if (state.tokenLikelyExpired) notifyTokenExpired()`. Without this, opening the app settings and
+  clicking Done while the token is already expired would silently kill the repeat-notification chain.
 - `baseSecs <= 0` (Disabled) → `unschedule()` and return; polling off.
 - `baseSecs < 60` → `schedule("0/${baseSecs} * * * * ? *", handleTimerFired)`; else
   `schedule("0 */${baseSecs/60} * * * ? *", handleTimerFired)`.
 - No jitter/randomness — the cron owns the rate.
-- Re-arm on hub reboot via `subscribe(location, 'systemStart', initialize)`.
+- Re-arm on hub reboot via `subscribe(location, 'systemStart', initialize)`. `initialize()` calls
+  `clearSessionCache()` first — in-flight keys from any in-progress requests at the time of the
+  reboot are never cleaned up by their callbacks, so clearing them on restart prevents members from
+  being permanently stuck in the "prior request pending" guard.
 
 ---
 
@@ -372,7 +380,7 @@ members (an auth failure or 429 affects every member).
 | --- | --- |
 | `200` | `notifyChildDevice`; store member etag; clear `failCount`/`tokenLikelyExpired`/`rateLimitedUntilMs` and this member's backoff; bump `lastSuccessMs`; clear `message`/watchdog |
 | `304` | clear this member's backoff; bump `lastSuccessMs`; clear `message`/watchdog |
-| `401`/`403` | **account-level:** `clearSessionCache()` (drop cookies + all etags + inflight/backoff); `failCount++`; at `failCount >= 3` set `tokenLikelyExpired`, notify once, `scheduleUpdates()` (slows loop to 300s). Banner text names a re-paste; below 3, a transient "will retry" banner. |
+| `401`/`403` | **account-level:** `clearSessionCache()` (drop cookies + all etags + inflight/backoff); `failCount++`; at `failCount >= 3` set `tokenLikelyExpired`, then `scheduleUpdates()` (slows loop to 300s) **before** `notifyTokenExpired()` — order matters: `scheduleUpdates()` calls `unschedule()` which would cancel the reminder job registered by `notifyTokenExpired()` if the order were reversed. Banner text names a re-paste; below 3, a transient "will retry" banner. |
 | `429` | **account-level:** `rateLimitedUntilMs = now + (Retry-After ?: 60) + 10s` — pauses the whole loop. Transient banner. |
 | `502`/`503`/`504`/`520`/`522`/`525` / network error (no status) | **per-member** exponential backoff (below) |
 
@@ -434,7 +442,7 @@ forceMemberUpdate(memberId):
 handleForceUpdateResponse:
   if !status: report network error; return
   captureCookiesAsync(response)
-  if 200: log requestId/isPollable; runIn(6, "fetchLocations")   # pick up the fresh fix next loop
+  if 200: log requestId/isPollable; runIn(FORCE_UPDATE_FETCH_DELAY_SECS, "fetchLocations")  # ~5s for Life360 to push fresh GPS
   else: report failure
 ```
 
@@ -500,7 +508,7 @@ missing place/address ⇒ `"No Data"`. `status` is `"At Home"` or `"<x.x> miles 
 
 | Group | Attributes (frozen) |
 | --- | --- |
-| Presence/power | `presence` (`present`/`not present`), `battery` (0–100), `powerSource` (`DC`/`BTRY`), `switch` (`on`/`off`), `contact` (`open`/`closed`), `acceleration` (`active`/`inactive`) |
+| Presence/power | `presence` (`present`/`not present`), `battery` (0–100), `powerSource` (`dc`/`battery`), `switch` (`on`/`off`), `contact` (`open`/`closed`), `acceleration` (`active`/`inactive`) |
 | Location | `latitude`, `longitude`, `accuracy`, `address1`, `address1prev`, `lastLocationUpdate`, `lastUpdated`, `since`, `status`, `distance`, `savedPlaces` |
 | Motion | `inTransit` (`"true"`/`"false"`), `isDriving` (`"true"`/`"false"`), `speed`, `userActivity` |
 | Phone | `charge` (`"true"`/`"false"`), `wifiState` (`"true"`/`"false"`), `shareLocation` |
@@ -519,7 +527,7 @@ app.)
 
 **App ↔ driver bridge (frozen):** parent calls `childDevice.generatePresenceEvent(member, placesJson,
 home)` and reads its boolean return. Parent helpers the driver calls: `getShowNamesInLogs`,
-`getShowMapsLink`, `getLogRawPayload`, `getLogEnable`, `getUnitIsMiles`, `refresh`. Keeping these
+`getShowMapsLink`, `getLogRawPayload`, `getUnitIsMiles`, `refresh`. Keeping these
 stable lets a new app drive an old installed driver (and vice-versa) during a staged update.
 
 **Device Network ID format (frozen):** `"${app.id}.${memberId}"`. Changing it orphans every existing
