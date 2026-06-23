@@ -10,46 +10,6 @@ Last published release on [the community thread](https://community.hubitat.com/t
 
 ## Y.Y.Y — unreleased
 
-### 2026-06-23 — second audit pass (all items closed)
-
-Bug fixes, security hardening, and code hygiene from an exhaustive fresh audit of both files.
-
-**Bugs fixed:**
-- **"Since:" tile field showed ~year 55,000.** `sEpoch.seconds` was treating a Unix epoch timestamp as a `TimeCategory` duration. Fixed: `new Date(sEpoch * 1000L)`.
-- **Stored XSS in map view.** Member names and addresses from the Life360 API were injected raw into the `<script>` block of both map HTML builders via `JsonBuilder`. `JsonBuilder` does not HTML-escape `<`/`>`, so a member name containing `</script>` could inject arbitrary JS. Fixed: encode `&`/`<`/`>` as JSON unicode escapes (`&`/`<`/`>`) after serialization.
-- **Token-expiry reminder silently cancelled on poll-rate change.** `scheduleUpdates()` calls `unschedule()` (no arg), which cancels every scheduled job including the token-expiry reminder chain. If the token was already expired and the user clicked Done with a different poll frequency, the reminder was killed and never re-armed. Fixed: `if (state.tokenLikelyExpired) notifyTokenExpired()` after `unschedule()`.
-- **In-flight keys not cleared on hub restart.** A hub reboot mid-request left `inflight-<memberId>` keys set permanently, blocking all future polls for those members. Fixed: `initialize()` now calls `clearSessionCache()` before re-arming the schedule.
-- **`handleTokenProbeResponse`: flag-clear could be skipped by a parse error.** `captureUnitOfMeasure(response.json)` ran before `state.tokenLikelyExpired = false`. If the 200 response had a garbled body, the exception left the app stuck in slow-poll despite a valid auth response. Fixed: state clears moved before the JSON parse.
-
-**Security:**
-- Google Maps API key was embedded in `<script src>` without HTML-encoding. A `"` in the key would break out of the attribute. Fixed: `&`/`"`/`<`/`>` encoded before embedding.
-
-**Error handling:**
-- `handleUserSettingsResponse` 200 path called `response.json` without try/catch (every other async handler had this guard). Fixed.
-- `response.getErrorMessage()` returned null in six handlers; GString rendered the literal string `"null"` in logs and the UI banner. Fixed: `?: "(no details)"` on all call sites.
-
-**API correctness:**
-- `sendEvent` for `inTransit`, `isDriving`, `charge`, `wifiState` passed a Groovy `Boolean` — coercion to `"true"`/`"false"` string was implicit. Fixed: `.toString()` explicit.
-- `shareLocation` was sent as `"1"`/`"0"` (raw Life360 API value). Rules comparing `== "true"` silently failed. Fixed: `toBool(...).toString()`.
-- `contact`, `acceleration`, `switch` attributes were declared as `"string"` instead of proper `"enum"` types, suppressing Hubitat's built-in dashboard tile support for those capabilities. Fixed.
-
-**Platform/Groovy:**
-- `toDouble(0)`: `if (object)` treated integer `0` as falsy (Groovy truthiness), returning 0 via the null branch. Fixed: `if (object != null)`.
-- `settings.pollFreq?.toString() ?: "60"` before `.toInteger()` — prevents failure if Hubitat returns the enum setting as an `Integer`.
-
-**Cleanup:**
-- Single-arg `displayMember(String)` overload had no call sites — deleted.
-- Named constants added: `FORCE_UPDATE_FETCH_DELAY_SECS`, `CIRCLES_API_VERSION`, `MAX_BACKOFF_SHIFT` (app); `EARTH_RADIUS_KM`, `KM_PER_MI` (driver; `KM_TO_MI` renamed).
-- `/ 100000.0` in `getHistory()` now uses `(LAT_LNG_PRECISION as double)`.
-- `binTransita` renamed `motionLabel`.
-- Bool settings `defaultValue:` changed from strings (`"false"`) to boolean literals.
-- Commented-out log lines in `dynamicPolling()` removed.
-- Unreachable `else { listSize1 = 0 }` branch in `sendHistory()` removed.
-
----
-
-### 2026-06-22 — first full audit pass
-
 Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integration now stays online** through Cloudflare cookie rotations and transient Life360 outages that previously caused permanent silent failures.
 
 ### Reliability
@@ -57,6 +17,10 @@ Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integratio
 **Cloudflare cookie bug fixed.** Life360 sits behind Cloudflare, which issues two cookies: `_cfuvid` (stable) and `__cf_bm` (rotates every ~30 min). The async cookie handler was overwriting the entire cookie jar with just the fresh rotating cookie each time `__cf_bm` refreshed — silently dropping `_cfuvid`. Without both, Cloudflare returns 403 within minutes and polling goes completely dark. The failure was delayed and silent, which made it look like a Life360 outage. Fixed: cookie updates now merge by name so only the rotating entry is replaced. See [Cookie handling](README.md#cookie-handling-load-bearing--dont-break-this) in the README.
 
 **Auto-recovery from token-expired state.** Three consecutive 401/403 errors still flag the token as likely expired and slow polling to 5-minute ticks — but the app now probes `/users/me` on each of those ticks. The moment Life360 responds normally (service healed, transient blip cleared), polling resumes at the normal rate automatically. Previously the integration was permanently dead until you manually re-pasted a token.
+
+**Polling survives hub reboots cleanly.** Previously, a hub reboot while a location fetch was in-flight would permanently block polling for those members until the app was re-saved. Fixed.
+
+**Token-expiry notifications stay armed.** Changing the poll frequency while the token is expired no longer silently kills the repeat-notification schedule.
 
 ### New capabilities
 
@@ -78,17 +42,19 @@ Token-expiry alerts now have a master enable/disable toggle plus a configurable 
 
 Two opt-in logging toggles under app settings → Logging, both default on: **Include Names and Places in Logs** (off = UUIDs only, safe for sharing) and **Include Google Maps Link in Logs** (off = coordinates omitted from the "moved" log line).
 
+**Map view security hardened.** Member names and place names in the map view are now HTML-escaped, preventing a maliciously crafted Life360 profile from injecting content into the page.
+
 ### Performance
 
 All member location fetches are now async, with a per-member in-flight guard so a slow Life360 response can't pile up duplicate requests. Exponential backoff on repeated 5xx errors (capped at 5 min) instead of hammering the API at full rate. Places context is built once per poll cycle and shared across all member fetches.
 
 ### Bug fixes
 
-Against the 5.1.3 / 5.1.4 baseline:
-
+- The **"Since:" field** in the HTML dashboard tile now shows the correct date and time. (It was calculating from the wrong epoch baseline, producing dates in the year ~55,000.)
+- `shareLocation` attribute now sends `"true"`/`"false"` — Rule Machine rules comparing `shareLocation == "true"` previously always failed silently.
+- `contact`, `acceleration`, and `switch` attributes now properly declared as enum types, which enables Hubitat's built-in dashboard tile support for those capabilities.
 - `pollFreq = 0` (Disabled) now reliably disables polling — unconditional jitter was causing it to run at 1–4s regardless.
 - `scheduleUpdates()` no longer stacks overlapping timers when called from `updated()` / `initialize()` / `handleTimerFired` in the same cycle.
-- `installed()` correctly seeds `address1prev` as `"No Data"` (was crashing with wrong attribute name and value).
 - `historyClearData` no longer throws `MissingPropertyException` and now clears the attributes it's supposed to.
 - "Has arrived" / "has left" in `descriptionText` now generates correctly (operator precedence fix).
 - HTML tile speed display fixed (same precedence issue).
