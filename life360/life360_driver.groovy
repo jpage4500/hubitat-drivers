@@ -173,8 +173,9 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     // -- location --
     // round to 5 decimal places (~1m precision) — matches history storage and avoids spurious sub-meter jitter
-    Double latitude = Math.round(toDouble(location.latitude) * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
-    Double longitude = Math.round(toDouble(location.longitude) * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
+    // cast denominator to double to avoid Groovy long/long integer division truncating the result
+    Double latitude = Math.round(toDouble(location.latitude) * LAT_LNG_PRECISION) / (LAT_LNG_PRECISION as double)
+    Double longitude = Math.round(toDouble(location.longitude) * LAT_LNG_PRECISION) / (LAT_LNG_PRECISION as double)
     Integer accuracy = toDouble(location.accuracy).round(0).toInteger()
     Integer battery = toDouble(location.battery).round(0).toInteger()
     Boolean wifiState = toBool(location.wifiState)
@@ -385,16 +386,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     else motionLabel = "Not Moving"
 
     long sEpoch = since ?: 0L
-    def theDate
-    if (sEpoch == 0L) {
-        theDate = use(groovy.time.TimeCategory) {
-            new Date(0)
-        }
-    } else {
-        theDate = use(groovy.time.TimeCategory) {
-            new Date(0) + sEpoch.seconds
-        }
-    }
+    Date theDate = (sEpoch == 0L) ? new Date(0) : new Date(sEpoch * 1000L)
     SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("E hh:mm a")
     String dateSince = DATE_FORMAT.format(theDate)
 
@@ -430,8 +422,8 @@ def saveLocationHistory(Double latitude, Double longitude, Long timeMs) {
         if (state.locationHistory == null) state.locationHistory = []
 
         // round lat/lng to 5 decimals (~1m precision) to keep entries compact
-        Double latRounded = Math.round(latitude * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
-        Double lngRounded = Math.round(longitude * LAT_LNG_PRECISION) / LAT_LNG_PRECISION
+        Double latRounded = Math.round(latitude * LAT_LNG_PRECISION) / (LAT_LNG_PRECISION as double)
+        Double lngRounded = Math.round(longitude * LAT_LNG_PRECISION) / (LAT_LNG_PRECISION as double)
 
         state.locationHistory.add(0, [timeMs, latRounded, lngRounded])
 
