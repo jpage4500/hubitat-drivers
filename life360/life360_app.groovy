@@ -220,7 +220,7 @@ def appButtonHandler(String button) {
             app.removeSetting("forceUpdateMember")   // reset the dropdown to blank; it's a fire-once action, not a persisted preference
             break
         default:
-            if (logEnable) log.debug("appButtonHandler: unhandled:${button}")
+            log.warn("appButtonHandler: unhandled:${button}")
     }
 }
 
@@ -374,7 +374,6 @@ def handleForceUpdateResponse(response, Map data) {
     if (!status) {
         String errMsg = response.getErrorMessage() ?: "(no details)"
         log.error("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
-        log.error("forceMemberUpdate: hasError:${response.hasError()}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
         return
     }
@@ -404,6 +403,9 @@ def handleForceUpdateResponse(response, Map data) {
         log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
         state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
         runIn(FORCE_UPDATE_FETCH_DELAY_SECS, "fetchLocations")
+    } else if (status == 401 || status == 403) {
+        log.error("forceMemberUpdate: AUTH (${status}) member:${memberName} — token may be expired or revoked")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — re-paste access token</span>"
     } else {
         String errMsg = response.getErrorMessage() ?: "(no details)"
         String errBody = null
@@ -424,8 +426,12 @@ def fetchCircles() {
                 captureCookies(response)
                 if (response.status == 200) {
                     state.circles = response.data.circles
+                    if (!state.circles) log.warn("fetchCircles: 0 circles returned — check that your account belongs to a circle")
                     if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
+                } else if (response.status == 401 || response.status == 403) {
+                    log.error("fetchCircles: AUTH (${response.status}) — token may be expired or revoked")
+                    state.message = "fetchCircles: AUTH error (${response.status}) — re-paste access token"
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
                     state.message = "fetchCircles: bad response:${response.status}, ${response.data}"
@@ -438,7 +444,7 @@ def fetchCircles() {
 
 def fetchPlaces() {
     if (isEmpty(circle)) {
-        if (logEnable) log.debug("fetchPlaces: circle not set")
+        log.warn("fetchPlaces: circle not set")
         return;
     }
 
@@ -449,8 +455,13 @@ def fetchPlaces() {
                 captureCookies(response)
                 if (response.status == 200) {
                     state.places = response.data.places
+                    if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
                     if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
+                    state.placesEmptyWarned = false  // reset rising-edge flag now that places are loaded
+                } else if (response.status == 401 || response.status == 403) {
+                    log.error("fetchPlaces: AUTH (${response.status}) — token may be expired or revoked")
+                    state.message = "fetchPlaces: AUTH error (${response.status}) — re-paste access token"
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
                     state.message = "fetchPlaces: bad response:${response.status}, ${response.data}"
@@ -463,7 +474,7 @@ def fetchPlaces() {
 
 def fetchMembers() {
     if (isEmpty(circle)) {
-        if (logEnable) log.debug("fetchMembers: circle not set")
+        log.warn("fetchMembers: circle not set")
         return;
     }
     def params = life360Params("/circles/${circle}/members")
@@ -503,6 +514,9 @@ def handleMembersResponse(response, data) {
             // intent is visible here and a future API change can't surprise us.
             if (member?.location) notifyChildDevice(memberId, member)
         }
+    } else if (status == 401 || status == 403) {
+        log.error("fetchMembers: AUTH (${status}) — token may be expired or revoked")
+        state.message = "fetchMembers: AUTH error (${status}) — re-paste access token"
     } else {
         log.error("fetchMembers: bad response:${status}")
         state.message = "fetchMembers: bad response:${status}"
@@ -1071,7 +1085,7 @@ def handleTokenProbeResponse(response, data) {
     } else if (status == 401 || status == 403) {
         if (logEnable) log.debug("tokenProbe: ${status} — token still expired; waiting for user to re-paste")
     } else {
-        if (logEnable) log.debug("tokenProbe: unexpected status ${status} — will retry next tick")
+        log.warn("tokenProbe: unexpected status ${status} — will retry next tick")
     }
 }
 
@@ -1082,13 +1096,19 @@ def handleCirclesPollResponse(response, data) {
         return
     }
     captureCookiesAsync(response)
-    if (status != 200) {
+    if (status == 401 || status == 403) {
+        log.error("fetchCircles: poll: AUTH (${status}) — token may be expired or revoked")
+        return
+    } else if (status != 200) {
         log.warn("fetchCircles: poll: unexpected status:${status}")
         return
     }
 
     def circle = response.json?.circles?.find { it.id == settings.circle }
-    if (!circle) return
+    if (!circle) {
+        log.warn("fetchCircles: poll: configured circle not found in response — removed from account?")
+        return
+    }
 
     String circleName = showNamesInLogs() ? (circle.name ?: circle.id) : circle.id
     int newCount = circle.memberCount?.toInteger() ?: 0
@@ -1168,7 +1188,14 @@ private removeChildDevices(delete) {
 def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     if (isEmpty(settings.users)) return;
     if (isEmpty(settings.place)) return;
-    if (isEmpty(state.places)) return;
+    if (isEmpty(state.places)) {
+        if (!state.placesEmptyWarned) {
+            log.error("notifyChildDevice: state.places is empty — all location updates blocked; re-open app and press 'Fetch Places'")
+            state.placesEmptyWarned = true
+        }
+        return
+    }
+    state.placesEmptyWarned = false
 
     // use pre-built context from fetchLocations() poll cycle, or build on the spot (§4.2)
     String placesJson = ctx?.placesJson
@@ -1200,8 +1227,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
             log.error("notifyChildDevice: device not found: ${externalId}")
         }
     } catch (e) {
-        log.error "notifyChildDevice: Exception: member: ${memberObj}"
-        log.error e
+        log.error("notifyChildDevice: Exception for member:${memberDisplayName(memberId)}: ${e}")
     }
 }
 
