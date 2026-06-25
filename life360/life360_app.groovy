@@ -346,11 +346,7 @@ private void forceMemberUpdate(String memberId) {
     String body = groovy.json.JsonOutput.toJson([type: "location"])
     String cookies = state["cookies"]
 
-    // Diagnostic chatter — gated behind logRawPayload. Includes URL (with circle/member UUIDs),
-    // partial Bearer token, partial Cloudflare cookie head, User-Agent.
-    if (getLogRawPayload()) {
-        if (getLogRawPayload()) log.trace("forceMemberUpdate: POST /circles/${circle}/members/${memberId}/request body:${body}")
-    }
+    if (getLogRawPayload()) log.trace("forceMemberUpdate: POST /circles/${circle}/members/${memberId}/request body:${body}")
 
     def params = life360Params("/circles/${circle}/members/${memberId}/request")
     params.contentType = "application/json"
