@@ -209,7 +209,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
 
-    if (parent?.getLogRawPayload()) log.trace("RAW L360 ${displayMember(memberFirstName, showNames)}: ${location}")
+    if (parent?.getLogRawPayload()) log.trace("generatePresenceEvent: location payload: ${location}")
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **

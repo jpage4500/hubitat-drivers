@@ -252,10 +252,12 @@ private void checkToken() {
     def params = life360Params("/users/me")
     def cookies = state["cookies"]
     if (cookies) params["headers"]["Cookie"] = cookies
+    if (getLogRawPayload()) log.trace("checkToken: GET ${params.uri}")
     try {
         httpGet(params) { response ->
             captureCookies(response)
             Integer status = response.status
+            if (getLogRawPayload()) log.trace("checkToken: ${status} ${response.data}")
             if (status == 200) {
                 def user = response.data
                 String name = user?.firstName ?: "unknown"
@@ -304,6 +306,7 @@ private void refreshUserSettings() {
 def handleUserSettingsResponse(response, data) {
     if (!response.status) return
     captureCookiesAsync(response)
+    if (getLogRawPayload()) { try { log.trace("refreshUserSettings: ${response.status} ${response.json}") } catch (ignored) {} }
     if (response.status == 200) {
         try {
             captureUnitOfMeasure(response.json)
@@ -346,19 +349,13 @@ private void forceMemberUpdate(String memberId) {
     // Diagnostic chatter — gated behind logRawPayload. Includes URL (with circle/member UUIDs),
     // partial Bearer token, partial Cloudflare cookie head, User-Agent.
     if (getLogRawPayload()) {
-        log.trace("forceMemberUpdate: POST ${life360BaseUrl()}/circles/${circle}/members/${memberId}/request")
-        log.trace("forceMemberUpdate: body: ${body}")
-        log.trace("forceMemberUpdate: Authorization: Bearer ${access_token ? access_token.take(8) + '…' : 'null'}")
-        log.trace("forceMemberUpdate: Cookie header: ${cookies ? cookies.take(40) + '…' : 'none'}")
-        log.trace("forceMemberUpdate: User-Agent: ${getHttpHeaders()['User-Agent']}")
+        if (getLogRawPayload()) log.trace("forceMemberUpdate: POST /circles/${circle}/members/${memberId}/request body:${body}")
     }
 
     def params = life360Params("/circles/${circle}/members/${memberId}/request")
     params.contentType = "application/json"
     params.body = body
     if (cookies) params["headers"]["Cookie"] = cookies
-
-    if (getLogRawPayload()) log.trace("forceMemberUpdate: full params: ${params}")
 
     state.forceUpdateStatusPending = true
     state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
@@ -378,14 +375,6 @@ def handleForceUpdateResponse(response, Map data) {
         return
     }
 
-    if (getLogRawPayload()) {
-        try {
-            log.trace("forceMemberUpdate: response headers: ${response.headers}")
-        } catch (e) {
-            log.debug("forceMemberUpdate: could not read response headers: ${e.message}")
-        }
-    }
-
     captureCookiesAsync(response)
 
     if (status == 200) {
@@ -399,7 +388,7 @@ def handleForceUpdateResponse(response, Map data) {
         }
         String requestId = result?.requestId
         String isPollable = result?.isPollable
-        if (getLogRawPayload()) log.trace("forceMemberUpdate: 200 OK — raw json: ${result}")
+        if (getLogRawPayload()) log.trace("forceMemberUpdate: 200 ${result}")
         log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
         state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
         runIn(FORCE_UPDATE_FETCH_DELAY_SECS, "fetchLocations")
@@ -420,10 +409,12 @@ def handleForceUpdateResponse(response, Map data) {
 
 def fetchCircles() {
     def params = life360Params("/circles", CIRCLES_API_VERSION)
+    if (getLogRawPayload()) log.trace("fetchCircles: GET ${params.uri}")
     try {
         httpGet(params) {
             response ->
                 captureCookies(response)
+                if (getLogRawPayload()) log.trace("fetchCircles: ${response.status} ${response.data}")
                 if (response.status == 200) {
                     state.circles = response.data.circles
                     if (!state.circles) log.warn("fetchCircles: 0 circles returned — check that your account belongs to a circle")
@@ -449,10 +440,12 @@ def fetchPlaces() {
     }
 
     def params = life360Params("/circles/${circle}/places")
+    if (getLogRawPayload()) log.trace("fetchPlaces: GET ${params.uri}")
     try {
         httpGet(params) {
             response ->
                 captureCookies(response)
+                if (getLogRawPayload()) log.trace("fetchPlaces: ${response.status} ${response.data}")
                 if (response.status == 200) {
                     state.places = response.data.places
                     if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
@@ -478,6 +471,7 @@ def fetchMembers() {
         return;
     }
     def params = life360Params("/circles/${circle}/members")
+    if (getLogRawPayload()) log.trace("fetchMembers: GET ${params.uri}")
     asynchttpGet("handleMembersResponse", params)
 }
 
@@ -491,6 +485,8 @@ def handleMembersResponse(response, data) {
     }
 
     captureCookiesAsync(response)
+
+    if (getLogRawPayload()) { try { log.trace("fetchMembers: ${status} ${response.json}") } catch (ignored) {} }
 
     if (status == 200) {
         try {
@@ -622,6 +618,7 @@ def handleMemberLocationResponse(response, Map data) {
             return
         }
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
+        if (getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
         notifyChildDevice(memberId, memberObj, ctx)
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
         markFetchSuccess(memberId)
@@ -1067,6 +1064,7 @@ def handleTokenProbeResponse(response, data) {
         return
     }
     captureCookiesAsync(response)
+    if (getLogRawPayload()) { try { log.trace("tokenProbe: ${status} ${response.json}") } catch (ignored) {} }
     if (status == 200) {
         // service is back — auto-recover; clear state before the JSON parse so a garbled
         // 200 body doesn't leave the app stuck in slow-poll (a valid 200 means auth is OK)
@@ -1096,6 +1094,7 @@ def handleCirclesPollResponse(response, data) {
         return
     }
     captureCookiesAsync(response)
+    if (getLogRawPayload()) { try { log.trace("fetchCircles: poll: ${status} ${response.json}") } catch (ignored) {} }
     if (status == 401 || status == 403) {
         log.error("fetchCircles: poll: AUTH (${status}) — token may be expired or revoked")
         return
@@ -1248,7 +1247,7 @@ void captureCookies(response) {
     try {
         response.getHeaders('Set-Cookie')?.each {
             def cookieVal = it.value?.tokenize(';')?.getAt(0)
-            if (getLogRawPayload()) log.trace("captureCookies: raw Set-Cookie: ${it.value}")
+            if (getLogRawPayload()) log.trace("captureCookies: Set-Cookie: ${it.value}")
             if (cookieVal && cookieVal.contains("=")) {
                 mergeCookie(cookieVal)
             }
@@ -1256,7 +1255,7 @@ void captureCookies(response) {
     } catch (e) {
         log.error("captureCookies: ${e.message}")
     }
-    if (getLogRawPayload()) log.trace("captureCookies(sync): jar now [${cookieJarSummary()}]")
+    if (getLogRawPayload()) log.trace("captureCookies: jar [${cookieJarSummary()}]")
 }
 
 /**
@@ -1293,7 +1292,7 @@ void captureCookiesAsync(response) {
                 if (logEnable) {
                     log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'; jar now [${cookieJarSummary()}]")
                 }
-                if (getLogRawPayload()) log.trace("captureCookiesAsync: raw Set-Cookie head: ${cookieVal.take(60)}…")
+                if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}…")
             } else if (logEnable) {
                 log.debug("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
             }
