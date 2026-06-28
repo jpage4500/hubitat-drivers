@@ -4,16 +4,22 @@ import groovy.transform.Field
 
 @Field static final int    TOKEN_EXPIRED_POLL_SECS         = 300   // slow-poll rate when token is flagged expired
 @Field static final int    AUTH_FAIL_THRESHOLD             = 3     // consecutive 401/403s before flagging token expired
-@Field static final int    DEFAULT_POLL_SECS               = 30    // fallback when pollIntervalSecs is not yet set
+@Field static final int    DEFAULT_POLL_SECS               = 30    // fallback when pollFreq is unset/invalid
 @Field static final int    HTTP_TIMEOUT_SECS               = 30    // default HTTP request timeout
 @Field static final int    SECS_PER_MIN                    = 60    // boundary between seconds and minutes cron expressions
 @Field static final int    SECS_PER_HOUR                   = 3600  // seconds per hour
 @Field static final int    RATE_LIMIT_BUFFER_SECS          = 10    // extra seconds added to Retry-After on 429
 @Field static final int    RATE_LIMIT_FALLBACK_SECS        = 60    // fallback Retry-After when header is absent
-@Field static final long   CIRCLES_POLL_INTERVAL_MS        = 60000L // circles membership check interval in ms
 @Field static final int    FORCE_UPDATE_FETCH_DELAY_SECS   = 6     // seconds to wait after force-update before re-fetching (~5s for Life360 to push fresh GPS)
 @Field static final int    CIRCLES_API_VERSION             = 4     // Life360 API version for the /circles endpoint
 @Field static final int    MAX_BACKOFF_SHIFT               = 6     // max bit-shift for exponential backoff (caps at 2^6 = 64× base interval)
+@Field static final int    CIRCLES_MIN_POLL_SECS           = 60    // floor for /circles polling — membership rarely changes, so never hit it faster than this even at a fast pollFreq
+
+// Per-member state key prefixes, by scope. SESSION keys are session-bound and dropped on
+// auth failure (clearSessionCache); IDENTITY keys outlive a re-auth. Removing a member drops
+// both (cleanupMemberState). Single source of truth so the two cleanup paths can't drift.
+@Field static final List<String> MEMBER_STATE_PREFIXES_SESSION  = ["etag-", "inflight-", "transientCount-", "transientUntilMs-"]
+@Field static final List<String> MEMBER_STATE_PREFIXES_IDENTITY = ["inTransit-", "fastChain-"]
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
@@ -498,7 +504,7 @@ def handleMembersResponse(response, data) {
         state.message = null
 
         // sync child devices: create for newly selected members, remove departed ones
-        createChildDevices()
+        syncChildDevices()
 
         // push refreshed name/avatar/location to all selected members that have a device
         settings.users?.each { memberId ->
@@ -518,7 +524,7 @@ def handleMembersResponse(response, data) {
 }
 
 /**
- * fetch location for every member
+ * fetch location for every selected member
  */
 boolean fetchLocations() {
     if (isEmpty(circle)) {
@@ -542,12 +548,9 @@ boolean fetchLocations() {
         return false
     }
 
-    if (logEnable) log.debug("fetchLocations: polling mode:${state.dynamicPollingActive ? 'DYNAMIC' : 'STANDARD'} interval:${state.pollIntervalSecs}s")
-
     // build places context once per poll cycle — reused for every member (§4.2)
     def ctx = buildPlacesContext()
 
-    // iterate over every selected member
     settings.users.each { memberId ->
         fetchMemberLocation(memberId, ctx)
     }
@@ -556,10 +559,16 @@ boolean fetchLocations() {
 }
 
 def fetchMemberLocation(memberId, Map ctx = null) {
-    // in-flight guard (§7.1): skip if a prior request for this member is still pending
+    // in-flight guard (§7.1): skip if a prior request for this member is still pending.
+    // Size the timeout to this member's effective interval — the fast (dynamic) rate when
+    // they're in transit, else the default rate — so a hung request can't outlive its cadence
+    // and stack up, while never blocking a legitimate next tick.
     long startMs = new Date().getTime()
+    int effectiveSecs = (settings.dynamicPolling && isMemberInTransit(memberId))
+        ? dynamicPollFreqSecs()
+        : pollFreqSecs()
     long inflightMs = (state["inflight-${memberId}"] ?: 0L) as long
-    Integer httpTimeout = clamp((state.pollIntervalSecs ?: DEFAULT_POLL_SECS) as int, 5, DEFAULT_POLL_SECS)
+    Integer httpTimeout = clamp(effectiveSecs, 5, DEFAULT_POLL_SECS)
     if (inflightMs > 0 && (startMs - inflightMs) < ((httpTimeout + 2) * 1000L)) {
         if (logEnable) log.debug("fetchMemberLocation: member:${memberDisplayName(memberId)}: prior request pending, skipping")
         return
@@ -640,7 +649,10 @@ def handleMemberLocationResponse(response, Map data) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
-            if (!wasExpired) { scheduleUpdates(); notifyTokenExpired() }
+            // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
+            // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
+            // the latter's unschedule() would otherwise cancel the reminder job notify arms.
+            if (!wasExpired) { scheduleSlowTimer(); notifyTokenExpired() }
         } else {
             state.message = "AUTH ERROR (${status}) on fetchMemberLocation member:${memberName}; cleared session, will retry"
         }
@@ -672,7 +684,7 @@ private static int clamp(int val, int lo, int hi) {
 private long applyTransientBackoff(String memberId) {
     int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
     state["transientCount-${memberId}"] = count
-    int pollSecs = (state.pollIntervalSecs ?: DEFAULT_POLL_SECS) as int
+    int pollSecs = pollFreqSecs()
     int shift = Math.min(count - 1, MAX_BACKOFF_SHIFT)
     long delaySecs = Math.min((long)(pollSecs * (1L << shift)), (long)TOKEN_EXPIRED_POLL_SECS)
     state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
@@ -717,13 +729,10 @@ String handleException(String tag, Exception e) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
-            if (!wasExpired) {
-                // scheduleUpdates() must come before notifyTokenExpired() — notifyTokenExpired()
-                // calls scheduleTokenExpiryReminder() which registers a job; the unschedule()
-                // inside scheduleUpdates() would cancel it if the order were reversed.
-                scheduleUpdates()
-                notifyTokenExpired()
-            }
+            // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
+            // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
+            // the latter's unschedule() would otherwise cancel the reminder job notify arms.
+            if (!wasExpired) { scheduleSlowTimer(); notifyTokenExpired() }
         } else {
             state.message = "AUTH ERROR (${status}) on ${tag}; cleared session, will retry"
         }
@@ -887,11 +896,10 @@ private String memberDisplayName(String memberId) {
  */
 def installed() {
     log.info("installed")
-    createChildDevices()
+    syncChildDevices()
     subscribe(location, 'systemStart', initialize)
     refreshUserSettings()           // learn the account's units preference (settings.unitOfMeasure)
-    state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
-    scheduleUpdates()
+    scheduleSlowTimer()
 }
 
 /**
@@ -907,17 +915,16 @@ def updated() {
     unschedule("sendTokenExpiryReminder")  // clear any pending repeat reminder (§5.2)
     state.tokenStatus = null        // clear so a freshly-pasted token doesn't show stale status
     state.memberCount = null        // re-baseline after any circle/membership config change
-    state.lastCirclesFetchMs = null // fire circles check on next poll tick
-    createChildDevices()
+    state.lastCirclesPollMs = null  // fire the circles check on the next tick (don't wait out the floor)
+    syncChildDevices()
     refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
-    scheduleUpdates()
+    scheduleSlowTimer()
 }
 
 def initialize(evt) {
     log.info("initialize: ${evt.device} ${evt.value} ${evt.name}")
     clearSessionCache()             // clear any in-flight keys left over from before the hub restarted
-    state.scheduledBaseSecs = null  // force scheduleUpdates() to (re)arm
-    scheduleUpdates()
+    scheduleSlowTimer()
 }
 
 
@@ -931,75 +938,100 @@ def uninstalled() {
  */
 def refresh() {
     fetchLocations()
-    scheduleUpdates()
+    scheduleSlowTimer()
 }
-
-def scheduleUpdates() {
-    // pick the desired base rate (no jitter), so we can detect no-op rebuilds
-    Integer baseSecs
-    int pollFreq = (settings.pollFreq ?: "60").toInteger()
-    int dynamicPollFreq = (settings.dynamicPollFreq ?: "20").toInteger()
-    boolean wantDynamic = (settings.dynamicPolling && state.memberInTransit
-        && (pollFreq > dynamicPollFreq))
-    if (wantDynamic) {
-        baseSecs = dynamicPollFreq
-    } else {
-        baseSecs = pollFreq
-    }
-
-    // when token is flagged expired, slow polling to 5 minutes — fetchLocations
-    // would early-return anyway, but the timer was still firing at the user's poll
-    // rate (10s on aggressive installs). 5 min is fast enough to pick up a fresh
-    // token quickly without spamming the scheduler.
-    if (state.tokenLikelyExpired) {
-        baseSecs = TOKEN_EXPIRED_POLL_SECS
-        wantDynamic = false
-    }
-
-    boolean prevActive = (state.dynamicPollingActive == true)
-    boolean modeFlipped = (prevActive != wantDynamic)
-
-    // skip churn: if the base rate hasn't changed AND we've scheduled at least once,
-    // don't tear down + re-arm the job. Stops scheduleUpdates() from re-firing the
-    // same cron registration when called repeatedly from handleTimerFired/fetchLocations.
-    if (!modeFlipped && state.scheduledBaseSecs != null && state.scheduledBaseSecs == baseSecs) {
-        log.info("scheduleUpdates: no-op (baseSecs:${baseSecs} unchanged)")
-        return
-    }
-
-    unschedule()
-    // Re-arm the token-expiry reminder if the token is currently flagged expired —
-    // unschedule() (no-arg) cancels all jobs, which would otherwise silently kill it.
-    if (state.tokenLikelyExpired) notifyTokenExpired()
-    state.dynamicPollingActive = wantDynamic
-    state.scheduledBaseSecs = baseSecs
-    state.pollIntervalSecs = baseSecs
-
-    // pollFreq=0 means Disabled
-    if (baseSecs <= 0) {
-        log.info("scheduleUpdates: polling DISABLED (pollFreq=0)")
-        return
-    }
-
-    // log.info — visibility into polling-mode flips and (re)schedules in production
-    if (modeFlipped) {
-        log.info("scheduleUpdates: polling mode -> ${wantDynamic ? 'DYNAMIC' : 'STANDARD'}, baseSecs:${baseSecs}")
-    } else {
-        log.info("scheduleUpdates: baseSecs:${baseSecs}, pollFreq:${settings.pollFreq}, dynamicPollFreq:${settings.dynamicPollFreq}")
-    }
-
-    if (baseSecs < SECS_PER_MIN) {
-        schedule("0/${baseSecs} * * * * ? *", handleTimerFired)
-    } else {
-        schedule("0 */${(baseSecs / SECS_PER_MIN).toInteger()} * * * ? *", handleTimerFired)
-    }
-}
-
 
 /**
- * called by timer
+ * Arm the SLOW timer — the steady-state poll that fetches every selected member, refreshes
+ * the circle/heartbeat, and runs the watchdog. Fires at the user's Default Refresh Rate
+ * (settings.pollFreq), or every 5 min while the token is flagged expired (probe-only).
+ * Members in motion are additionally polled by per-member runIn chains (see ensureFastChain).
  */
-def handleTimerFired() {
+def scheduleSlowTimer() {
+    // Full clean rebuild. No-arg unschedule() clears EVERY job — slow timer, all fast-poll
+    // chains, any legacy timer. Those chains can't survive this, so drop every fastChain- marker
+    // (not just current users — unschedule killed them all); the next slow tick re-seeds movers.
+    unschedule()
+    removeStateKeysWithPrefix(["fastChain-"])
+
+    // Re-arm the repeat reminder JOB if the token is flagged expired — unschedule() above killed
+    // it. Only re-arms the timer; it does NOT re-send device alerts, so a reboot/refresh while
+    // expired stays silent. The one-shot alert is fired by the auth-failure rising edge instead.
+    if (state.tokenLikelyExpired) scheduleTokenExpiryReminder()
+
+    int baseSecs = state.tokenLikelyExpired ? TOKEN_EXPIRED_POLL_SECS : pollFreqSecs()
+
+    // pollFreq=0 means Disabled — leave polling off
+    if (baseSecs <= 0) {
+        log.info("scheduleSlowTimer: polling DISABLED (pollFreq=0)")
+        return
+    }
+
+    log.info("scheduleSlowTimer: baseSecs:${baseSecs}, pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}")
+
+    if (baseSecs < SECS_PER_MIN) {
+        schedule("0/${baseSecs} * * * * ? *", handleSlowTimer)
+    } else {
+        schedule("0 */${(baseSecs / SECS_PER_MIN).toInteger()} * * * ? *", handleSlowTimer)
+    }
+}
+
+// poll-rate accessors — single source of truth for the UI defaults so the fallback can't drift
+private int pollFreqSecs()        { return (settings.pollFreq ?: "60").toInteger() }
+private int dynamicPollFreqSecs() { return (settings.dynamicPollFreq ?: "20").toInteger() }
+
+/**
+ * Whether the per-member fast-poll chains should run at all: dynamic polling enabled, the
+ * dynamic rate actually faster than the default rate, and the token healthy. Member-specific
+ * conditions (in-transit, still selected) are checked by the callers on top of this.
+ */
+private boolean fastPollEligible() {
+    int dyn = dynamicPollFreqSecs()
+    return (settings.dynamicPolling && dyn > 0 && pollFreqSecs() > dyn && !state.tokenLikelyExpired)
+}
+
+/**
+ * Start a per-member fast-poll chain if one isn't already running for this member. Called when
+ * the slow poll (via notifyChildDevice) sees a member in transit. The fastChain-<id> marker
+ * prevents stacking duplicate chains; it's set only AFTER runIn succeeds so a throwing schedule
+ * can't strand the marker true (which would block all future chains for that member).
+ */
+private void ensureFastChain(String memberId) {
+    if (isEmpty(memberId) || !fastPollEligible()) return
+    if (state["fastChain-${memberId}"]) return   // chain already running for this member
+
+    int dyn = dynamicPollFreqSecs()
+    if (logEnable) log.debug("ensureFastChain: member:${memberDisplayName(memberId)}: starting fast chain @ ${dyn}s")
+    runIn(dyn, "fastPollMember", [data: [memberId: memberId], overwrite: false])
+    state["fastChain-${memberId}"] = true
+}
+
+/**
+ * Per-member fast-poll chain tick. Fetches one member, then re-arms ONLY while they remain in
+ * transit (and dynamic polling stays eligible); otherwise the chain ends and the member rejoins
+ * the slow poll. Re-arm happens before the async fetch so a fetch failure can't break the chain.
+ */
+def fastPollMember(data) {
+    // memberId round-trips through runIn's serialized data map — coerce to a plain String so the
+    // settings.users.contains() membership check below can't silently fail on a CharSequence type.
+    String memberId = data?.memberId?.toString()
+    if (isEmpty(memberId)) return
+    boolean keepGoing = (fastPollEligible() && isMemberInTransit(memberId)
+        && settings.users?.contains(memberId))
+
+    if (keepGoing) {
+        runIn(dynamicPollFreqSecs(), "fastPollMember", [data: [memberId: memberId], overwrite: false])
+    } else {  // chain ends here — member stopped, deselected, or dynamic disabled
+        state.remove("fastChain-${memberId}")
+        if (logEnable) log.debug("fastPollMember: member:${memberDisplayName(memberId)}: chain ended, rejoining slow poll")
+    }
+    fetchMemberLocation(memberId)
+}
+
+/**
+ * SLOW timer callback — watchdog + circle/heartbeat refresh + full member poll.
+ */
+def handleSlowTimer() {
     // watchdog: if we haven't had a successful fetch in a long time, surface it loudly.
     // Threshold = max(pollFreq * 10, 10 minutes). state.message is rendered on mainPage,
     // and a log.warn shows up in Hubitat's main log so the user can see something is wrong
@@ -1007,7 +1039,7 @@ def handleTimerFired() {
     Long now = new Date().getTime()
     if (state.lastSuccessMs != null) {
         long ageMs = now - state.lastSuccessMs
-        Integer pollFreqSec = (settings.pollFreq?.toString() ?: "60").toInteger()
+        int pollFreqSec = pollFreqSecs()
         long thresholdMs = Math.max((long)(pollFreqSec * 10L * 1000L), (long)(10L * 60L * 1000L))
         if (ageMs > thresholdMs && !state.tokenLikelyExpired) {
             // only log on the rising edge — otherwise this would spam every poll tick
@@ -1020,10 +1052,12 @@ def handleTimerFired() {
         }
     }
 
-    // circles check — at most once per minute; detects membership changes regardless of location fetch state
-    long lastCirclesFetchMs = (state.lastCirclesFetchMs ?: 0L) as long
-    if (now - lastCirclesFetchMs >= CIRCLES_POLL_INTERVAL_MS) {
-        state.lastCirclesFetchMs = now
+    // circles check — membership + heartbeat. Rides the slow tick but floored at
+    // CIRCLES_MIN_POLL_SECS so a fast pollFreq can't flood /circles for near-static data.
+    long lastCirclesPollMs = (state.lastCirclesPollMs ?: 0L) as long
+    long circlesIntervalMs = Math.max(pollFreqSecs(), CIRCLES_MIN_POLL_SECS) * 1000L
+    if (now - lastCirclesPollMs >= circlesIntervalMs) {
+        state.lastCirclesPollMs = now
         def circlesParams = life360Params("/circles")
         def cookies = state["cookies"]
         if (cookies) circlesParams["headers"]["Cookie"] = cookies
@@ -1041,7 +1075,7 @@ def handleTimerFired() {
 }
 
 /**
- * Async /users/me probe fired by handleTimerFired when tokenLikelyExpired is set.
+ * Async /users/me probe fired by handleSlowTimer when tokenLikelyExpired is set.
  * On 200: service is back — clear the flag and resume normal polling automatically.
  * On 401/403: token still dead — stay in degraded mode, reminders continue.
  * On network error or other status: stay quiet and try again next tick.
@@ -1072,7 +1106,7 @@ def handleTokenProbeResponse(response, data) {
         state.rateLimitedUntilMs = null
         state.message = null
         unschedule("sendTokenExpiryReminder")
-        scheduleUpdates()   // restore normal polling rate
+        scheduleSlowTimer()   // restore normal polling rate
         try {
             captureUnitOfMeasure(response.json)
         } catch (e) {
@@ -1109,31 +1143,43 @@ def handleCirclesPollResponse(response, data) {
 
     String circleName = showNamesInLogs() ? (circle.name ?: circle.id) : circle.id
     int newCount = circle.memberCount?.toInteger() ?: 0
+    Integer prevCount = (state.memberCount != null) ? (state.memberCount as int) : null
+    state.memberCount = newCount
 
-    if (state.memberCount == null) {
-        state.memberCount = newCount
-        if (isEmpty(state.members)) {
-            log.info("fetchCircles: ${circleName}: memberCount:${newCount} — triggering initial member fetch")
-            fetchMembers()
-        } else {
-            if (logEnable) log.debug("fetchCircles: ${circleName}: memberCount:${newCount} (initialized)")
-        }
-        return
-    }
+    // refresh the member roster when the count actually changes, or when we don't have a roster
+    // yet. NOT on a mere re-baseline (prevCount nulled by updated()) with the roster already
+    // loaded — that would burn an API call on every Done/reboot for no new data. Note prevCount
+    // is null on re-baseline, so guard the change-compare with prevCount != null.
+    boolean countChanged = (prevCount != null && newCount != prevCount)
+    if (countChanged || isEmpty(state.members)) fetchMembers()
 
-    int prevCount = state.memberCount as int
-    if (newCount == prevCount) {
-        if (logEnable) log.debug("fetchCircles: ${circleName}: memberCount:${newCount} (no change)")
-    } else {
-        log.info("fetchCircles: ${circleName}: ${prevCount} → ${newCount}")
-        state.memberCount = newCount
-        fetchMembers()
-    }
+    // heartbeat — fires on EVERY poll. Shows the count, any count change, and per-member
+    // connection status (issues.disconnected) so the log proves polling is alive and healthy.
+    String delta = countChanged ? " (${prevCount} → ${newCount})" : ""
+    log.info("fetchCircles: ${circleName}: memberCount:${newCount}${delta} ${memberStatusSummary()}")
 }
 
+/**
+ * Per-member "name:connected/disconnected" summary for the heartbeat log, derived from each
+ * member's issues.disconnected flag in state.members. Empty string if no members are selected.
+ */
+private String memberStatusSummary() {
+    return settings.users?.collect { memberId ->
+        def member = state.members?.find { it.id == memberId }
+        // tolerate any truthy form Life360 might send: "1"/1/true (vs "0"/0/false/absent)
+        boolean disconnected = (member?.issues?.disconnected?.toString() in ["1", "true"])
+        " | ${memberDisplayName(memberId)}:${disconnected ? 'disconnected' : 'connected'}"
+    }?.join(" ") ?: ""
+}
+
+/**
+ * Create child devices for all selected members that don't already have one.
+ * Returns the pre-existing device map (DNI -> device) it walked, so syncChildDevices()
+ * can reuse it for orphan pruning instead of walking getChildDevices() a second time.
+ */
 def createChildDevices() {
-    if (isEmpty(settings.users)) return;
-    if (isEmpty(state.members)) return;
+    if (isEmpty(settings.users)) return null;
+    if (isEmpty(state.members)) return null;
 
     // hoist getChildDevices() once — avoids O(N²) hub device-list walks (§4.4)
     Map childMap = getChildDevices().collectEntries { [it.deviceNetworkId, it] }
@@ -1157,25 +1203,55 @@ def createChildDevices() {
             }
         }
     }
+    return childMap
+}
 
-    // remove child devices whose member is no longer selected (orphan cleanup)
+/**
+ * Create child devices for new members and remove devices + all per-member state
+ * for members that are no longer selected.
+ */
+def syncChildDevices() {
+    if (isEmpty(settings.users)) return   // nothing to create or prune against
+
+    // reuse the device map createChildDevices() already walked; any device it just added is a
+    // wanted member so its absence from this pre-add snapshot can't misflag it as an orphan.
+    Map childMap = createChildDevices() ?: getChildDevices().collectEntries { [it.deviceNetworkId, it] }
     Set<String> wantedDnis = settings.users.collect { "${app.id}.${it}".toString() } as Set
     childMap.each { dni, child ->
         if (!wantedDnis.contains(dni)) {
-            log.info "createChildDevices: removing orphan child: ${child.displayName} (${dni})"
+            log.info "syncChildDevices: removing orphan child: ${child.displayName} (${dni})"
             try {
                 deleteChildDevice(dni)
-                // dni = "<appId>.<memberId>" — strip the app prefix to get the memberId
                 String memberId = dni.contains('.') ? dni.substring(dni.indexOf('.') + 1) : dni
-                state.remove("inTransit-${memberId}")
+                cleanupMemberState(memberId)
             } catch (e) {
-                log.error "createChildDevices: failed to remove ${child.displayName}: ${e}"
+                log.error "syncChildDevices: failed to remove ${child.displayName}: ${e}"
             }
         }
     }
+}
 
-    // not enabling webhook as it doesn't appear to work anymore
-    // createCircleSubscription()
+/**
+ * Remove ALL per-member state keys (session + identity) for a member that has been
+ * deselected or removed. See MEMBER_STATE_PREFIXES_* for the canonical list.
+ */
+private void cleanupMemberState(String memberId) {
+    (MEMBER_STATE_PREFIXES_SESSION + MEMBER_STATE_PREFIXES_IDENTITY).each { prefix ->
+        state.remove("${prefix}${memberId}")
+    }
+}
+
+/**
+ * Remove every state key whose name starts with one of the given prefixes, across all members.
+ * Used when a class of per-member keys must be dropped wholesale (e.g. fast-poll chain markers
+ * after unschedule(), or session keys after an auth failure).
+ */
+private void removeStateKeysWithPrefix(List<String> prefixes) {
+    def toRemove = state.keySet().findAll { k ->
+        String key = k?.toString()
+        key && prefixes.any { key.startsWith(it) }
+    }
+    toRemove.each { state.remove(it) }
 }
 
 private removeChildDevices(delete) {
@@ -1215,11 +1291,10 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
             if (transitFlipped && logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
             // save inTransit state per member
             state["inTransit-${memberId}"] = inTransit
-            // Re-evaluate the polling rate the instant a member's transit state flips,
-            // using this fresh flag. The old synchronous dynamicPolling() call in
-            // fetchLocations() ran before the async responses landed, so it always read
-            // the previous tick's flags and lagged rate changes by a full poll cycle.
-            if (transitFlipped && settings.dynamicPolling) dynamicPolling()
+            // Re-seed even without a transit flip: after a reboot the runIn chain is gone but
+            // inTransit- persists, so this restarts it on the next slow tick. ensureFastChain
+            // no-ops if a chain is already running or dynamic is ineligible.
+            if (inTransit && settings.dynamicPolling) ensureFastChain(memberId)
         } else {
             log.error("notifyChildDevice: device not found: ${externalId}")
         }
@@ -1328,39 +1403,9 @@ private boolean mergeCookie(String cookieVal) {
 void clearSessionCache() {
     if (logEnable) log.debug("clearSessionCache: dropping cookie jar [${cookieJarSummary()}] + etags/inflight/backoff (likely after auth failure)")
     state.remove("cookies")
-    def toRemove = []
-    state.each { k, v ->
-        if (k?.toString()?.startsWith("etag-") || k?.toString()?.startsWith("inflight-") ||
-            k?.toString()?.startsWith("transientCount-") || k?.toString()?.startsWith("transientUntilMs-")) toRemove << k
-    }
-    toRemove.each { state.remove(it) }
-}
-
-void dynamicPolling() {
-    state.memberInTransit = false
-
-    // iterate over every selected member
-    settings.users.each { memberId ->
-        boolean inTransit = isMemberInTransit(memberId)
-        if (inTransit) {
-            state.memberInTransit = true
-        }
-    }
-
-    if (state.memberInTransit && ! state.dynamicPollingActive) {
-        scheduleUpdates()
-        if (logEnable) log.debug("dynamicPolling: switched STANDARD -> DYNAMIC (memberInTransit: ${state.memberInTransit}, dynamicPollingActive: ${state.dynamicPollingActive})")
-
-    } else if (state.memberInTransit && state.dynamicPollingActive) {
-        // already in dynamic mode — no-op
-
-    } else if (! state.memberInTransit && state.dynamicPollingActive) {
-        // §8.4: state.memberInTransit was already set to false at the top of this method
-        scheduleUpdates()
-        if (logEnable) log.debug("dynamicPolling: switched DYNAMIC -> STANDARD (memberInTransit: ${state.memberInTransit}, dynamicPollingActive: ${state.dynamicPollingActive})")
-    } else {
-        // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
-    }
+    // only session-scoped keys — identity keys (inTransit) survive a re-auth so transit state
+    // isn't lost when a token is merely re-pasted.
+    removeStateKeysWithPrefix(MEMBER_STATE_PREFIXES_SESSION)
 }
 
 boolean isMemberInTransit(memberId) {
