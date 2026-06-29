@@ -157,19 +157,19 @@ def updated() {
 // @param member - Life360 member object (user details)
 // @param thePlaces - pre-serialized JSON of all Life360 places (string); a raw Map is still accepted for backward compat
 // @param home - Life360 circle which user selected as 'home'
+// @param ctx - optional poll-cycle context map (showNames, showMapsLink, useMiles) hoisted by the app once per tick
 //
 // @return true if member is in transit (per Life360 inTransit flag)
-boolean generatePresenceEvent(member, thePlaces, home) {
+boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     if (member == null) return false
-    //log.trace("generatePresenceEvent: member:${member}")
     def location = member.location
     if (location == null) return false
 
-    // hoist parent IPC calls once per event — avoids repeated cross-device calls in the hot path
-    boolean showNames = true
-    try { showNames = (parent?.getShowNamesInLogs() != false) } catch (ignored) {}
-    boolean showMapsLink = true
-    try { showMapsLink = (parent?.getShowMapsLink() != false) } catch (ignored) {}
+    // prefer values hoisted by the app (one IPC call per tick); fall back to per-call IPC for
+    // backward compat (e.g. direct driver calls from tools or older app versions)
+    boolean showNames = (ctx?.showNames != null) ? ctx.showNames : { try { parent?.getShowNamesInLogs() != false } catch (ignored) { true } }()
+    boolean showMapsLink = (ctx?.showMapsLink != null) ? ctx.showMapsLink : { try { parent?.getShowMapsLink() != false } catch (ignored) { true } }()
+    boolean logRawPayload = (ctx?.logRawPayload != null) ? ctx.logRawPayload : { try { parent?.getLogRawPayload() == true } catch (ignored) { false } }()
 
     // -- location --
     // round to 5 decimal places (~1m precision) — matches history storage and avoids spurious sub-meter jitter
@@ -196,7 +196,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     String memberLastName = (member.lastName) ? member.lastName : ""
     // -- home -- (null if the selected place was removed from Life360; treat as absent)
     if (home == null) {
-        log.warn("generatePresenceEvent: home place not found — check that the selected HOME place still exists in Life360")
+        log.error("generatePresenceEvent: home place not found — presence update skipped; re-open Life360+ and verify the selected HOME place still exists in Life360")
         return false
     }
     Double homeLatitude = toDouble(home.latitude)
@@ -209,7 +209,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
 
-    if (parent?.getLogRawPayload()) log.trace("generatePresenceEvent: location payload: ${location}")
+    if (logRawPayload) log.trace("generatePresenceEvent: location payload: ${location}")
 
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
@@ -219,24 +219,12 @@ boolean generatePresenceEvent(member, thePlaces, home) {
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
-    sendEvent(name: "memberName", value: memberFullName)
-
-    // *** Places List ***
-    // app pre-serializes once per poll (§4.5); tolerate a raw Map from an older app
-    String savedPlacesValue = (thePlaces instanceof CharSequence) ? thePlaces.toString() : new groovy.json.JsonBuilder(thePlaces).toString()
-    sendEvent(name: "savedPlaces", value: savedPlacesValue)
+    if (memberFullName != device.currentValue("memberName")) sendEvent(name: "memberName", value: memberFullName)
 
     // *** Avatar ***
-    String avatar
-    String avatarHtml
-    if (member.avatar != null) {
-        avatar = member.avatar
-        avatarHtml = avatar.startsWith("http") ? "<img src=\"${avatar}\">" : ""
-    } else {
-        avatar = ""
-        avatarHtml = ""
-    }
-    sendEvent(name: "avatar", value: avatar)
+    String avatar = member.avatar ?: ""
+    String avatarHtml = (avatar.startsWith("http")) ? "<img src=\"${avatar}\">" : ""
+    if (avatar != device.currentValue("avatar")) sendEvent(name: "avatar", value: avatar)
 
     // *** Location ***
     Double distanceAway = haversine(latitude, longitude, homeLatitude, homeLongitude) * 1000 // in meters
@@ -288,10 +276,9 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     // Units follow the user's Life360 account setting (settings.unitOfMeasure) when the app
     // has learned it; the local isMiles toggle is only a fallback until then.
     Boolean useMiles = isMiles
-    try {
-        Boolean apiMiles = parent?.getUnitIsMiles()
-        if (apiMiles != null) useMiles = apiMiles
-    } catch (ignored) {}
+    Boolean ctxMiles = ctx?.useMiles
+    if (ctxMiles != null) useMiles = ctxMiles
+    else { try { Boolean apiMiles = parent?.getUnitIsMiles(); if (apiMiles != null) useMiles = apiMiles } catch (ignored) {} }
     speedUnits = (speed * (useMiles ? MS_TO_MPH : MS_TO_KPH)).round(2)
     distanceUnits = ((distanceAway / 1000) / (useMiles ? KM_PER_MI : 1)).round(2)
 
@@ -361,10 +348,10 @@ boolean generatePresenceEvent(member, thePlaces, home) {
     if (member.communications != null) {
         member.communications.each { comm ->
             String commType = comm.get('channel')
-            if (commType != null && commType == "Voice") {
-                sendEvent(name: "phone", value: comm.value)
-            } else if (commType != null && commType == "Email") {
-                sendEvent(name: "email", value: comm.value)
+            if (commType == "Voice") {
+                if (comm.value != device.currentValue("phone")) sendEvent(name: "phone", value: comm.value)
+            } else if (commType == "Email") {
+                if (comm.value != device.currentValue("email")) sendEvent(name: "email", value: comm.value)
             }
         }
     }
@@ -377,8 +364,7 @@ boolean generatePresenceEvent(member, thePlaces, home) {
         return inTransit
     }
 
-    // send HTML avatar if generateHTML is enabled; otherwise clear it (only if previously set)
-    sendEvent(name: "avatarHtml", value: avatarHtml)
+    if (avatarHtml != device.currentValue("avatarHtml")) sendEvent(name: "avatarHtml", value: avatarHtml)
 
     String motionLabel
     if (isDriving) motionLabel = "Driving"

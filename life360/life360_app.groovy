@@ -14,6 +14,8 @@ import groovy.transform.Field
 @Field static final int    CIRCLES_API_VERSION             = 4     // Life360 API version for the /circles endpoint
 @Field static final int    MAX_BACKOFF_SHIFT               = 6     // max bit-shift for exponential backoff (caps at 2^6 = 64× base interval)
 @Field static final int    CIRCLES_MIN_POLL_SECS           = 60    // floor for /circles polling — membership rarely changes, so never hit it faster than this even at a fast pollFreq
+@Field static final String LIFE360_BASE_URL_V3             = "https://api-cloudfront.life360.com/v3"
+@Field static final String LIFE360_BASE_URL_V4             = "https://api-cloudfront.life360.com/v4"
 
 // Per-member state key prefixes, by scope. SESSION keys are session-bound and dropped on
 // auth failure (clearSessionCache); IDENTITY keys outlive a re-auth. Removing a member drops
@@ -420,7 +422,7 @@ def fetchCircles() {
                 captureCookies(response)
                 if (getLogRawPayload()) log.trace("fetchCircles: ${response.status} ${response.data}")
                 if (response.status == 200) {
-                    state.circles = response.data.circles
+                    state.circles = response.data.circles?.collect { [id: it.id, name: it.name] }
                     if (!state.circles) log.warn("fetchCircles: 0 circles returned — check that your account belongs to a circle")
                     if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
@@ -451,7 +453,7 @@ def fetchPlaces() {
                 captureCookies(response)
                 if (getLogRawPayload()) log.trace("fetchPlaces: ${response.status} ${response.data}")
                 if (response.status == 200) {
-                    state.places = response.data.places
+                    state.places = response.data.places?.collect { [id: it.id, name: it.name, latitude: it.latitude, longitude: it.longitude, radius: it.radius] }
                     if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
                     if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
@@ -493,25 +495,30 @@ def handleMembersResponse(response, data) {
     if (getLogRawPayload()) { try { log.trace("fetchMembers: ${status} ${response.json}") } catch (ignored) {} }
 
     if (status == 200) {
+        def rawMembers
         try {
-            state.members = response.json?.members
+            rawMembers = response.json?.members
         } catch (e) {
             log.error("fetchMembers: failed to parse response JSON: ${e.message}")
             state.message = "fetchMembers: invalid response body (parse error)"
             return
         }
+        // store only the fields the app needs (id/firstName/lastName/issues) — the full
+        // member object carries location, avatar, communications, etc. and is large; trimming
+        // here keeps state small so every execution's deserialize cost stays low
+        state.members = rawMembers?.collect { [id: it.id, firstName: it.firstName, lastName: it.lastName, issues: [disconnected: it.issues?.disconnected]] }
         if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
         state.message = null
 
         // sync child devices: create for newly selected members, remove departed ones
         syncChildDevices()
 
-        // push refreshed name/avatar/location to all selected members that have a device
+        // push refreshed name/avatar/location to all selected members that have a device.
+        // use rawMembers (not state.members) — state.members is already trimmed above.
+        // /circles/<id>/members doesn't always include location; the driver early-returns
+        // on a null location anyway, but guard explicitly so the intent is visible here.
         settings.users?.each { memberId ->
-            def member = state.members?.find { it.id == memberId }
-            // /circles/<id>/members doesn't always include location; the driver
-            // early-returns on a null location anyway, but guard explicitly so the
-            // intent is visible here and a future API change can't surprise us.
+            def member = rawMembers?.find { it.id == memberId }
             if (member?.location) notifyChildDevice(memberId, member)
         }
     } else if (status == 401 || status == 403) {
@@ -548,8 +555,13 @@ boolean fetchLocations() {
         return false
     }
 
-    // build places context once per poll cycle — reused for every member (§4.2)
+    // build context once per poll cycle — shared across all member fetches this tick
     def ctx = buildPlacesContext()
+    ctx.cookies      = state["cookies"]
+    ctx.showNames    = showNamesInLogs()
+    ctx.showMapsLink = (settings.logShowMapsLink != false)
+    ctx.useMiles     = getUnitIsMiles()   // null = not yet known; driver falls back to its local pref
+    ctx.logRawPayload = getLogRawPayload()
 
     settings.users.each { memberId ->
         fetchMemberLocation(memberId, ctx)
@@ -588,7 +600,7 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     def params = life360Params("/circles/${circle}/members/${memberId}")
     params.timeout = httpTimeout
 
-    def cookies = state["cookies"]
+    def cookies = ctx?.cookies ?: state["cookies"]
     if (cookies) params["headers"]["Cookie"] = cookies
 
     def tag = state["etag-${memberId}"]
@@ -625,7 +637,7 @@ def handleMemberLocationResponse(response, Map data) {
             return
         }
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
-        if (getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
+        if (ctx?.logRawPayload ?: getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
         notifyChildDevice(memberId, memberObj, ctx)
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
         markFetchSuccess(memberId)
@@ -807,15 +819,10 @@ private Integer readRetryAfterSecs(Exception e) {
     return null
 }
 
-private String life360BaseUrl(int version = 3) {
-    // alternate base URL to try if cloudfront stops working:
-    // return "https://api.life360.com/v${version}"
-    return "https://api-cloudfront.life360.com/v${version}"
-}
-
 private Map life360Params(String path, int version = 3) {
+    String base = (version == 4) ? LIFE360_BASE_URL_V4 : LIFE360_BASE_URL_V3
     return [
-        uri    : "${life360BaseUrl(version)}${path}",
+        uri    : "${base}${path}",
         headers: getHttpHeaders(),
         timeout: HTTP_TIMEOUT_SECS
     ]
@@ -916,6 +923,14 @@ def updated() {
     state.tokenStatus = null        // clear so a freshly-pasted token doesn't show stale status
     state.memberCount = null        // re-baseline after any circle/membership config change
     state.lastCirclesPollMs = null  // fire the circles check on the next tick (don't wait out the floor)
+    // remove state keys that were dropped in prior versions
+    state.remove("placesJson")
+    state.remove("cachedHome")
+    state.remove("scheduledBaseSecs")
+    state.remove("pollIntervalSecs")
+    state.remove("dynamicPollingActive")
+    state.remove("memberInTransit")
+    state.remove("lastCirclesFetchMs")
     syncChildDevices()
     refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
     scheduleSlowTimer()
@@ -1025,7 +1040,13 @@ def fastPollMember(data) {
         state.remove("fastChain-${memberId}")
         if (logEnable) log.debug("fastPollMember: member:${memberDisplayName(memberId)}: chain ended, rejoining slow poll")
     }
-    fetchMemberLocation(memberId)
+    def ctx = buildPlacesContext()
+    ctx.cookies      = state["cookies"]
+    ctx.showNames    = showNamesInLogs()
+    ctx.showMapsLink = (settings.logShowMapsLink != false)
+    ctx.useMiles     = getUnitIsMiles()
+    ctx.logRawPayload = getLogRawPayload()
+    fetchMemberLocation(memberId, ctx)
 }
 
 /**
@@ -1058,7 +1079,7 @@ def handleSlowTimer() {
     long circlesIntervalMs = Math.max(pollFreqSecs(), CIRCLES_MIN_POLL_SECS) * 1000L
     if (now - lastCirclesPollMs >= circlesIntervalMs) {
         state.lastCirclesPollMs = now
-        def circlesParams = life360Params("/circles")
+        def circlesParams = life360Params("/circles", CIRCLES_API_VERSION)
         def cookies = state["cookies"]
         if (cookies) circlesParams["headers"]["Cookie"] = cookies
         asynchttpGet("handleCirclesPollResponse", circlesParams)
@@ -1122,7 +1143,7 @@ def handleTokenProbeResponse(response, data) {
 def handleCirclesPollResponse(response, data) {
     Integer status = response.status
     if (!status) {
-        log.error("fetchCircles: poll: network error: ${response.getErrorMessage() ?: "(no details)"}")
+        log.warn("fetchCircles: poll: network error: ${response.getErrorMessage() ?: "(no details)"}")
         return
     }
     captureCookiesAsync(response)
@@ -1137,7 +1158,7 @@ def handleCirclesPollResponse(response, data) {
 
     def circle = response.json?.circles?.find { it.id == settings.circle }
     if (!circle) {
-        log.warn("fetchCircles: poll: configured circle not found in response — removed from account?")
+        log.error("fetchCircles: poll: configured circle not found in response — all location updates will fail until you re-open Life360+ and select a valid circle")
         return
     }
 
@@ -1156,7 +1177,7 @@ def handleCirclesPollResponse(response, data) {
     // heartbeat — fires on EVERY poll. Shows the count, any count change, and per-member
     // connection status (issues.disconnected) so the log proves polling is alive and healthy.
     String delta = countChanged ? " (${prevCount} → ${newCount})" : ""
-    log.info("fetchCircles: ${circleName}: memberCount:${newCount}${delta} ${memberStatusSummary()}")
+    log.info("heartbeat - ${circleName}: memberCount:${newCount}${delta} ${memberStatusSummary()}")
 }
 
 /**
@@ -1164,9 +1185,9 @@ def handleCirclesPollResponse(response, data) {
  * member's issues.disconnected flag in state.members. Empty string if no members are selected.
  */
 private String memberStatusSummary() {
+    Map memberById = (state.members ?: []).collectEntries { [it.id, it] }
     return settings.users?.collect { memberId ->
-        def member = state.members?.find { it.id == memberId }
-        // tolerate any truthy form Life360 might send: "1"/1/true (vs "0"/0/false/absent)
+        def member = memberById[memberId]
         boolean disconnected = (member?.issues?.disconnected?.toString() in ["1", "true"])
         " | ${memberDisplayName(memberId)}:${disconnected ? 'disconnected' : 'connected'}"
     }?.join(" ") ?: ""
@@ -1285,12 +1306,13 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
             // send location, places and home to device driver
-            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesJson, home)
+            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesJson, home, ctx)
             boolean prevInTransit = isMemberInTransit(memberId)
             boolean transitFlipped = (prevInTransit != inTransit)
-            if (transitFlipped && logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
-            // save inTransit state per member
-            state["inTransit-${memberId}"] = inTransit
+            if (transitFlipped) {
+                if (logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
+                state["inTransit-${memberId}"] = inTransit
+            }
             // Re-seed even without a transit flip: after a reboot the runIn chain is gone but
             // inTransit- persists, so this restarts it on the next slow tick. ensureFastChain
             // no-ops if a chain is already running or dynamic is ineligible.
@@ -1310,10 +1332,7 @@ private Map buildPlacesContext() {
     for (rec in thePlaces) {
         placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
     }
-    // serialize the places JSON once per poll — it's identical for every member,
-    // so the driver shouldn't re-serialize it N times (§4.5)
-    String placesJson = new groovy.json.JsonBuilder(placesMap).toString()
-    return [placesJson: placesJson, home: home]
+    return [placesJson: new groovy.json.JsonBuilder(placesMap).toString(), home: home]
 }
 
 void captureCookies(response) {
