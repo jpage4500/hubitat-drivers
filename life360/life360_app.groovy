@@ -923,14 +923,7 @@ def updated() {
     state.tokenStatus = null        // clear so a freshly-pasted token doesn't show stale status
     state.memberCount = null        // re-baseline after any circle/membership config change
     state.lastCirclesPollMs = null  // fire the circles check on the next tick (don't wait out the floor)
-    // remove state keys that were dropped in prior versions
-    state.remove("placesJson")
-    state.remove("cachedHome")
-    state.remove("scheduledBaseSecs")
-    state.remove("pollIntervalSecs")
-    state.remove("dynamicPollingActive")
-    state.remove("memberInTransit")
-    state.remove("lastCirclesFetchMs")
+    removeObsoleteStateKeys()
     syncChildDevices()
     refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
     scheduleSlowTimer()
@@ -939,7 +932,18 @@ def updated() {
 def initialize(evt) {
     log.info("initialize: ${evt.device} ${evt.value} ${evt.name}")
     clearSessionCache()             // clear any in-flight keys left over from before the hub restarted
+    removeObsoleteStateKeys()
+    state.rateLimitedUntilMs = null // rate limit windows don't survive a reboot
+    state.memberCount = null        // re-baseline so circles check fires immediately
+    state.lastCirclesPollMs = null  // fire circles check on first tick after reboot
+    syncChildDevices()
+    refreshUserSettings()
     scheduleSlowTimer()
+}
+
+private void removeObsoleteStateKeys() {
+    ["placesJson", "cachedHome", "scheduledBaseSecs", "pollIntervalSecs",
+     "dynamicPollingActive", "memberInTransit", "lastCirclesFetchMs"].each { state.remove(it) }
 }
 
 
