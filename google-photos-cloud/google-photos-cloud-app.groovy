@@ -753,6 +753,8 @@ def resume() {
     } else {
         logDebug("resume: tick every ${interval} ${units}")
     }
+    // publish the configured interval (in seconds) to each child device
+    getChildDevices().each { it.sendEvent(name: 'refreshTime', value: intervalSeconds) }
     // refresh now so a currently-stale image is fixed immediately on save/reboot
     refreshCurrentPhotos()
 }

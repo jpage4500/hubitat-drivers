@@ -602,17 +602,19 @@ static String safeName(String filename) {
 byte[] safeDownloadHubFile(String fileName) {
     for (int i = 1; i <= 3; i++) {
         try {
-            return downloadHubFile(fileName)
+            byte[] result = downloadHubFile(fileName)
+            if (result != null && result.length > 0) {
+                return result
+            }
+            log.warn "Empty result downloading ${fileName} (attempt ${i}/3). Retrying ..."
         } catch (AccessDeniedException ex) {
-            log.warn "Failed to download ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
-            pauseExecution(500)
+            log.warn "AccessDeniedException: ${fileName}: ${ex.message}. Retrying (${i}/3) ..."
         }
+        pauseExecution(500)
     }
-
     log.error "Failed to download ${fileName} after 3 attempts"
     return null
 }
-
 
 void safeUploadHubFile(String fileName, byte[] bytes) {
     for (int i = 1; i <= 3; i++) {
@@ -620,7 +622,7 @@ void safeUploadHubFile(String fileName, byte[] bytes) {
             uploadHubFile(fileName, bytes)
             return
         } catch (AccessDeniedException ex) {
-            log.warn "Failed to upload ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
+            log.warn "AccessDeniedException: ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
             pauseExecution(500)
         }
     }
@@ -628,14 +630,13 @@ void safeUploadHubFile(String fileName, byte[] bytes) {
     log.error "Failed to upload ${fileName} after 3 attempts - possible data loss"
 }
 
-
 void safeDeleteHubFile(String fileName) {
     for (int i = 1; i <= 3; i++) {
         try {
             deleteHubFile(fileName)
             return
         } catch (AccessDeniedException ex) {
-            log.warn "Failed to delete ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
+            log.warn "AccessDeniedException: ${fileName}: ${ex.message}. Retrying (${i} / 3) ..."
             pauseExecution(500)
         }
     }

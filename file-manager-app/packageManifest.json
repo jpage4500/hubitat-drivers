@@ -1,11 +1,11 @@
 {
   "packageName": "File Manager+",
   "author": "Joe Page",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2025-09-02",
   "communityLink": "https://community.hubitat.com/t/file-manager-beta/156586",
-  "releaseNotes": "- fix issue with font size after deleting",
+  "releaseNotes": "- add copy to clipboard button",
   "apps": [
     {
       "id": "764e673c-d27e-44e2-be98-70def8ea9d66",

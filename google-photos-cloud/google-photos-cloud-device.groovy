@@ -24,6 +24,7 @@ metadata {
         attribute 'mediaType', 'string'
         attribute 'index', 'number'
         attribute 'total', 'number'
+        attribute 'refreshTime', 'number'
 
         command 'next'
         command 'previous'
@@ -59,6 +60,7 @@ def initialize() {
     sendEvent(name: 'mediaType', value: device.currentValue('mediaType') ?: 'photo')
     sendEvent(name: 'index', value: device.currentValue('index') ?: 0)
     sendEvent(name: 'total', value: device.currentValue('total') ?: 0)
+    sendEvent(name: 'refreshTime', value: device.currentValue('refreshTime') ?: 0)
 }
 
 def refresh() {
