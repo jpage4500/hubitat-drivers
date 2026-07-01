@@ -162,6 +162,9 @@ def mainPage() {
             input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only — don't share resulting logs.")
             input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
             input(name: "logShowMapsLink", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
+            input(name: "logUnits", type: "enum", defaultValue: "life360", title: "Units (all members)",
+                description: "Units for speed and distance in logs and device attributes. Overrides each member device's own setting when set to anything other than 'Follow Life360 app'.",
+                options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
         }
 
         section(header("Map View")) {
@@ -327,14 +330,22 @@ def handleUserSettingsResponse(response, data) {
 }
 
 /**
- * Units preference sourced from the user's Life360 account (settings.unitOfMeasure).
- * @return true = miles/mph, false = km/kph, or null if not yet known (driver falls back
- *         to its local isMiles toggle).
+ * Resolves the units preference for log/display output, computed once per tick and
+ * threaded to all members via ctx.useMiles. Hard overrides return immediately;
+ * "life360" defers to the account setting; null means not yet known (driver falls
+ * back to its own per-device setting).
+ * @return true = miles/mph, false = km/kph, null = not yet known
  */
 Boolean getUnitIsMiles() {
-    if (state.unitOfMeasure == 'i') return true
-    if (state.unitOfMeasure == 'm') return false
-    return null
+    switch (settings.logUnits) {
+        case "imperial": return true
+        case "metric":   return false
+        case "hubitat":  return (location.temperatureScale != "C")
+        default: // "life360" — use account setting, null if not yet received
+            if (state.unitOfMeasure == 'i') return true
+            if (state.unitOfMeasure == 'm') return false
+            return null
+    }
 }
 
 // ---- end Token check --------------------------------------------------------

@@ -107,7 +107,10 @@ metadata {
 }
 
 preferences {
-    input "isMiles", "bool", title: "Units: Miles (fallback only — your Life360 account's units setting is used when available)", required: true, defaultValue: true
+    input "unitOverride", "enum", title: "Units (this device only)",
+        description: "Per-device fallback. The app-level 'Units' setting overrides this when set to anything other than 'Follow Life360 app'.",
+        options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"],
+        required: true, defaultValue: "life360"
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
     input "saveHistory", "bool", title: "Save Location History", description: "Save recent locations (time/lat/lng) to 'history' attribute", required: true, defaultValue: false
 
@@ -150,6 +153,14 @@ def installed() {
 
 def updated() {
     log.info "updated: Location Tracker User Driver has been Updated"
+    // one-time migration: isMiles bool → unitOverride enum (isMiles removed in 5.2.0)
+    if (settings.unitOverride == null || settings.unitOverride == "life360") {
+        def oldIsMiles = settings.isMiles
+        if (oldIsMiles == false) {
+            device.updateSetting("unitOverride", [value: "metric", type: "enum"])
+            log.info "updated: migrated isMiles=false → unitOverride=metric"
+        }
+    }
     refresh()
 }
 
@@ -162,6 +173,8 @@ def updated() {
 // @return true if member is in transit (per Life360 inTransit flag)
 boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     if (member == null) return false
+    // Capture hub temperatureScale before `location` is shadowed by member.location below
+    String hubTempScale = location.temperatureScale
     def location = member.location
     if (location == null) return false
 
@@ -273,12 +286,25 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     Double distanceUnits    // in user's preference of miles or km
     // check for iPhone reporting speed of -1
     if (speed == -1) speed = 0.0
-    // Units follow the user's Life360 account setting (settings.unitOfMeasure) when the app
-    // has learned it; the local isMiles toggle is only a fallback until then.
-    Boolean useMiles = isMiles
-    Boolean ctxMiles = ctx?.useMiles
-    if (ctxMiles != null) useMiles = ctxMiles
-    else { try { Boolean apiMiles = parent?.getUnitIsMiles(); if (apiMiles != null) useMiles = apiMiles } catch (ignored) {} }
+    // Hard overrides (imperial/metric/hubitat) ignore the Life360 API entirely.
+    // "life360" (default): API setting wins, fall back to Hubitat system if not yet known.
+    Boolean useMiles
+    if (unitOverride == "imperial") {
+        useMiles = true
+    } else if (unitOverride == "metric") {
+        useMiles = false
+    } else if (unitOverride == "hubitat") {
+        useMiles = (hubTempScale != "C")
+    } else {
+        // "life360" — prefer API, fall back to Hubitat system setting
+        Boolean ctxMiles = ctx?.useMiles
+        if (ctxMiles != null) {
+            useMiles = ctxMiles
+        } else {
+            try { Boolean apiMiles = parent?.getUnitIsMiles(); if (apiMiles != null) useMiles = apiMiles } catch (ignored) {}
+        }
+        if (useMiles == null) useMiles = (hubTempScale != "C")
+    }
     speedUnits = (speed * (useMiles ? MS_TO_MPH : MS_TO_KPH)).round(2)
     distanceUnits = ((distanceAway / 1000) / (useMiles ? KM_PER_MI : 1)).round(2)
 
