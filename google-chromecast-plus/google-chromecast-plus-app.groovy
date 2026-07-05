@@ -37,6 +37,7 @@ preferences {
 }
 
 @Field static final String DRIVER = 'Google Chromecast+'
+@Field static final String PARENT_DRIVER = 'Google Chromecast+ Parent'
 @Field static final String MDNS_SERVICE = '_googlecast._tcp'
 @Field static final Integer DEFAULT_PORT = 8009
 
@@ -114,33 +115,24 @@ def mainPage() {
         section(header('Google Chromecast+')) {
             paragraph 'Discover Chromecast / Google Cast devices and create a Hubitat device for each one you want to monitor and control.'
         }
-        section(header('Discovered devices')) {
-            Map discovered = candidates.findAll { k, v -> v.source == 'mdns' }
-            if (discovered.isEmpty()) {
-                paragraph "No devices discovered yet (found: ${(state.discovered ?: [:]).size()}). " +
-                    "Discovery reads the hub's mDNS cache; click <b>Rescan</b> and reopen this page, " +
-                    "or just add a device by IP below (works regardless)."
+        section(header('Devices')) {
+            if (candidates.isEmpty()) {
+                paragraph "No devices found yet. Discovery reads the hub's mDNS cache &mdash; click <b>Rescan</b> and reopen, or add one by IP below."
             } else {
-                Map opts = candidates.collectEntries { dni, d -> [(dni): "${d.name} (${d.ip})${d.model ? ' - ' + d.model : ''}${d.source == 'manual' ? ' [manual]' : ''}"] }
-                input name: 'selectedDevices', type: 'enum', title: 'Select discovered devices to add', options: opts, multiple: true, submitOnChange: true
+                Map childByDni = (getParentDevice()?.getChildDevices() ?: []).collectEntries { [(it.deviceNetworkId): it] }
+                paragraph "<small>Checked devices are created in Hubitat. Uncheck to remove. Hit DONE to apply changes</small>"
+                candidates.sort { it.value.name }.each { dni, d ->
+                    input name: "sel_${cleanId(dni)}", type: 'bool', title: deviceRow(d, childByDni[dni]), defaultValue: true, submitOnChange: true
+                }
             }
-            input name: 'rescan', type: 'button', title: 'Rescan'
+            input name: 'rescan', type: 'button', title: 'Refresh Devices'
         }
-        section(header('Add device by IP')) {
-            paragraph 'Works without discovery. Enter the Chromecast IP and it is added (and connects) immediately.'
+        section(hideable: true, hidden: true, 'Add a device by IP') {
+            paragraph 'For a device not auto-discovered (or on another subnet). It is added and connects immediately.'
             input name: 'manualIp', type: 'text', title: 'IP address', required: false, submitOnChange: true
             input name: 'manualName', type: 'text', title: 'Name (optional)', required: false, submitOnChange: true
             input name: 'addManual', type: 'button', title: 'Add device'
-        }
-        section(header('Current devices')) {
-            def parent = getParentDevice()
-            def kids = (parent?.getChildDevices()) ?: []
-            if (!kids) {
-                paragraph 'No devices added yet.'
-            } else {
-                paragraph kids.collect { "&bull; ${it.getLabel()} - ${it.currentValue('connectionStatus') ?: 'idle'}" }.join('<br>')
-            }
-            if (state.manual) input name: 'clearManual', type: 'button', title: 'Clear manual list'
+            if (state.manual) input name: 'clearManual', type: 'button', title: 'Clear manual entries'
         }
         section(header('Settings')) {
             input name: 'refreshInterval', type: 'number', title: 'Status refresh interval (seconds)', defaultValue: 60, range: '10..3600', submitOnChange: true
@@ -231,6 +223,27 @@ Map discoverDevices() {
 private String cleanId(String s) { return (s ?: '').replaceAll('[^A-Za-z0-9]', '') }
 private String manualDni(String ip) { return "GoogleChromecastPlus-${cleanId(ip)}" }
 
+// one selectable row: name/ip/model + a live-status line pulled from the created child (if any)
+private String deviceRow(Map d, child) {
+    String s = "<b>${d.name}</b> &mdash; ${d.ip}"
+    if (d.model) s += " &middot; ${d.model}"
+    if (d.source == 'manual') s += " &middot; <i>manual</i>"
+    String extra = 'not added yet'
+    if (child) {
+        String cs = child.currentValue('connectionStatus') ?: 'idle'
+        String ps = child.currentValue('playbackStatus')
+        if (ps && !(ps in ['IDLE', 'OFFLINE', 'UNKNOWN'])) {
+            extra = ps.toLowerCase()
+            String t = child.currentValue('mediaTitle')
+            String a = child.currentValue('currentApp')
+            if (t) extra += " &middot; ${t}" else if (a && a != 'none') extra += " &middot; ${a}"
+        } else {
+            extra = cs
+        }
+    }
+    return s + "<br><span style='font-size:smaller;color:#666'>${extra}</span>"
+}
+
 // ----------------------------------------------------------------------------
 // child / parent devices
 // ----------------------------------------------------------------------------
@@ -240,34 +253,31 @@ private void createParentDevice() {
     def parent = getChildDevice(parentDni())
     if (!parent) {
         try {
-            parent = addChildDevice('jpage4500', DRIVER, parentDni(),
-                [label: 'Google Chromecast+', isComponent: true, name: DRIVER])
-            parent.updateDataValue('role', 'parent')
+            parent = addChildDevice('jpage4500', PARENT_DRIVER, parentDni(),
+                [label: 'Google Chromecast+', isComponent: true, name: PARENT_DRIVER])
             parent.initialize()
             logInfo 'createParentDevice: created parent device'
         } catch (e) {
-            logError "createParentDevice: failed - is the '${DRIVER}' driver installed? ${e.message}"
+            logError "createParentDevice: failed - is the '${PARENT_DRIVER}' driver installed? ${e.message}"
         }
     }
 }
 
 private getParentDevice() { getChildDevice(parentDni()) }
 
-// reconcile wanted devices (selected discovered + all manual) against existing child devices
+// reconcile wanted devices (a checkbox per candidate, checked by default) against existing child devices
 private void syncChildren() {
     def parent = getParentDevice()
     if (!parent) { logError 'syncChildren: no parent device'; return }
-    Map cands = state.candidates ?: [:]
-    Set wanted = new LinkedHashSet((settings.selectedDevices ?: []) as List)
-    (state.manual ?: []).each { m -> wanted << manualDni(m.ip) }
-    wanted.each { dni ->
-        def d = cands[dni]
-        if (d) parent.createChild(dni, d.name, d.ip, "${d.port}", d.uuid)
+    Set wanted = [] as Set
+    (state.candidates ?: [:]).each { dni, d ->
+        if (isSelected(dni)) { parent.createChild(dni, d.name, d.ip, "${d.port}", d.uuid); wanted << dni }
     }
     parent.getChildDevices().each { child ->
         if (!wanted.contains(child.deviceNetworkId)) parent.deleteChild(child.deviceNetworkId)
     }
 }
+private boolean isSelected(String dni) { return settings["sel_${cleanId(dni)}"] != false }  // checked by default
 
 // ----------------------------------------------------------------------------
 // util

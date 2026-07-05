@@ -57,8 +57,6 @@ metadata {
         command "disconnect"
         command "launchApp", [[name: "App ID*", type: "STRING", description: "Cast app id, e.g. CC1AD845"]]
         command "stopApp"
-        // parent-mode helper (safe no-op on a child)
-        command "removeAllChildren"
 
         // -- now-playing / status (child mode) --
         attribute "connectionStatus", "string"   // idle / connecting / connected / disconnected
@@ -92,7 +90,6 @@ metadata {
 // ============================================================================
 // role
 // ============================================================================
-private boolean isParent() { return getDataValue("role") == "parent" }
 private String getIp()     { return getDataValue("ip") }
 private Integer getPort()  { return (getDataValue("port") ?: "${CAST_PORT}") as Integer }
 // null (never saved) counts as ON, so app-created children get real-time until explicitly turned off
@@ -102,28 +99,25 @@ private boolean isKeepAlive() { return settings.keepAlive != false }
 // lifecycle
 // ============================================================================
 def installed() {
-    logDebug("installed role=${getDataValue('role')}")
+    logDebug("installed")
     initialize()
 }
 
 def updated() {
     logDebug("updated")
     unschedule()
-    if (isParent()) { recomputeSummary(); return }
-    // child: reconnect cleanly if settings/IP changed
+    // reconnect cleanly if settings/IP changed
     closeSocket()
     initialize()
 }
 
 def uninstalled() {
     unschedule()
-    if (isParent()) { deleteChildren(); return }
     closeSocket()
     rxBuf.remove(device.id as String)
 }
 
 def initialize() {
-    if (isParent()) { recomputeSummary(); return }
     state.conn = "IDLE"
     state.retryCount = 0
     state.pendingActions = []
@@ -133,7 +127,6 @@ def initialize() {
 }
 
 def refresh() {
-    if (isParent()) { getChildDevices().each { it.refresh() }; recomputeSummary(); return }
     if (isConnectedState()) {
         sendReceiverGetStatus()
         if (state.transportId) sendMediaGetStatus()
@@ -144,142 +137,65 @@ def refresh() {
 }
 
 // ============================================================================
-// PARENT mode: child management + aggregate
+// config received from the parent (this driver is child-only)
 // ============================================================================
 
-// called by the app for each selected Chromecast (app owns the DNI so selection <-> device stays consistent)
-def createChild(String dni, String label, String ip, String port, String uuid = null) {
-    if (isEmpty(dni)) { logError "createChild: missing dni"; return }
-    def child = getChildDevice(dni)
-    if (!child) {
-        child = addChildDevice("jpage4500", "Google Chromecast+", dni,
-            [label: label ?: "Chromecast", isComponent: true, name: "Google Chromecast+"])
-        logInfo "createChild: created '${label}' (${dni})"
-    } else {
-        child.setLabel(label ?: child.getLabel())
-    }
-    child.updateDataValue("role", "child")
-    child.updateDataValue("ip", ip)
-    child.updateDataValue("port", port ?: "${CAST_PORT}")
-    if (uuid) child.updateDataValue("uuid", uuid)
-    child.setDebug(state.debug == true)
-    child.initialize()
-    runIn(3, "recomputeSummary")
-    return child
-}
-
-def deleteChild(String dni) {
-    if (getChildDevice(dni)) {
-        deleteChildDevice(dni)
-        logInfo "deleteChild: removed ${dni}"
-    }
-    runIn(2, "recomputeSummary")
-}
-
-def deleteChildren() {
-    getChildDevices().each { deleteChildDevice(it.deviceNetworkId) }
-}
-
-def removeAllChildren() {
-    if (isParent()) deleteChildren()
-}
-
-// relay the app-configured polling interval to every child
+// polling interval relayed from the app via the parent; published for reference (the app drives the poll)
 def setRefreshInterval(seconds) {
-    Integer sec = (seconds ?: 60) as Integer
-    if (isParent()) {
-        getChildDevices().each { it.setRefreshInterval(sec) }
-        return
-    }
-    state.refreshSec = sec
-    sendEvent(name: "refreshTime", value: sec)
-    // polling cadence is driven centrally by the app (pollDevices); no per-device schedule
-    unschedule("pollStatus")
+    state.refreshSec = (seconds ?: 60) as Integer
+    sendEvent(name: "refreshTime", value: state.refreshSec)
 }
 
-def pollStatus() { refresh() }
-
-// child devices notify the parent when their status changes
-def childStatusChanged() { runIn(1, "recomputeSummary") }
-
-// single debug toggle: the app broadcasts to the parent, which fans it out to children
-def setDebug(flag) {
-    state.debug = (flag as Boolean)
-    if (isParent()) getChildDevices().each { it.setDebug(flag) }
-}
-
-def recomputeSummary() {
-    if (!isParent()) return
-    def kids = getChildDevices()
-    int playing = 0
-    String summaryLine = ""
-    kids.each { k ->
-        if (k.currentValue("playbackStatus") == "PLAYING") {
-            playing++
-            if (!summaryLine) {
-                String t = k.currentValue("mediaTitle") ?: k.currentValue("currentApp") ?: "playing"
-                summaryLine = "${k.getLabel()}: ${t}"
-            }
-        }
-    }
-    sendEventIfChanged("deviceCount", kids.size())
-    sendEventIfChanged("playingCount", playing)
-    sendEventIfChanged("summary", playing == 0 ? "Nothing playing" : (playing == 1 ? summaryLine : "${playing} of ${kids.size()} playing"))
-}
-
-private void groupCall(Closure c) {
-    getChildDevices().each { child ->
-        try { c(child) } catch (e) { logWarn "group call failed for ${child}: ${e.message}" }
-    }
-}
+// single debug toggle: the parent broadcasts the flag here; it gates this device's debug logs
+def setDebug(flag) { state.debug = (flag as Boolean) }
 
 // ============================================================================
-// PUBLIC COMMANDS (bimodal: parent fans out, child acts on the socket)
+// PUBLIC COMMANDS (per-device Chromecast control)
 // ============================================================================
 
 // -- SpeechSynthesis --
-def speak(text)                { if (isParent()) { groupCall { it.playTextAndRestore(text, null) }; return }; announce(text, ttsVolume, "restore") }
-def speak(text, volume)        { if (isParent()) { groupCall { it.playTextAndRestore(text, volume) }; return }; announce(text, volume, "restore") }
-def speak(text, volume, voice) { if (isParent()) { groupCall { it.playTextAndRestore(text, volume) }; return }; announce(text, volume, "restore", voice) }
+def speak(text)                { announce(text, ttsVolume, "restore") }
+def speak(text, volume)        { announce(text, volume, "restore") }
+def speak(text, volume, voice) { announce(text, volume, "restore", voice) }
 
 // -- AudioNotification / Notification --
-def deviceNotification(text)               { speak(text) }
-def playText(text)                         { if (isParent()) { groupCall { it.playText(text) }; return }; announce(text, ttsVolume, "none") }
-def playText(text, volume)                 { if (isParent()) { groupCall { it.playText(text, volume) }; return }; announce(text, volume, "none") }
-def playTextAndRestore(text, volume = null){ if (isParent()) { groupCall { it.playTextAndRestore(text, volume) }; return }; announce(text, volume, "restore") }
-def playTextAndResume(text, volume = null) { if (isParent()) { groupCall { it.playTextAndResume(text, volume) }; return }; announce(text, volume, "resume") }
+def deviceNotification(text)                { speak(text) }
+def playText(text)                          { announce(text, ttsVolume, "none") }
+def playText(text, volume)                  { announce(text, volume, "none") }
+def playTextAndRestore(text, volume = null) { announce(text, volume, "restore") }
+def playTextAndResume(text, volume = null)  { announce(text, volume, "resume") }
 
-def playTrack(uri)                          { if (isParent()) { groupCall { it.playTrack(uri) }; return }; playMedia(uri, null, null, null, "none") }
-def playTrack(uri, volume)                  { if (isParent()) { groupCall { it.playTrack(uri, volume) }; return }; playMedia(uri, null, null, volume, "none") }
-def playTrackAndRestore(uri, volume = null) { if (isParent()) { groupCall { it.playTrackAndRestore(uri, volume) }; return }; playMedia(uri, null, null, volume, "restore") }
-def playTrackAndResume(uri, volume = null)  { if (isParent()) { groupCall { it.playTrackAndResume(uri, volume) }; return }; playMedia(uri, null, null, volume, "resume") }
+def playTrack(uri)                          { playMedia(uri, null, null, null, "none") }
+def playTrack(uri, volume)                  { playMedia(uri, null, null, volume, "none") }
+def playTrackAndRestore(uri, volume = null) { playMedia(uri, null, null, volume, "restore") }
+def playTrackAndResume(uri, volume = null)  { playMedia(uri, null, null, volume, "resume") }
 
 // -- MusicPlayer transport --
-def play()          { if (isParent()) { groupCall { it.play() }; return }; sendMediaCommand("PLAY") }
-def pause()         { if (isParent()) { groupCall { it.pause() }; return }; sendMediaCommand("PAUSE") }
-def stop()          { if (isParent()) { groupCall { it.stop() }; return }; sendMediaCommand("STOP") }
-def nextTrack()     { if (isParent()) { groupCall { it.nextTrack() }; return }; sendMediaCommand("QUEUE_NEXT") }
-def previousTrack() { if (isParent()) { groupCall { it.previousTrack() }; return }; sendMediaCommand("QUEUE_PREV") }
+def play()          { sendMediaCommand("PLAY") }
+def pause()         { sendMediaCommand("PAUSE") }
+def stop()          { sendMediaCommand("STOP") }
+def nextTrack()     { sendMediaCommand("QUEUE_NEXT") }
+def previousTrack() { sendMediaCommand("QUEUE_PREV") }
 def setTrack(uri)     { /* stage a track without playing - not supported by DMR; treat as playTrack */ playTrack(uri) }
 def restoreTrack(uri) { playTrack(uri) }
 def resumeTrack(uri)  { playTrack(uri) }
 
 // seek (seconds) - custom convenience
-def seek(pos) { if (!isParent()) sendMediaCommand("SEEK", [currentTime: (pos ?: 0) as BigDecimal]) }
+def seek(pos) { sendMediaCommand("SEEK", [currentTime: (pos ?: 0) as BigDecimal]) }
 
 // -- AudioVolume / level --
-def setVolume(vol) { if (isParent()) { groupCall { it.setVolume(vol) }; return }; setDeviceVolume(vol) }
+def setVolume(vol) { setDeviceVolume(vol) }
 def setLevel(vol)  { setVolume(vol) }
-def volumeUp()     { if (isParent()) { groupCall { it.volumeUp() }; return };   setDeviceVolume(((device.currentValue("volume") ?: 0) as Integer) + 5) }
-def volumeDown()   { if (isParent()) { groupCall { it.volumeDown() }; return }; setDeviceVolume(((device.currentValue("volume") ?: 0) as Integer) - 5) }
-def mute()         { if (isParent()) { groupCall { it.mute() }; return };   setMute(true) }
-def unmute()       { if (isParent()) { groupCall { it.unmute() }; return }; setMute(false) }
+def volumeUp()     { setDeviceVolume(((device.currentValue("volume") ?: 0) as Integer) + 5) }
+def volumeDown()   { setDeviceVolume(((device.currentValue("volume") ?: 0) as Integer) - 5) }
+def mute()         { setMute(true) }
+def unmute()       { setMute(false) }
 
-// -- app control (child) --
-def launchApp(appId) { if (!isParent()) enqueue([type: "launch", stage: "receiver", appId: appId]) }
-def stopApp()        { if (!isParent()) { if (state.sessionId) sendReceiverStop(state.sessionId) } }
-def reconnect()      { if (isParent()) return; closeSocket(); runIn(1, "connect") }
-def disconnect()     { if (isParent()) return; state.pendingActions = []; closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
+// -- app control --
+def launchApp(appId) { enqueue([type: "launch", stage: "receiver", appId: appId]) }
+def stopApp()        { if (state.sessionId) sendReceiverStop(state.sessionId) }
+def reconnect()      { closeSocket(); runIn(1, "connect") }
+def disconnect()     { state.pendingActions = []; closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
 
 // ============================================================================
 // CHILD mode: high-level actions
@@ -315,7 +231,6 @@ private void setMute(boolean muted) {
 // action queue + connection pump
 // ============================================================================
 private void enqueue(Map action) {
-    if (isParent()) return
     state.pendingActions = (state.pendingActions ?: []) + [action]
     pump()
 }
@@ -464,7 +379,6 @@ private String inferContentType(String url) {
 // connection lifecycle
 // ============================================================================
 def connect() {
-    if (isParent()) return
     if (isConnectedState() || state.conn == "CONNECTING") return
     if (isEmpty(getIp())) { logError "connect: no IP configured"; return }
     rxBuf[device.id as String] = ""
@@ -544,7 +458,7 @@ private void markOffline(String why) {
     sendEventIfChanged("connectionStatus", "offline")
     sendEventIfChanged("playbackStatus", "OFFLINE")
     sendEventIfChanged("status", "stopped")
-    if (!isParent()) parent?.childStatusChanged()
+    parent?.childStatusChanged()
     runIn(300, "connect")                    // retry slowly (both modes) so recovery is noticed; never a tight loop
 }
 
@@ -733,7 +647,7 @@ private void handleReceiverStatus(Map p) {
             pump()
         }
     }
-    if (isParent() == false) parent?.childStatusChanged()
+    parent?.childStatusChanged()
 }
 
 private void handleMediaStatus(Map p) {
@@ -772,7 +686,7 @@ private void handleMediaStatus(Map p) {
         else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
     }
 
-    if (isParent() == false) parent?.childStatusChanged()
+    parent?.childStatusChanged()
     maybeIdleDisconnect()
 }
 
