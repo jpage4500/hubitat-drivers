@@ -36,10 +36,16 @@ import java.util.concurrent.ConcurrentHashMap
 
 // per-device, cross-callback state (parse/socketStatus/scheduled jobs can run on different threads)
 @Field static final Map rxBuf   = new ConcurrentHashMap()   // device.id -> hex String (rx accumulator)
-@Field static final Map pending = new ConcurrentHashMap()   // "devId:reqId" -> [type, ts] (coalesce/diagnostics)
+@Field static final Map pending = new ConcurrentHashMap()   // "devId:getStatus" -> [type, ts, rid] (coalesce + stale-status watchdog)
 @Field static final Map lastRx  = new ConcurrentHashMap()   // device.id -> Long epoch ms of last inbound frame.
 // MUST live here, not in state: parse() (socket thread) and heartbeatTick() (scheduled) run concurrently, and a
 // state write-back from heartbeatTick clobbers parse()'s update - which froze lastRxTs and tripped the 35s watchdog.
+@Field static final Map missedStatus = new ConcurrentHashMap() // device.id -> consecutive unanswered receiver GET_STATUS
+@Field static final Map lastRecvConn = new ConcurrentHashMap() // device.id -> Long epoch ms of last CONNECT to receiver-0
+// Same reason as lastRx: these are touched by both parse() (reset on RECEIVER_STATUS) and scheduled jobs
+// (increment on poll / re-CONNECT on heartbeat), so they can't live in state without racing.
+@Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
+@Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
 metadata {
     definition(
@@ -118,8 +124,12 @@ def updated() {
 def uninstalled() {
     unschedule()
     closeSocket()
-    rxBuf.remove(device.id as String)
-    lastRx.remove(device.id as String)
+    String key = device.id as String
+    rxBuf.remove(key)
+    lastRx.remove(key)
+    missedStatus.remove(key)
+    lastRecvConn.remove(key)
+    pending.remove("${device.id}:getStatus")
 }
 
 def initialize() {
@@ -135,8 +145,7 @@ def initialize() {
 
 def refresh() {
     if (isConnectedState()) {
-        sendReceiverGetStatus()
-        if (state.transportId) sendMediaGetStatus()
+        sendReceiverGetStatus()              // the RECEIVER_STATUS response drives the media-status query (handleReceiverStatus)
     } else if (device.currentValue("connectionStatus") != "offline") {
         connect()                            // (re)connect + GET_STATUS; on-demand devices idle-disconnect after
     }
@@ -266,8 +275,7 @@ private void pump() {
 private void runAction(Map a) {
     switch (a.type) {
         case "getStatus":
-            sendReceiverGetStatus()
-            if (state.transportId) sendMediaGetStatus()
+            sendReceiverGetStatus()          // media status follows from the RECEIVER_STATUS response
             break
         case "setVolume": sendSetVolume([level: a.level]); break
         case "setMute":   sendSetVolume([muted: a.muted]); break
@@ -388,14 +396,18 @@ private String inferContentType(String url) {
 def connect() {
     if (isConnectedState() || state.conn == "CONNECTING") return
     if (isEmpty(getIp())) { logError "connect: no IP configured"; return }
-    rxBuf[device.id as String] = ""
+    String key = device.id as String
+    rxBuf[key] = ""
+    pending.remove("${device.id}:getStatus")   // fresh socket -> clear stale watchdog bookkeeping
+    missedStatus[key] = 0
     state.conn = "CONNECTING"
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
     sendEventIfChanged("connectionStatus", "connecting")
     try {
         interfaces.rawSocket.connect(getIp(), getPort(), byteInterface: true, secureSocket: true, ignoreSSLIssues: true)
-        lastRx[device.id as String] = now()
+        lastRx[key] = now()
         sendConnectionConnect(RECV)   // virtual-connect to the platform
+        lastRecvConn[key] = now()     // so the periodic re-CONNECT (heartbeatTick) doesn't fire immediately
         startHeartbeat()
         sendReceiverGetStatus()
         state.conn = "TP_CONNECTING"
@@ -417,6 +429,8 @@ private void closeSocket() {
     unschedule("reconnectAttempt")
     try { interfaces.rawSocket.close() } catch (e) { /* ignore */ }
     rxBuf[device.id as String] = ""
+    pending.remove("${device.id}:getStatus")
+    missedStatus[device.id as String] = 0
     state.conn = "IDLE"
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
 }
@@ -478,12 +492,21 @@ private void startHeartbeat() {
 
 def heartbeatTick() {
     if (!isConnectedState()) return
+    String key = device.id as String
     // dead-connection detection: >2 missed ping cycles
-    Long last = lastRx[device.id as String] as Long
+    Long last = lastRx[key] as Long
     if (last && (now() - last) > 35000) {
         logWarn "heartbeat: no data for >35s - reconnecting"
         handleSocketDown("heartbeat-timeout")
         return
+    }
+    // Re-assert the virtual connection to the platform periodically. The receiver silently drops idle
+    // senders from its status-push list (TCP + heartbeat stay up, so the 35s watchdog above never sees it);
+    // re-CONNECTing keeps RECEIVER_STATUS - the only way we learn a media app launched - flowing.
+    Long lastConn = lastRecvConn[key] as Long
+    if (!lastConn || (now() - lastConn) > RECV_RECONNECT_MS) {
+        sendConnectionConnect(RECV)
+        lastRecvConn[key] = now()
     }
     sendHeartbeatPing()
     runIn(5, "heartbeatTick")
@@ -501,7 +524,22 @@ private void sendHeartbeatPong(String dst)     { sendCastMessage(SRC, dst ?: REC
 
 private void sendReceiverGetStatus() {
     String pk = "${device.id}:getStatus"
-    if (pending[pk] && (now() - (pending[pk].ts as Long)) < 5000) return   // coalesce
+    String key = device.id as String
+    if (pending[pk] && (now() - (pending[pk].ts as Long)) < 5000) return   // coalesce rapid duplicate calls
+    // Zombie-connection watchdog: a still-outstanding entry here means the *previous* poll's GET_STATUS was
+    // never answered (handleReceiverStatus clears it on RECEIVER_STATUS). Heartbeat PONGs keep lastRx fresh so
+    // the 35s watchdog can't see this; count consecutive misses and force a full reconnect once we cross the limit.
+    if (pending[pk]) {
+        int missed = ((missedStatus[key] ?: 0) as Integer) + 1
+        missedStatus[key] = missed
+        if (missed >= MAX_MISSED_STATUS) {
+            logWarn "receiver GET_STATUS unanswered x${missed} - status channel stale, forcing reconnect"
+            missedStatus[key] = 0
+            pending.remove(pk)
+            handleSocketDown("status-timeout")
+            return
+        }
+    }
     int rid = nextRequestId()
     pending[pk] = [type: "GET_STATUS", ts: now(), rid: rid]
     sendCastMessage(SRC, RECV, NS_RECEIVER, JsonOutput.toJson([type: "GET_STATUS", requestId: rid]))
@@ -605,6 +643,7 @@ private void routeIncoming(Map msg) {
 
 private void handleReceiverStatus(Map p) {
     pending.remove("${device.id}:getStatus")
+    missedStatus[device.id as String] = 0     // a RECEIVER_STATUS response proves the status channel is alive
     def st = p.status ?: [:]
     // volume / mute
     if (st.volume != null) {
@@ -620,18 +659,22 @@ private void handleReceiverStatus(Map p) {
         clearNowPlaying()
         state.appId = null; state.transportId = null; state.sessionId = null; state.mediaSessionId = null
     } else {
-        def app0 = apps[0]
+        // prefer the media-capable app: a receiver can list a control/idle app alongside the one actually playing
+        def mediaApp = apps.find { a -> (a.namespaces ?: []).any { it?.name == NS_MEDIA } }
+        def app0 = mediaApp ?: apps[0]
         sendEventIfChanged("currentApp", app0.displayName ?: app0.appId)
         sendEventIfChanged("appStatusText", app0.statusText ?: "")
         state.appId = app0.appId
         String newTransport = app0.transportId
-        if (newTransport && newTransport != state.transportId) {
+        if (newTransport) {
+            boolean changed = (newTransport != state.transportId)
             state.transportId = newTransport
             state.sessionId = app0.sessionId
-            // if the running app speaks media, virtual-connect + read now-playing (monitoring)
-            def ns = (app0.namespaces ?: []).collect { it?.name }
-            if (ns.contains(NS_MEDIA)) {
-                sendConnectionConnect(newTransport)
+            if (mediaApp) {
+                // virtual-connect once per session (subscribes us to pushed MEDIA_STATUS), then poll now-playing
+                // on EVERY receiver status - the old on-transport-change-only gate is what left now-playing
+                // frozen (or empty) while music kept playing on an unchanged session.
+                if (changed) { state.mediaSessionId = null; sendConnectionConnect(newTransport) }
                 sendMediaGetStatus()
             }
         }
