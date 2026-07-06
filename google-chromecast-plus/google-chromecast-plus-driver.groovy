@@ -37,6 +37,9 @@ import java.util.concurrent.ConcurrentHashMap
 // per-device, cross-callback state (parse/socketStatus/scheduled jobs can run on different threads)
 @Field static final Map rxBuf   = new ConcurrentHashMap()   // device.id -> hex String (rx accumulator)
 @Field static final Map pending = new ConcurrentHashMap()   // "devId:reqId" -> [type, ts] (coalesce/diagnostics)
+@Field static final Map lastRx  = new ConcurrentHashMap()   // device.id -> Long epoch ms of last inbound frame.
+// MUST live here, not in state: parse() (socket thread) and heartbeatTick() (scheduled) run concurrently, and a
+// state write-back from heartbeatTick clobbers parse()'s update - which froze lastRxTs and tripped the 35s watchdog.
 
 metadata {
     definition(
@@ -73,6 +76,7 @@ metadata {
         attribute "mediaDuration", "number"
         attribute "mediaPosition", "number"
         attribute "refreshTime", "number"          // polling interval (secs) pushed from the app
+        attribute "deviceType", "string"           // audio / video / group, derived from mDNS capabilities
 
         // -- aggregate (parent mode) --
         attribute "deviceCount", "number"
@@ -115,6 +119,7 @@ def uninstalled() {
     unschedule()
     closeSocket()
     rxBuf.remove(device.id as String)
+    lastRx.remove(device.id as String)
 }
 
 def initialize() {
@@ -123,6 +128,8 @@ def initialize() {
     state.pendingActions = []
     rxBuf[device.id as String] = ""
     sendEventIfChanged("connectionStatus", "idle")
+    String dt = getDataValue("deviceType")            // set by the app from mDNS; publish so rules/dashboards see it
+    if (dt) sendEventIfChanged("deviceType", dt)
     if (isKeepAlive() && !isEmpty(getIp())) runIn(2, "connect")
 }
 
@@ -387,8 +394,7 @@ def connect() {
     sendEventIfChanged("connectionStatus", "connecting")
     try {
         interfaces.rawSocket.connect(getIp(), getPort(), byteInterface: true, secureSocket: true, ignoreSSLIssues: true)
-        state.lastRxTs = now()
-        state.lastPongTs = now()
+        lastRx[device.id as String] = now()
         sendConnectionConnect(RECV)   // virtual-connect to the platform
         startHeartbeat()
         sendReceiverGetStatus()
@@ -473,7 +479,8 @@ private void startHeartbeat() {
 def heartbeatTick() {
     if (!isConnectedState()) return
     // dead-connection detection: >2 missed ping cycles
-    if (state.lastRxTs && (now() - (state.lastRxTs as Long)) > 35000) {
+    Long last = lastRx[device.id as String] as Long
+    if (last && (now() - last) > 35000) {
         logWarn "heartbeat: no data for >35s - reconnecting"
         handleSocketDown("heartbeat-timeout")
         return
@@ -549,7 +556,7 @@ private void ensureApp() {
 def parse(String message) {
     String key = device.id as String
     String buf = (rxBuf[key] ?: "") + (message ?: "").toUpperCase()
-    state.lastRxTs = now()
+    lastRx[key] = now()
 
     if (buf.length() > 262144) {                 // 128 KB body -> desync; reset
         logWarn "parse: rx overflow (${buf.length()} hex chars) - resetting"
@@ -581,7 +588,7 @@ private void routeIncoming(Map msg) {
     switch (msg.namespace) {
         case NS_HEARTBEAT:
             if (p.type == "PING") sendHeartbeatPong(msg.source_id)
-            else if (p.type == "PONG") state.lastPongTs = now()
+            // PONG needs no handling: parse() already refreshed lastRx for any inbound frame, which is what the watchdog checks
             break
         case NS_RECEIVER:
             if (p.type == "RECEIVER_STATUS") handleReceiverStatus(p)
