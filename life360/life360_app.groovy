@@ -1,5 +1,27 @@
 import java.net.http.HttpTimeoutException
 import java.net.SocketTimeoutException
+import groovy.transform.Field
+
+@Field static final int    TOKEN_EXPIRED_POLL_SECS         = 300   // slow-poll rate when token is flagged expired
+@Field static final int    AUTH_FAIL_THRESHOLD             = 3     // consecutive 401/403s before flagging token expired
+@Field static final int    DEFAULT_POLL_SECS               = 30    // fallback when pollFreq is unset/invalid
+@Field static final int    HTTP_TIMEOUT_SECS               = 30    // default HTTP request timeout
+@Field static final int    SECS_PER_MIN                    = 60    // boundary between seconds and minutes cron expressions
+@Field static final int    SECS_PER_HOUR                   = 3600  // seconds per hour
+@Field static final int    RATE_LIMIT_BUFFER_SECS          = 10    // extra seconds added to Retry-After on 429
+@Field static final int    RATE_LIMIT_FALLBACK_SECS        = 60    // fallback Retry-After when header is absent
+@Field static final int    FORCE_UPDATE_FETCH_DELAY_SECS   = 6     // seconds to wait after force-update before re-fetching (~5s for Life360 to push fresh GPS)
+@Field static final int    CIRCLES_API_VERSION             = 4     // Life360 API version for the /circles endpoint
+@Field static final int    MAX_BACKOFF_SHIFT               = 6     // max bit-shift for exponential backoff (caps at 2^6 = 64× base interval)
+@Field static final int    CIRCLES_MIN_POLL_SECS           = 60    // floor for /circles polling — membership rarely changes, so never hit it faster than this even at a fast pollFreq
+@Field static final String LIFE360_BASE_URL_V3             = "https://api-cloudfront.life360.com/v3"
+@Field static final String LIFE360_BASE_URL_V4             = "https://api-cloudfront.life360.com/v4"
+
+// Per-member state key prefixes, by scope. SESSION keys are session-bound and dropped on
+// auth failure (clearSessionCache); IDENTITY keys outlive a re-auth. Removing a member drops
+// both (cleanupMemberState). Single source of truth so the two cleanup paths can't drift.
+@Field static final List<String> MEMBER_STATE_PREFIXES_SESSION  = ["etag-", "inflight-", "transientCount-", "transientUntilMs-"]
+@Field static final List<String> MEMBER_STATE_PREFIXES_IDENTITY = ["inTransit-", "fastChain-"]
 
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
@@ -7,26 +29,8 @@ import java.net.SocketTimeoutException
  * Life360 companion app to track members' location in your circle
  * - Community discussion: https://community.hubitat.com/t/release-life360/118544
  *
- * Changes:
- *  5.1.3  - 05/09/26 - add /view endpoint to view members on a map
- *  5.1.2  - 05/01/26 - merge in changes by iEnam: API change (api-cloudfront.life360.com); better cookie handling
- *  5.1.1 -  05/01/26 - add device notification when token expires
- *  5.1.0  - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in handleException;
- *           clear cookies+etags on auth error; backoff on rate-limit; watchdog warns
- *           when no successful update in N minutes; loud banner when token expired
- *  5.0.15 - 12/31/24 - minor fixes
- *  5.0.14 - 12/24/24 - Dynamic Polling
- *  5.0.13 - 12/24/24 - restore original scheduling routine
- *  5.0.10 - 12/21/24 - add some randomness
- *  5.0.9  - 12/19/24 - try a different API when hitting 403 error
- *  5.0.8  - 12/18/24 - added cookies found by @user3774
- *  5.0.7  - 12/11/24 - try to match Home Assistant
- *  5.0.6  - 12/05/24 - return to older API version (keeping eTag support)
- *  5.0.5  - 11/12/24 - support eTag for locations call
- *  5.0.4  - 11/09/24 - use newer API
- *  5.0.2  - 11/03/24 - restore webhook
- *  5.0.0  - 11/01/24 - fix Life360+ support (requires manual entry of access_token)
- *  4.0.0  -  02/08/24 - implement new Life360 API
+ * Changelog: see CHANGELOG.md alongside this file
+ *   https://github.com/jpage4500/hubitat-drivers/blob/master/life360/CHANGELOG.md
  *
  * NOTE: This is a re-write of Life360+, which was just a continuation of "Life360 with States" -> https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274
  * - please see that thread for full history of this app/driver
@@ -41,9 +45,13 @@ definition(
     category: "",
     iconUrl: "",
     iconX2Url: "",
+    menu: "Integrations",
     singleInstance: true,
     importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_app.groovy",
-    oauth: [displayName: "Life360+", displayLink: ""]
+    oauth: [
+        displayName: "Life360+"
+        displayLink: ""
+    ]
 )
 
 preferences {
@@ -65,13 +73,29 @@ mappings {
  * - otherwise, show phone number login page
  */
 def mainPage() {
+    // One-shot flags: button handlers set these so the result survives the one re-render
+    // after the button press. On every other page open we clear stale state.
+    if (state.tokenStatusPending) {
+        state.tokenStatusPending = false
+    } else {
+        state.tokenStatus = null
+    }
+    if (state.forceUpdateStatusPending) {
+        state.forceUpdateStatusPending = false
+    } else {
+        state.forceUpdateStatus = null
+    }
     dynamicPage(name: "mainPage", install: true, uninstall: true) {
         section() {
-            href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external"
+            href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external", width: 6
             showMessage(state.message)
         }
         section(header("STEP 1: Access Token")) {
-            input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true
+            input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true, width: 6
+            if (!isEmpty(access_token)) {
+                input("checkTokenBtn", "button", title: "Check Token")
+                if (state.tokenStatus) paragraph state.tokenStatus
+            }
         }
 
         if (!isEmpty(access_token)) {
@@ -79,7 +103,7 @@ def mainPage() {
                 input("fetchCirclesBtn", "button", title: "Fetch Circles")
 
                 if (!isEmpty(state.circles)) {
-                    input "circle", "enum", multiple: false, required: true, title: "Life360 Circle", options: state.circles.collectEntries { [it.id, it.name] }, submitOnChange: true
+                    input "circle", "enum", multiple: false, required: true, title: "Life360 Circle", options: state.circles.collectEntries { [it.id, it.name] }, submitOnChange: true, width: 6
                 }
             }
 
@@ -88,9 +112,9 @@ def mainPage() {
 
                 if (!isEmpty(state.places)) {
                     paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
-                    thePlaces = state.places.collectEntries { [it.id, it.name] }
-                    sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
-                    input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true
+                    def thePlaces = state.places.collectEntries { [it.id, it.name] }
+                    def sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
+                    input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true, width: 6
                 }
             }
 
@@ -98,32 +122,81 @@ def mainPage() {
                 input("fetchMembersBtn", "button", title: "Fetch Members")
 
                 if (!isEmpty(state.members)) {
-                    theMembers = state.members.collectEntries { [it.id, it.firstName + " " + it.lastName] }
-                    sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
-                    input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true
+                    def theMembers = state.members.collectEntries { [it.id, it.firstName + " " + it.lastName] }
+                    def sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
+                    input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true, width: 6
+                }
+            }
+
+            section(header("STEP 5: Verify Connectivity")) {
+                paragraph "<small style='color:#666'>Pulls current data for every selected member. Use this to confirm setup before saving.  If it fails, check the access token (STEP 1) and try again.</small>"
+                input("fetchLocationsBtn", "button", title: "Fetch Locations")
+                if (state.lastSuccessMs) {
+                    long ageSec = (long)((new Date().getTime() - state.lastSuccessMs) / 1000L)
+                    String ageStr = (ageSec < SECS_PER_MIN) ? "${ageSec}s ago"
+                        : (ageSec < SECS_PER_HOUR) ? "${(long)(ageSec / SECS_PER_MIN)} min ago"
+                        : "${(long)(ageSec / SECS_PER_HOUR)} hr ago"
+                    paragraph "<small style='color:#080'>\u2713 Last successful fetch: ${ageStr}</small>"
                 }
             }
         }
 
-        section(header("Other Options")) {
-            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
-            input(name: "dynamicPolling", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Dynamic Polling - Increase polling frequency to 'Dynamic Refesh Rate' when a member is in motion.  Polling returns to 'Default Refresh Rate' once they've stopped.", description: "Increase polling frequency when a member is in motion.  Polling returns to 'Refresh Rate' once still.")
-            input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refesh Rate", required: false, defaultValue: "20", options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
-            input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure (for debugging)", multiple: true, required: false, description: "Devices to notify when the Life360 access token appears expired/revoked.")
-            input(name: "logEnable", type: "bool", defaultValue: "false", submitOnChange: "true", title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
-            input("fetchLocationsBtn", "button", title: "Fetch Locations")
+        section(header("Polling")) {
+            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", width: 6, options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "dynamicPolling", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Dynamic Polling", description: "Increase polling frequency to 'Dynamic Refresh Rate' when a member is in motion. Polling returns to 'Default Refresh Rate' once they've stopped. Only engages when the Dynamic Refresh Rate is faster than the Default Refresh Rate.")
+            if (settings.dynamicPolling) {
+                input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
+            }
+        }
+
+        section(header("Notifications")) {
+            input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
+            if (settings.notifyTokenExpiry != false) {
+                input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
+                if (!isEmpty(settings.notifyDevices)) {
+                    paragraph ""   // full-width spacer forces the dropdown onto its own row, below the device selector
+                    input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
+                }
+            }
+        }
+
+        section(header("Logging")) {
+            paragraph "<small style='color:#666'>Controls what appears in Hubitat's app/device logs. Turn the privacy switches OFF when sharing logs publicly.</small>"
+            input(name: "logEnable", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only — don't share resulting logs.")
+            input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
+            input(name: "logShowMapsLink", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
+            input(name: "logUnits", type: "enum", defaultValue: "life360", title: "Units (all members)",
+                description: "Units for speed and distance in logs and device attributes. Overrides each member device's own setting when set to anything other than 'Follow Life360 app'.",
+                options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
         }
 
         section(header("Map View")) {
-            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, description: "If set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).")
+            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, width: 6)
+            paragraph "<small style='color:#666'>If a Google Maps API Key is set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).<br><b style='color:#a00'>Security:</b> the key is embedded in the page HTML and visible to anyone who can load the map. Restrict it in Google Cloud Console (APIs &amp; Services --> Credentials) with HTTP-referrer + API restrictions so a leaked key can't be abused.</small>"
             String viewUrl = getViewUrl()
             if (viewUrl) {
                 paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small>"
+                input("revokeViewLinkBtn", "button", title: "Revoke Map Link")
             } else {
                 input("generateViewLinkBtn", "button", title: "Generate Map Link")
-                paragraph "<small style='color:#888'>Enable OAuth on this app (top-right of the app source code editor), then click 'Generate Map Link'.</small>"
+                paragraph "<small style='color:#888'>In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
             }
         }
+
+        if (!isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)) {
+            section(header("Force Update")) {
+                paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
+                def forceMembers = state.members
+                    .findAll { settings.users.contains(it.id) }
+                    .collectEntries { [it.id, "${it.firstName} ${it.lastName}".trim()] }
+                    .sort { a, b -> a.value <=> b.value }
+                input "forceUpdateMember", "enum", multiple: false, required: false, title: "Member", options: forceMembers, submitOnChange: true, width: 6
+                input("forceUpdateBtn", "button", title: "Force Update")
+                if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
+            }
+        }
+
     }
 }
 
@@ -153,8 +226,18 @@ def appButtonHandler(String button) {
         case "generateViewLinkBtn":
             generateViewLink()
             break
+        case "revokeViewLinkBtn":
+            revokeViewLink()
+            break
+        case "checkTokenBtn":
+            checkToken()
+            break
+        case "forceUpdateBtn":
+            forceMemberUpdate(settings.forceUpdateMember)
+            app.removeSetting("forceUpdateMember")   // reset the dropdown to blank; it's a fire-once action, not a persisted preference
+            break
         default:
-            log.debug("appButtonHandler: unhandled:${button}")
+            log.warn("appButtonHandler: unhandled:${button}")
     }
 }
 
@@ -164,9 +247,13 @@ private void generateViewLink() {
             createAccessToken()
         }
     } catch (e) {
-        log.error("generateViewLink: failed to create access token — enable OAuth in the app source code editor first: ${e}")
-        state.message = "Enable OAuth on the app (top-right of the app source code editor), then try again."
+        log.error("generateViewLink: failed to create access token — in Apps Code, open the ⋮ menu (top-right) and enable OAuth first: ${e}")
+        state.message = "In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then try again."
     }
+}
+
+private void revokeViewLink() {
+    state.accessToken = null
 }
 
 def showMessage(text) {
@@ -175,17 +262,188 @@ def showMessage(text) {
     }
 }
 
+// ---- Token check ------------------------------------------------------------
+
+private void checkToken() {
+    state.tokenStatusPending = true   // tell mainPage() to display the result on re-render
+    def params = life360Params("/users/me")
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    if (getLogRawPayload()) log.trace("checkToken: GET ${params.uri}")
+    try {
+        httpGet(params) { response ->
+            captureCookies(response)
+            Integer status = response.status
+            if (getLogRawPayload()) log.trace("checkToken: ${status} ${response.data}")
+            if (status == 200) {
+                def user = response.data
+                String name = user?.firstName ?: "unknown"
+                log.info("checkToken: valid — id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
+                captureUnitOfMeasure(user)
+                state.tokenStatus = "<span style='color:#080'>&#10003; Hi ${name}! Your token is valid.</span>"
+            } else if (status == 401 || status == 403) {
+                log.error("checkToken: AUTH FAILURE (${status}) — token is likely expired or revoked")
+                state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — token appears expired or revoked.</span>"
+            } else {
+                log.error("checkToken: unexpected status:${status}")
+                state.tokenStatus = "<span style='color:#a00'>&#10007; Unexpected response (${status}) checking token.</span>"
+            }
+        }
+    } catch (e) {
+        log.error("checkToken: error: ${e.message}")
+        state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token — ${e.message}</span>"
+    }
+}
+
+/**
+ * Capture the user's units preference from a /users/me (or token) user object.
+ * Life360's settings.unitOfMeasure: "i" = imperial (miles/mph), "m" = metric (km/kph).
+ * Stored so the driver follows the user's Life360 app setting instead of a local toggle.
+ */
+private void captureUnitOfMeasure(user) {
+    def unit = user?.settings?.unitOfMeasure
+    if (unit && unit != state.unitOfMeasure) {
+        state.unitOfMeasure = unit
+        if (logEnable) log.debug("unitOfMeasure from Life360: ${unit == 'm' ? 'metric (km/kph)' : unit == 'i' ? 'imperial (miles/mph)' : unit}")
+    }
+}
+
+/**
+ * Async refresh of the user's Life360 units preference. Cheap GET /users/me, fire-and-forget;
+ * called on install and on Done so units track the account setting without user intervention.
+ */
+private void refreshUserSettings() {
+    if (isEmpty(access_token)) return
+    def params = life360Params("/users/me")
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    asynchttpGet("handleUserSettingsResponse", params)
+}
+
+def handleUserSettingsResponse(response, data) {
+    if (!response.status) return
+    captureCookiesAsync(response)
+    if (getLogRawPayload()) { try { log.trace("refreshUserSettings: ${response.status} ${response.json}") } catch (ignored) {} }
+    if (response.status == 200) {
+        try {
+            captureUnitOfMeasure(response.json)
+        } catch (e) {
+            log.error("handleUserSettingsResponse: JSON parse error: ${e.message}")
+        }
+    }
+}
+
+/**
+ * Resolves the units preference for log/display output, computed once per tick and
+ * threaded to all members via ctx.useMiles. Hard overrides return immediately;
+ * "life360" defers to the account setting; null means not yet known (driver falls
+ * back to its own per-device setting).
+ * @return true = miles/mph, false = km/kph, null = not yet known
+ */
+Boolean getUnitIsMiles() {
+    switch (settings.logUnits) {
+        case "imperial": return true
+        case "metric":   return false
+        case "hubitat":  return (location.temperatureScale != "C")
+        default: // "life360" — use account setting, null if not yet received
+            if (state.unitOfMeasure == 'i') return true
+            if (state.unitOfMeasure == 'm') return false
+            return null
+    }
+}
+
+// ---- end Token check --------------------------------------------------------
+
+// ---- Force Update -----------------------------------------------------------
+
+private void forceMemberUpdate(String memberId) {
+    if (isEmpty(memberId)) {
+        log.warn("forceMemberUpdate: no member selected")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Select a member first.</span>"
+        return
+    }
+    if (isEmpty(circle)) {
+        log.warn("forceMemberUpdate: no circle selected")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; No circle selected.</span>"
+        return
+    }
+    String memberName = memberDisplayName(memberId)
+    String body = groovy.json.JsonOutput.toJson([type: "location"])
+    String cookies = state["cookies"]
+
+    if (getLogRawPayload()) log.trace("forceMemberUpdate: POST /circles/${circle}/members/${memberId}/request body:${body}")
+
+    def params = life360Params("/circles/${circle}/members/${memberId}/request")
+    params.contentType = "application/json"
+    params.body = body
+    if (cookies) params["headers"]["Cookie"] = cookies
+
+    state.forceUpdateStatusPending = true
+    state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
+    asynchttpPost("handleForceUpdateResponse", params, [memberId: memberId])
+    log.info("forceMemberUpdate: sent for member:${memberName}")
+}
+
+def handleForceUpdateResponse(response, Map data) {
+    String memberId = data.memberId
+    Integer status = response.status
+    String memberName = memberDisplayName(memberId)
+
+    if (!status) {
+        String errMsg = response.getErrorMessage() ?: "(no details)"
+        log.error("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
+        return
+    }
+
+    captureCookiesAsync(response)
+
+    if (status == 200) {
+        def result
+        try {
+            result = response.json
+        } catch (e) {
+            log.error("forceMemberUpdate: failed to parse response JSON: ${e.message}")
+            state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Parse error in response</span>"
+            return
+        }
+        String requestId = result?.requestId
+        String isPollable = result?.isPollable
+        if (getLogRawPayload()) log.trace("forceMemberUpdate: 200 ${result}")
+        log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
+        state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
+        runIn(FORCE_UPDATE_FETCH_DELAY_SECS, "fetchLocations")
+    } else if (status == 401 || status == 403) {
+        log.error("forceMemberUpdate: AUTH (${status}) member:${memberName} — token may be expired or revoked")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — re-paste access token</span>"
+    } else {
+        String errMsg = response.getErrorMessage() ?: "(no details)"
+        String errBody = null
+        try { errBody = response.data?.toString() } catch (ignored) {}
+        log.error("forceMemberUpdate: FAILED status:${status} member:${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) — check logs for details</span>"
+    }
+}
+
+// ---- end Force Update -------------------------------------------------------
+
 def fetchCircles() {
-    def params = life360Params("/circles")
-    if (logEnable) log.debug "fetchCircles:"
+    def params = life360Params("/circles", CIRCLES_API_VERSION)
+    if (getLogRawPayload()) log.trace("fetchCircles: GET ${params.uri}")
     try {
         httpGet(params) {
             response ->
                 captureCookies(response)
+                if (getLogRawPayload()) log.trace("fetchCircles: ${response.status} ${response.data}")
                 if (response.status == 200) {
-                    state.circles = response.data.circles
-                    if (logEnable) log.debug("fetchCircles: DONE")
+                    state.circles = response.data.circles?.collect { [id: it.id, name: it.name] }
+                    if (!state.circles) log.warn("fetchCircles: 0 circles returned — check that your account belongs to a circle")
+                    if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
+                } else if (response.status == 401 || response.status == 403) {
+                    log.error("fetchCircles: AUTH (${response.status}) — token may be expired or revoked")
+                    state.message = "fetchCircles: AUTH error (${response.status}) — re-paste access token"
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
                     state.message = "fetchCircles: bad response:${response.status}, ${response.data}"
@@ -198,20 +456,26 @@ def fetchCircles() {
 
 def fetchPlaces() {
     if (isEmpty(circle)) {
-        log.debug("fetchPlaces: circle not set")
+        log.warn("fetchPlaces: circle not set")
         return;
     }
 
-    def params = life360Params("/circles/${circle}/places.json")
-    log.debug("fetchPlaces:")
+    def params = life360Params("/circles/${circle}/places")
+    if (getLogRawPayload()) log.trace("fetchPlaces: GET ${params.uri}")
     try {
         httpGet(params) {
             response ->
                 captureCookies(response)
+                if (getLogRawPayload()) log.trace("fetchPlaces: ${response.status} ${response.data}")
                 if (response.status == 200) {
-                    state.places = response.data.places
-                    if (logEnable) log.debug("fetchPlaces: DONE")
+                    state.places = response.data.places?.collect { [id: it.id, name: it.name, latitude: it.latitude, longitude: it.longitude, radius: it.radius] }
+                    if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
+                    if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
+                    state.placesEmptyWarned = false  // reset rising-edge flag now that places are loaded
+                } else if (response.status == 401 || response.status == 403) {
+                    log.error("fetchPlaces: AUTH (${response.status}) — token may be expired or revoked")
+                    state.message = "fetchPlaces: AUTH error (${response.status}) — re-paste access token"
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
                     state.message = "fetchPlaces: bad response:${response.status}, ${response.data}"
@@ -224,51 +488,72 @@ def fetchPlaces() {
 
 def fetchMembers() {
     if (isEmpty(circle)) {
-        log.debug("fetchMembers: circle not set")
+        log.warn("fetchMembers: circle not set")
         return;
     }
-
     def params = life360Params("/circles/${circle}/members")
+    if (getLogRawPayload()) log.trace("fetchMembers: GET ${params.uri}")
+    asynchttpGet("handleMembersResponse", params)
+}
 
-    if (logEnable) log.debug("fetchMembers:")
+def handleMembersResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        String errMsg = response.getErrorMessage() ?: "(no details)"
+        log.error("fetchMembers: network error: ${errMsg}")
+        state.message = "fetchMembers: network error: ${errMsg}"
+        return
+    }
 
-    try {
-        httpGet(params) {
-            response ->
-                captureCookies(response)
-                //if (logEnable) log.debug("fetchMembers: ${response.data}")
-                if (response.status == 200) {
-                    state.members = response.data?.members
-                    state.message = null
+    captureCookiesAsync(response)
 
-                    // update child devices
-                    settings.users.each { memberId ->
-                        def externalId = "${app.id}.${memberId}"
-                        def deviceWrapper = getChildDevice("${externalId}")
-                        if (!deviceWrapper) {
-                            def member = state.members.find { it.id == memberId }
-                            notifyChildDevice(memberId, member)
-                        }
-                    }
-                } else {
-                    log.error("fetchMembers: bad response:${response.status}, ${response.data}")
-                    state.message = "fetchMembers: bad response:${response.status}, ${response.data}"
-                }
+    if (getLogRawPayload()) { try { log.trace("fetchMembers: ${status} ${response.json}") } catch (ignored) {} }
+
+    if (status == 200) {
+        def rawMembers
+        try {
+            rawMembers = response.json?.members
+        } catch (e) {
+            log.error("fetchMembers: failed to parse response JSON: ${e.message}")
+            state.message = "fetchMembers: invalid response body (parse error)"
+            return
         }
-    } catch (e) {
-        handleException("fetch members", e)
+        // store only the fields the app needs (id/firstName/lastName/issues) — the full
+        // member object carries location, avatar, communications, etc. and is large; trimming
+        // here keeps state small so every execution's deserialize cost stays low
+        state.members = rawMembers?.collect { [id: it.id, firstName: it.firstName, lastName: it.lastName, issues: [disconnected: it.issues?.disconnected]] }
+        if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
+        state.message = null
+
+        // sync child devices: create for newly selected members, remove departed ones
+        syncChildDevices()
+
+        // push refreshed name/avatar/location to all selected members that have a device.
+        // use rawMembers (not state.members) — state.members is already trimmed above.
+        // /circles/<id>/members doesn't always include location; the driver early-returns
+        // on a null location anyway, but guard explicitly so the intent is visible here.
+        settings.users?.each { memberId ->
+            def member = rawMembers?.find { it.id == memberId }
+            if (member?.location) notifyChildDevice(memberId, member)
+        }
+    } else if (status == 401 || status == 403) {
+        log.error("fetchMembers: AUTH (${status}) — token may be expired or revoked")
+        state.message = "fetchMembers: AUTH error (${status}) — re-paste access token"
+    } else {
+        log.error("fetchMembers: bad response:${status}")
+        state.message = "fetchMembers: bad response:${status}"
     }
 }
 
 /**
- * fetch location for every member
+ * fetch location for every selected member
  */
 boolean fetchLocations() {
     if (isEmpty(circle)) {
-        log.debug("fetchLocations: circle not set")
+        if (logEnable) log.debug("fetchLocations: circle not set")
         return false
     } else if (isEmpty(settings.users)) {
-        log.debug("fetchLocations: no users selected")
+        if (logEnable) log.debug("fetchLocations: no users selected")
         return false
     }
 
@@ -285,91 +570,164 @@ boolean fetchLocations() {
         return false
     }
 
-    // prevent calling this API too frequently (< 5 seconds)
-    if (state.lastUpdateMs != null) {
-        long lastAttempt = Math.round((long) (currentTimeMs - state.lastUpdateMs) / 1000L)
-        if (lastAttempt < 5) {
-            //if (logEnable) log.trace "fetchLocations: TOO_FREQUENT: last:${lastAttempt}ms"
-            state.message = "TOO_FREQUENT: please wait 5 secs between calls! last:${lastAttempt}ms"
-            return false
-        }
-    }
-    state.lastUpdateMs = currentTimeMs
+    // build context once per poll cycle — shared across all member fetches this tick
+    def ctx = buildPlacesContext()
+    ctx.cookies      = state["cookies"]
+    ctx.showNames    = showNamesInLogs()
+    ctx.showMapsLink = (settings.logShowMapsLink != false)
+    ctx.useMiles     = getUnitIsMiles()   // null = not yet known; driver falls back to its local pref
+    ctx.logRawPayload = getLogRawPayload()
 
-    // iterate over every selected member
     settings.users.each { memberId ->
-        fetchMemberLocation(memberId)
-    }
-
-    if (settings.dynamicPolling) {
-        dynamicPolling()
+        fetchMemberLocation(memberId, ctx)
     }
 
     return true
 }
 
-def fetchMemberLocation(memberId) {
-    def params = life360Params("/circles/${circle}/members/${memberId}")
-
-    // add cookies to header
-    def cookies = state["cookies"]
-    if (cookies) {
-        params["headers"]["Cookie"] = cookies
-        //if (logEnable) log.debug("fetchMemberLocation: cookie: ${cookies}")
+def fetchMemberLocation(memberId, Map ctx = null) {
+    // in-flight guard (§7.1): skip if a prior request for this member is still pending.
+    // Size the timeout to this member's effective interval — the fast (dynamic) rate when
+    // they're in transit, else the default rate — so a hung request can't outlive its cadence
+    // and stack up, while never blocking a legitimate next tick.
+    long startMs = new Date().getTime()
+    int effectiveSecs = (settings.dynamicPolling && isMemberInTransit(memberId))
+        ? dynamicPollFreqSecs()
+        : pollFreqSecs()
+    long inflightMs = (state["inflight-${memberId}"] ?: 0L) as long
+    Integer httpTimeout = clamp(effectiveSecs, 5, DEFAULT_POLL_SECS)
+    if (inflightMs > 0 && (startMs - inflightMs) < ((httpTimeout + 2) * 1000L)) {
+        if (logEnable) log.debug("fetchMemberLocation: member:${memberDisplayName(memberId)}: prior request pending, skipping")
+        return
     }
-
-    // set l360-etag value
-    def tag = state["etag-${memberId}"]
-    if (tag) {
-        params["headers"]["If-None-Match"] = tag
-        //if (logEnable) log.debug("eTag header:  ${tag}")
-    }
-
-    //if (logEnable) log.trace("fetchMemberLocation: member:${memberId}, tag:${tag}")
-
-    try {
-        httpGet(params) {
-            response ->
-
-/*
-                if (response.data) {
-                    log.trace("fetchMemberLocation (${response.status}) - ${response.data["firstName"]}: inTransit ${response.data["location"].inTransit} || speed ${response.data["location"].speed.toInteger()} || memberInTransit ${state.memberInTransit}")
-                }
-*/
-                captureCookies(response)
-
-                if (response.status == 200) {
-                    // if (logEnable) log.trace("fetchMemberLocation: SUCCESS: member:${memberId}: ${response.data}")
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (200): member:${memberId}")
-
-                    // update child devices
-                    notifyChildDevice(memberId, response.data)
-
-                    state.failCount = 0
-                    state.tokenLikelyExpired = false
-                    state.rateLimitedUntilMs = null
-                    state.message = null
-                    state.lastSuccessMs = new Date().getTime()
-
-                    // save l360-etag value for next request
-                    def eTag = response.getFirstHeader("l360-etag")
-                    if (eTag != null) state["etag-${memberId}"] = eTag.value
-                } else if (response.status == 304) {
-                    state.message = null
-                    state.lastSuccessMs = new Date().getTime()
-                    // NOTE: if user WAS inTransit before, do we keep them in that state?
-                    boolean prevInTransit = isMemberInTransit(memberId)
-                    if (logEnable) log.trace("fetchMemberLocation: SUCCESS (304), member:${memberId}, prevInTransit:${prevInTransit}")
-                } else {
-                    log.error("fetchMemberLocation: bad response:${response.status}, ${response.data}")
-                    state.message = "fetchMemberLocation: bad response:${response.status}, ${response.data}"
-                }
+    // transient-error backoff (§5.3): skip if still in backoff window after a prior 5xx
+    long transientUntilMs = (state["transientUntilMs-${memberId}"] ?: 0L) as long
+    if (transientUntilMs > 0 && startMs < transientUntilMs) {
+        if (logEnable) {
+            long remainSecs = (long)((transientUntilMs - startMs) / 1000L)
+            log.debug("fetchMemberLocation: member:${memberDisplayName(memberId)}: transient backoff ${remainSecs}s remaining, skipping")
         }
-    } catch (e) {
-        // handleException classifies and updates state.failCount / state.tokenLikelyExpired /
-        // state.rateLimitedUntilMs / state.cookies as appropriate. Do NOT synchronously retry —
-        // let the next scheduled tick try again (fetchLocations short-circuits on AUTH/RATE_LIMIT).
-        handleException("fetchMemberLocation: member:${memberId}", e)
+        return
+    }
+
+    state["inflight-${memberId}"] = startMs
+
+    def params = life360Params("/circles/${circle}/members/${memberId}")
+    params.timeout = httpTimeout
+
+    def cookies = ctx?.cookies ?: state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+
+    def tag = state["etag-${memberId}"]
+    if (tag) params["headers"]["If-None-Match"] = tag
+
+    asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx])
+}
+
+def handleMemberLocationResponse(response, Map data) {
+    String memberId = data.memberId
+    Map ctx = data.ctx
+    state.remove("inflight-${memberId}")  // clear in-flight marker (§7.1)
+
+    String memberName = memberDisplayName(memberId)
+
+    // AsyncResponse.hasError() returns true for ANY non-2xx, including 304.
+    // Use response.status as the primary gate; null/zero means a network-level failure.
+    Integer status = response.status
+    if (!status) {
+        long delaySecs = applyTransientBackoff(memberId)
+        int count = state["transientCount-${memberId}"] as int
+        log.warn("fetchMemberLocation: NETWORK ERROR x${count} for member:${memberName}: ${response.getErrorMessage() ?: "(no details)"}; backing off ${delaySecs}s")
+        return
+    }
+
+    captureCookiesAsync(response)
+
+    if (status == 200) {
+        def memberObj
+        try {
+            memberObj = response.json
+        } catch (e) {
+            log.error("fetchMemberLocation: JSON parse error for member:${memberName} (HTML body on 200?): ${e.message}")
+            return
+        }
+        if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
+        if (ctx?.logRawPayload ?: getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
+        notifyChildDevice(memberId, memberObj, ctx)
+        if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
+        markFetchSuccess(memberId)
+        // AsyncResponse headers are a plain Map — keys are case-sensitive, but HTTP headers
+        // are case-insensitive by spec; search case-insensitively so a server casing change
+        // can't silently disable the 304 optimization.
+        def eTag = response.headers?.find { it.key?.equalsIgnoreCase("l360-etag") }?.value
+        if (eTag) state["etag-${memberId}"] = eTag
+
+    } else if (status == 304) {
+        if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
+        markFetchSuccess(memberId)
+        if (logEnable) log.debug("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
+
+    } else if (status == 401 || status == 403) {
+        String jarBefore = cookieJarSummary()
+        clearSessionCache()
+        state.failCount = (state.failCount ?: 0) + 1
+        log.error("fetchMemberLocation: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
+        if (state.failCount >= AUTH_FAIL_THRESHOLD) {
+            boolean wasExpired = state.tokenLikelyExpired ?: false
+            state.tokenLikelyExpired = true
+            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
+            // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
+            // the latter's unschedule() would otherwise cancel the reminder job notify arms.
+            if (!wasExpired) { scheduleSlowTimer(); notifyTokenExpired() }
+        } else {
+            state.message = "AUTH ERROR (${status}) on fetchMemberLocation member:${memberName}; cleared session, will retry"
+        }
+
+    } else if (status == 429) {
+        Integer retryAfter = null
+        try { retryAfter = response.headers?.find { it.key?.equalsIgnoreCase("Retry-After") }?.value?.toInteger() } catch (ignored) {}
+        Integer delaySecs = (retryAfter ?: RATE_LIMIT_FALLBACK_SECS) + RATE_LIMIT_BUFFER_SECS
+        state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
+        log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
+        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
+
+    } else if (status in [502, 503, 504, 520, 522, 525]) {
+        long delaySecs = applyTransientBackoff(memberId)
+        int count = state["transientCount-${memberId}"] as int
+        log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
+        state.message = "Transient error (${status}) x${count} for member:${memberName} — backing off ${delaySecs}s, will retry automatically"
+
+    } else {
+        log.error("fetchMemberLocation: unexpected response:${status} for member:${memberName}")
+        state.message = "ERROR: fetchMemberLocation: ${status} for member:${memberName}"
+    }
+}
+
+private static int clamp(int val, int lo, int hi) {
+    return Math.min(Math.max(val, lo), hi)
+}
+
+private long applyTransientBackoff(String memberId) {
+    int count = ((state["transientCount-${memberId}"] ?: 0) as int) + 1
+    state["transientCount-${memberId}"] = count
+    int pollSecs = pollFreqSecs()
+    int shift = Math.min(count - 1, MAX_BACKOFF_SHIFT)
+    long delaySecs = Math.min((long)(pollSecs * (1L << shift)), (long)TOKEN_EXPIRED_POLL_SECS)
+    state["transientUntilMs-${memberId}"] = new Date().getTime() + (delaySecs * 1000L)
+    return delaySecs
+}
+
+private void markFetchSuccess(String memberId) {
+    state.failCount = 0
+    state.tokenLikelyExpired = false
+    state.rateLimitedUntilMs = null
+    state.message = null
+    state.lastSuccessMs = new Date().getTime()
+    state["transientCount-${memberId}"] = 0
+    state.remove("transientUntilMs-${memberId}")
+    if (state.watchdogWarned) {
+        state.watchdogWarned = false
     }
 }
 
@@ -384,20 +742,24 @@ String handleException(String tag, Exception e) {
     try { status = e.response?.status } catch (ignored) { /* not all exceptions carry .response */ }
 
     if (e instanceof HttpTimeoutException || e instanceof SocketTimeoutException) {
-        log.warn("${tag}: TIMEOUT: ${e}")
+        log.error("${tag}: TIMEOUT: ${e}")
         state.message = "TIMEOUT: ${tag}"
         return "TIMEOUT"
     }
     if (status == 401 || status == 403) {
         // ha-life360 treats 403 the same as 401: clear session, back off, surface to user.
+        String jarBefore = cookieJarSummary()
         clearSessionCache()
         state.failCount = (state.failCount ?: 0) + 1
-        log.warn("${tag}: AUTH (${status}); cleared session; failCount=${state.failCount}")
-        if (state.failCount >= 3) {
+        log.error("${tag}: AUTH (${status}); jar-at-failure [${jarBefore}]; cleared session; failCount=${state.failCount}")
+        if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
             state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
-            if (!wasExpired) notifyTokenExpired()
+            // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
+            // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
+            // the latter's unschedule() would otherwise cancel the reminder job notify arms.
+            if (!wasExpired) { scheduleSlowTimer(); notifyTokenExpired() }
         } else {
             state.message = "AUTH ERROR (${status}) on ${tag}; cleared session, will retry"
         }
@@ -405,15 +767,15 @@ String handleException(String tag, Exception e) {
     }
     if (status == 429) {
         Integer retryAfter = readRetryAfterSecs(e)
-        Integer delaySecs = (retryAfter ?: 60) + 10
+        Integer delaySecs = (retryAfter ?: RATE_LIMIT_FALLBACK_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
         log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "RATE LIMITED (429); backing off ${delaySecs}s"
+        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
         return "RATE_LIMIT"
     }
     if (status != null && (status == 502 || status == 503 || status == 504 || status == 520)) {
         log.warn("${tag}: TRANSIENT (${status}); will retry next tick")
-        state.message = "TRANSIENT ${status} on ${tag}"
+        state.message = "Transient error (${status}) — will retry automatically"
         return "TRANSIENT"
     }
     def err = null
@@ -425,7 +787,8 @@ String handleException(String tag, Exception e) {
 
 private void notifyTokenExpired() {
     if (isEmpty(settings.notifyDevices)) return
-    String msg = "Life360 token expired"
+    if (settings.notifyTokenExpiry == false) return
+    String msg = "Life360 token expired — re-paste a fresh access token"
     settings.notifyDevices.each { dev ->
         try {
             dev.deviceNotification(msg)
@@ -433,6 +796,32 @@ private void notifyTokenExpired() {
             log.error("notifyTokenExpired: ${dev?.displayName}: ${e}")
         }
     }
+    scheduleTokenExpiryReminder()
+}
+
+private void scheduleTokenExpiryReminder() {
+    unschedule("sendTokenExpiryReminder")
+    String freq = settings.notifyRepeatHours ?: "never"
+    if (freq == "never") return
+    int delaySecs = freq.toInteger() * SECS_PER_HOUR
+    runIn(delaySecs, "sendTokenExpiryReminder")
+    if (logEnable) log.debug("scheduleTokenExpiryReminder: next reminder in ${freq}h")
+}
+
+def sendTokenExpiryReminder() {
+    if (!state.tokenLikelyExpired) return          // token refreshed, stop chain
+    if (settings.notifyTokenExpiry == false) return // master toggle off
+    if (isEmpty(settings.notifyDevices)) return
+    String msg = "Life360 token still expired — re-paste a fresh access token"
+    settings.notifyDevices.each { dev ->
+        try {
+            dev.deviceNotification(msg)
+        } catch (e) {
+            log.error("sendTokenExpiryReminder: ${dev?.displayName}: ${e}")
+        }
+    }
+    log.warn("sendTokenExpiryReminder: token still expired, reminder sent")
+    scheduleTokenExpiryReminder()  // schedule the next repeat
 }
 
 private Integer readRetryAfterSecs(Exception e) {
@@ -445,25 +834,16 @@ private Integer readRetryAfterSecs(Exception e) {
     return null
 }
 
-private String life360BaseUrl() {
-    // alternate base URL to try if cloudfront stops working:
-    // return "https://api.life360.com/v3"
-    return "https://api-cloudfront.life360.com/v3"
-}
-
-private Map life360Params(String path) {
+private Map life360Params(String path, int version = 3) {
+    String base = (version == 4) ? LIFE360_BASE_URL_V4 : LIFE360_BASE_URL_V3
     return [
-        uri    : "${life360BaseUrl()}${path}",
+        uri    : "${base}${path}",
         headers: getHttpHeaders(),
-        timeout: 30
+        timeout: HTTP_TIMEOUT_SECS
     ]
 }
 
 Map getHttpHeaders() {
-    if (isEmpty(state.deviceId)) {
-        state.deviceId = UUID.randomUUID().toString()
-    }
-
     // try to match these headers:
     // - https://github.com/pnbruckner/life360/blob/master/life360/const.py#L7
     // - https://github.com/pnbruckner/life360/blob/master/life360/api.py#L46
@@ -498,44 +878,92 @@ static boolean isEmpty(text) {
     return text == null || text.isEmpty()
 }
 
+/**
+ * Both privacy toggles default ON ("include in logs"). On a fresh install
+ * settings.* is null until the user opens the app and hits Done — treat null
+ * as the documented default so behavior matches the UI.
+ */
+boolean showNamesInLogs() {
+    return settings.logShowNames != false
+}
+
+/**
+ * called by child driver to honor the same toggle in its own logs
+ */
+boolean getShowNamesInLogs() {
+    return showNamesInLogs()
+}
+
+/**
+ * called by child driver to decide whether to include a Google Maps link in
+ * its "moved" info log
+ */
+boolean getShowMapsLink() {
+    return settings.logShowMapsLink != false
+}
+
+boolean getLogRawPayload() {
+    return settings.logRawPayload == true
+}
+
+private String memberDisplayName(String memberId) {
+    if (!showNamesInLogs()) return memberId
+    return state.members?.find { it.id == memberId }?.firstName ?: memberId
+}
+
 // -------------------------------------------------------------------
 
 /**
  * called when user hits DONE on app for the first time
  */
 def installed() {
-    log.debug("installed")
-    createChildDevices()
-    // re-schedule updates on reboot; TODO: is this needed?
+    log.info("installed")
+    syncChildDevices()
     subscribe(location, 'systemStart', initialize)
-    scheduleUpdates()
+    refreshUserSettings()           // learn the account's units preference (settings.unitOfMeasure)
+    scheduleSlowTimer()
 }
 
 /**
  * called when user hits DONE on app (already installed)
  */
 def updated() {
-    log.debug("updated:")
+    log.info("updated: pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}, logEnable:${logEnable}, logRawPayload:${settings.logRawPayload}, notifyTokenExpiry:${settings.notifyTokenExpiry}, notifyRepeatHours:${settings.notifyRepeatHours}")
     // user clicked Done — assume any pasted token is fresh; let polling resume
     state.tokenLikelyExpired = false
     state.failCount = 0
     state.rateLimitedUntilMs = null
-    createChildDevices()
-    scheduleUpdates()
+    state.message = null
+    unschedule("sendTokenExpiryReminder")  // clear any pending repeat reminder (§5.2)
+    state.tokenStatus = null        // clear so a freshly-pasted token doesn't show stale status
+    state.memberCount = null        // re-baseline after any circle/membership config change
+    state.lastCirclesPollMs = null  // fire the circles check on the next tick (don't wait out the floor)
+    removeObsoleteStateKeys()
+    syncChildDevices()
+    refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
+    scheduleSlowTimer()
 }
 
 def initialize(evt) {
-    log.debug("initialize: ${evt.device} ${evt.value} ${evt.name}")
-    scheduleUpdates()
+    log.info("initialize: ${evt.device} ${evt.value} ${evt.name}")
+    clearSessionCache()             // clear any in-flight keys left over from before the hub restarted
+    removeObsoleteStateKeys()
+    state.rateLimitedUntilMs = null // rate limit windows don't survive a reboot
+    state.memberCount = null        // re-baseline so circles check fires immediately
+    state.lastCirclesPollMs = null  // fire circles check on first tick after reboot
+    syncChildDevices()
+    refreshUserSettings()
+    scheduleSlowTimer()
 }
 
-def initialize() {
-    log.debug("initialize")
-    state.message = null
+private void removeObsoleteStateKeys() {
+    ["placesJson", "cachedHome", "scheduledBaseSecs", "pollIntervalSecs",
+     "dynamicPollingActive", "memberInTransit", "lastCirclesFetchMs"].each { state.remove(it) }
 }
+
 
 def uninstalled() {
-    log.debug("uninstalled")
+    log.info("uninstalled")
     removeChildDevices(getChildDevices())
 }
 
@@ -543,42 +971,107 @@ def uninstalled() {
  * can be called by child device to force update location
  */
 def refresh() {
-    if (logEnable) log.debug("refresh:")
     fetchLocations()
-    scheduleUpdates()
+    scheduleSlowTimer()
 }
-
-def scheduleUpdates() {
-    unschedule()
-
-    Integer refreshSecs
-    if (settings.dynamicPolling && state.memberInTransit && (settings.pollFreq.toInteger() > settings.dynamicPollFreq.toInteger())) {
-        state.dynamicPollingActive = true
-        refreshSecs = settings.dynamicPollFreq.toInteger()
-    } else {
-        refreshSecs = settings.pollFreq.toInteger()
-        state.dynamicPollingActive = false
-    }
-    // add some randomness to this value (between 0 and 5 seconds)
-    Integer random = Math.abs(new Random().nextInt() % 5)
-    refreshSecs += random
-
-    if (logEnable) log.debug("scheduleUpdates: refreshSecs:${refreshSecs}, pollFreq:${settings.pollFreq}, random:${random}, dynamicPollFreq: ${settings.dynamicPollFreq}")
-
-    if (refreshSecs > 0 && refreshSecs < 60) {
-        // seconds
-        schedule("0/${refreshSecs} * * * * ? *", handleTimerFired)
-    } else if (refreshSecs > 0) {
-        // mins
-        schedule("0 */${(refreshSecs / 60).toInteger()} * * * ? *", handleTimerFired)
-    }
-}
-
 
 /**
- * called by timer
+ * Arm the SLOW timer — the steady-state poll that fetches every selected member, refreshes
+ * the circle/heartbeat, and runs the watchdog. Fires at the user's Default Refresh Rate
+ * (settings.pollFreq), or every 5 min while the token is flagged expired (probe-only).
+ * Members in motion are additionally polled by per-member runIn chains (see ensureFastChain).
  */
-def handleTimerFired() {
+def scheduleSlowTimer() {
+    // Full clean rebuild. No-arg unschedule() clears EVERY job — slow timer, all fast-poll
+    // chains, any legacy timer. Those chains can't survive this, so drop every fastChain- marker
+    // (not just current users — unschedule killed them all); the next slow tick re-seeds movers.
+    unschedule()
+    removeStateKeysWithPrefix(["fastChain-"])
+
+    // Re-arm the repeat reminder JOB if the token is flagged expired — unschedule() above killed
+    // it. Only re-arms the timer; it does NOT re-send device alerts, so a reboot/refresh while
+    // expired stays silent. The one-shot alert is fired by the auth-failure rising edge instead.
+    if (state.tokenLikelyExpired) scheduleTokenExpiryReminder()
+
+    int baseSecs = state.tokenLikelyExpired ? TOKEN_EXPIRED_POLL_SECS : pollFreqSecs()
+
+    // pollFreq=0 means Disabled — leave polling off
+    if (baseSecs <= 0) {
+        log.info("scheduleSlowTimer: polling DISABLED (pollFreq=0)")
+        return
+    }
+
+    log.info("scheduleSlowTimer: baseSecs:${baseSecs}, pollFreq:${settings.pollFreq}, dynamicPolling:${settings.dynamicPolling}, dynamicPollFreq:${settings.dynamicPollFreq}")
+
+    if (baseSecs < SECS_PER_MIN) {
+        schedule("0/${baseSecs} * * * * ? *", handleSlowTimer)
+    } else {
+        schedule("0 */${(baseSecs / SECS_PER_MIN).toInteger()} * * * ? *", handleSlowTimer)
+    }
+}
+
+// poll-rate accessors — single source of truth for the UI defaults so the fallback can't drift
+private int pollFreqSecs()        { return (settings.pollFreq ?: "60").toInteger() }
+private int dynamicPollFreqSecs() { return (settings.dynamicPollFreq ?: "20").toInteger() }
+
+/**
+ * Whether the per-member fast-poll chains should run at all: dynamic polling enabled, the
+ * dynamic rate actually faster than the default rate, and the token healthy. Member-specific
+ * conditions (in-transit, still selected) are checked by the callers on top of this.
+ */
+private boolean fastPollEligible() {
+    int dyn = dynamicPollFreqSecs()
+    return (settings.dynamicPolling && dyn > 0 && pollFreqSecs() > dyn && !state.tokenLikelyExpired)
+}
+
+/**
+ * Start a per-member fast-poll chain if one isn't already running for this member. Called when
+ * the slow poll (via notifyChildDevice) sees a member in transit. The fastChain-<id> marker
+ * prevents stacking duplicate chains; it's set only AFTER runIn succeeds so a throwing schedule
+ * can't strand the marker true (which would block all future chains for that member).
+ */
+private void ensureFastChain(String memberId) {
+    if (isEmpty(memberId) || !fastPollEligible()) return
+    if (state["fastChain-${memberId}"]) return   // chain already running for this member
+
+    int dyn = dynamicPollFreqSecs()
+    if (logEnable) log.debug("ensureFastChain: member:${memberDisplayName(memberId)}: starting fast chain @ ${dyn}s")
+    runIn(dyn, "fastPollMember", [data: [memberId: memberId], overwrite: false])
+    state["fastChain-${memberId}"] = true
+}
+
+/**
+ * Per-member fast-poll chain tick. Fetches one member, then re-arms ONLY while they remain in
+ * transit (and dynamic polling stays eligible); otherwise the chain ends and the member rejoins
+ * the slow poll. Re-arm happens before the async fetch so a fetch failure can't break the chain.
+ */
+def fastPollMember(data) {
+    // memberId round-trips through runIn's serialized data map — coerce to a plain String so the
+    // settings.users.contains() membership check below can't silently fail on a CharSequence type.
+    String memberId = data?.memberId?.toString()
+    if (isEmpty(memberId)) return
+    boolean keepGoing = (fastPollEligible() && isMemberInTransit(memberId)
+        && settings.users?.contains(memberId))
+
+    if (keepGoing) {
+        runIn(dynamicPollFreqSecs(), "fastPollMember", [data: [memberId: memberId], overwrite: false])
+    } else {  // chain ends here — member stopped, deselected, or dynamic disabled
+        state.remove("fastChain-${memberId}")
+        if (logEnable) log.debug("fastPollMember: member:${memberDisplayName(memberId)}: chain ended, rejoining slow poll")
+    }
+    def ctx = buildPlacesContext()
+    ctx.cookies      = state["cookies"]
+    ctx.showNames    = showNamesInLogs()
+    ctx.showMapsLink = (settings.logShowMapsLink != false)
+    ctx.useMiles     = getUnitIsMiles()
+    ctx.logRawPayload = getLogRawPayload()
+    fetchMemberLocation(memberId, ctx)
+}
+
+/**
+ * SLOW timer callback — watchdog + circle/heartbeat refresh + full member poll.
+ */
+def handleSlowTimer() {
     // watchdog: if we haven't had a successful fetch in a long time, surface it loudly.
     // Threshold = max(pollFreq * 10, 10 minutes). state.message is rendered on mainPage,
     // and a log.warn shows up in Hubitat's main log so the user can see something is wrong
@@ -586,80 +1079,244 @@ def handleTimerFired() {
     Long now = new Date().getTime()
     if (state.lastSuccessMs != null) {
         long ageMs = now - state.lastSuccessMs
-        Integer pollFreqSec = ((settings.pollFreq ?: "60").toString()).toInteger()
+        int pollFreqSec = pollFreqSecs()
         long thresholdMs = Math.max((long)(pollFreqSec * 10L * 1000L), (long)(10L * 60L * 1000L))
         if (ageMs > thresholdMs && !state.tokenLikelyExpired) {
-            long ageMin = (long)(ageMs / 60000L)
-            log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
-            state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
-        }
-    }
-
-    if (!fetchLocations()) return
-
-    // change things up every 10 minutes or so
-    Long currentTimeMs = new Date().getTime()
-    Long updateTimeMs = state.updateTimeMs ?: 0
-    if (currentTimeMs > updateTimeMs) {
-        // update again in 5-10 minutes
-        Integer random = Math.abs(new Random().nextInt() % 300000) + 300000
-        state.updateTimeMs = currentTimeMs + random
-        if (logEnable) log.info "handleTimerFired: changing things up; ${random}ms"
-
-        // re-schedule timer to add a little randomness
-        scheduleUpdates()
-
-        // this call doesn't use cookies
-        fetchMembers()
-    }
-}
-
-def createChildDevices() {
-    if (isEmpty(settings.users)) return;
-    if (isEmpty(state.members)) return;
-
-    settings.users.each { memberId ->
-        def externalId = "${app.id}.${memberId}"
-        def deviceWrapper = getChildDevice("${externalId}")
-        if (!deviceWrapper) {
-            def member = state.members.find { it.id == memberId }
-            def memberName = member.firstName
-            def childList = getChildDevices()
-            if (childList.find { it.data.vcId == "${member}" }) {
-                if (logEnable) log.info "createChildDevices: ${memberName} already exists...skipping"
-            } else {
-                log.info "createChildDevices: Creating Life360 Device: ${memberName}"
-                try {
-                    addChildDevice("jpage4500", "Life360+ Driver", externalId, 1234, ["name": "Life360 - ${memberName}", isComponent: false])
-                    log.info "createChildDevices: Child Device Successfully Created"
-                }
-                catch (e) {
-                    log.error "createChildDevices: Child device creation failed with error = ${e}"
-                }
+            // only log on the rising edge — otherwise this would spam every poll tick
+            if (!state.watchdogWarned) {
+                long ageMin = (long)(ageMs / 60000L)
+                log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
+                state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
+                state.watchdogWarned = true
             }
         }
     }
 
-    // not enabling webhook as it doesn't appear to work anymore
-    // createCircleSubscription()
+    // circles check — membership + heartbeat. Rides the slow tick but floored at
+    // CIRCLES_MIN_POLL_SECS so a fast pollFreq can't flood /circles for near-static data.
+    long lastCirclesPollMs = (state.lastCirclesPollMs ?: 0L) as long
+    long circlesIntervalMs = Math.max(pollFreqSecs(), CIRCLES_MIN_POLL_SECS) * 1000L
+    if (now - lastCirclesPollMs >= circlesIntervalMs) {
+        state.lastCirclesPollMs = now
+        def circlesParams = life360Params("/circles", CIRCLES_API_VERSION)
+        def cookies = state["cookies"]
+        if (cookies) circlesParams["headers"]["Cookie"] = cookies
+        asynchttpGet("handleCirclesPollResponse", circlesParams)
+    }
+
+    // when the token is flagged expired, probe /users/me instead of fetching locations —
+    // auto-recovers if the service healed (Cloudflare blip, transient outage, etc.)
+    if (state.tokenLikelyExpired) {
+        probeTokenAfterExpiry()
+        return
+    }
+
+    if (!fetchLocations()) return
+}
+
+/**
+ * Async /users/me probe fired by handleSlowTimer when tokenLikelyExpired is set.
+ * On 200: service is back — clear the flag and resume normal polling automatically.
+ * On 401/403: token still dead — stay in degraded mode, reminders continue.
+ * On network error or other status: stay quiet and try again next tick.
+ */
+private void probeTokenAfterExpiry() {
+    if (isEmpty(access_token)) return
+    def params = life360Params("/users/me")
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    asynchttpGet("handleTokenProbeResponse", params)
+}
+
+def handleTokenProbeResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        // network-level failure — stay quiet, try again next tick
+        if (logEnable) log.debug("tokenProbe: network error — ${response.getErrorMessage() ?: "(no details)"}")
+        return
+    }
+    captureCookiesAsync(response)
+    if (getLogRawPayload()) { try { log.trace("tokenProbe: ${status} ${response.json}") } catch (ignored) {} }
+    if (status == 200) {
+        // service is back — auto-recover; clear state before the JSON parse so a garbled
+        // 200 body doesn't leave the app stuck in slow-poll (a valid 200 means auth is OK)
+        log.info("tokenProbe: 200 OK — token is valid; auto-recovering from expired state")
+        state.tokenLikelyExpired = false
+        state.failCount = 0
+        state.rateLimitedUntilMs = null
+        state.message = null
+        unschedule("sendTokenExpiryReminder")
+        scheduleSlowTimer()   // restore normal polling rate
+        try {
+            captureUnitOfMeasure(response.json)
+        } catch (e) {
+            log.warn("tokenProbe: could not parse units from response body: ${e.message}")
+        }
+    } else if (status == 401 || status == 403) {
+        if (logEnable) log.debug("tokenProbe: ${status} — token still expired; waiting for user to re-paste")
+    } else {
+        log.warn("tokenProbe: unexpected status ${status} — will retry next tick")
+    }
+}
+
+def handleCirclesPollResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        log.warn("fetchCircles: poll: network error: ${response.getErrorMessage() ?: "(no details)"}")
+        return
+    }
+    captureCookiesAsync(response)
+    if (getLogRawPayload()) { try { log.trace("fetchCircles: poll: ${status} ${response.json}") } catch (ignored) {} }
+    if (status == 401 || status == 403) {
+        log.error("fetchCircles: poll: AUTH (${status}) — token may be expired or revoked")
+        return
+    } else if (status != 200) {
+        log.warn("fetchCircles: poll: unexpected status:${status}")
+        return
+    }
+
+    def circle = response.json?.circles?.find { it.id == settings.circle }
+    if (!circle) {
+        log.error("fetchCircles: poll: configured circle not found in response — all location updates will fail until you re-open Life360+ and select a valid circle")
+        return
+    }
+
+    String circleName = showNamesInLogs() ? (circle.name ?: circle.id) : circle.id
+    int newCount = circle.memberCount?.toInteger() ?: 0
+    Integer prevCount = (state.memberCount != null) ? (state.memberCount as int) : null
+    state.memberCount = newCount
+
+    // refresh the member roster when the count actually changes, or when we don't have a roster
+    // yet. NOT on a mere re-baseline (prevCount nulled by updated()) with the roster already
+    // loaded — that would burn an API call on every Done/reboot for no new data. Note prevCount
+    // is null on re-baseline, so guard the change-compare with prevCount != null.
+    boolean countChanged = (prevCount != null && newCount != prevCount)
+    if (countChanged || isEmpty(state.members)) fetchMembers()
+
+    // heartbeat — fires on EVERY poll. Shows the count, any count change, and per-member
+    // connection status (issues.disconnected) so the log proves polling is alive and healthy.
+    String delta = countChanged ? " (${prevCount} → ${newCount})" : ""
+    log.info("heartbeat - ${circleName}: memberCount:${newCount}${delta} ${memberStatusSummary()}")
+}
+
+/**
+ * Per-member "name:connected/disconnected" summary for the heartbeat log, derived from each
+ * member's issues.disconnected flag in state.members. Empty string if no members are selected.
+ */
+private String memberStatusSummary() {
+    Map memberById = (state.members ?: []).collectEntries { [it.id, it] }
+    return settings.users?.collect { memberId ->
+        def member = memberById[memberId]
+        boolean disconnected = (member?.issues?.disconnected?.toString() in ["1", "true"])
+        " | ${memberDisplayName(memberId)}:${disconnected ? 'disconnected' : 'connected'}"
+    }?.join(" ") ?: ""
+}
+
+/**
+ * Create child devices for all selected members that don't already have one.
+ * Returns the pre-existing device map (DNI -> device) it walked, so syncChildDevices()
+ * can reuse it for orphan pruning instead of walking getChildDevices() a second time.
+ */
+def createChildDevices() {
+    if (isEmpty(settings.users)) return null;
+    if (isEmpty(state.members)) return null;
+
+    // hoist getChildDevices() once — avoids O(N²) hub device-list walks (§4.4)
+    Map childMap = getChildDevices().collectEntries { [it.deviceNetworkId, it] }
+
+    settings.users.each { memberId ->
+        String externalId = "${app.id}.${memberId}"
+        if (!childMap.containsKey(externalId)) {
+            def member = state.members.find { it.id == memberId }
+            if (member == null) {
+                log.warn("createChildDevices: member ${memberId} not found in state.members — skipping")
+                return
+            }
+            def memberName = member.firstName
+            log.info "createChildDevices: Creating Life360 Device: ${showNamesInLogs() ? memberName : memberId}"
+            try {
+                addChildDevice("jpage4500", "Life360+ Driver", externalId, null, ["name": "Life360 - ${memberName}", isComponent: false])
+                log.info "createChildDevices: Child Device Successfully Created"
+            }
+            catch (e) {
+                log.error "createChildDevices: Child device creation failed with error = ${e}"
+            }
+        }
+    }
+    return childMap
+}
+
+/**
+ * Create child devices for new members and remove devices + all per-member state
+ * for members that are no longer selected.
+ */
+def syncChildDevices() {
+    if (isEmpty(settings.users)) return   // nothing to create or prune against
+
+    // reuse the device map createChildDevices() already walked; any device it just added is a
+    // wanted member so its absence from this pre-add snapshot can't misflag it as an orphan.
+    Map childMap = createChildDevices() ?: getChildDevices().collectEntries { [it.deviceNetworkId, it] }
+    Set<String> wantedDnis = settings.users.collect { "${app.id}.${it}".toString() } as Set
+    childMap.each { dni, child ->
+        if (!wantedDnis.contains(dni)) {
+            log.info "syncChildDevices: removing orphan child: ${child.displayName} (${dni})"
+            try {
+                deleteChildDevice(dni)
+                String memberId = dni.contains('.') ? dni.substring(dni.indexOf('.') + 1) : dni
+                cleanupMemberState(memberId)
+            } catch (e) {
+                log.error "syncChildDevices: failed to remove ${child.displayName}: ${e}"
+            }
+        }
+    }
+}
+
+/**
+ * Remove ALL per-member state keys (session + identity) for a member that has been
+ * deselected or removed. See MEMBER_STATE_PREFIXES_* for the canonical list.
+ */
+private void cleanupMemberState(String memberId) {
+    (MEMBER_STATE_PREFIXES_SESSION + MEMBER_STATE_PREFIXES_IDENTITY).each { prefix ->
+        state.remove("${prefix}${memberId}")
+    }
+}
+
+/**
+ * Remove every state key whose name starts with one of the given prefixes, across all members.
+ * Used when a class of per-member keys must be dropped wholesale (e.g. fast-poll chain markers
+ * after unschedule(), or session keys after an auth failure).
+ */
+private void removeStateKeysWithPrefix(List<String> prefixes) {
+    def toRemove = state.keySet().findAll { k ->
+        String key = k?.toString()
+        key && prefixes.any { key.startsWith(it) }
+    }
+    toRemove.each { state.remove(it) }
 }
 
 private removeChildDevices(delete) {
     delete.each { deleteChildDevice(it.deviceNetworkId) }
 }
 
-def notifyChildDevice(memberId, memberObj) {
+def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     if (isEmpty(settings.users)) return;
     if (isEmpty(settings.place)) return;
-    if (isEmpty(state.places)) return;
+    if (isEmpty(state.places)) {
+        if (!state.placesEmptyWarned) {
+            log.error("notifyChildDevice: state.places is empty — all location updates blocked; re-open app and press 'Fetch Places'")
+            state.placesEmptyWarned = true
+        }
+        return
+    }
+    state.placesEmptyWarned = false
 
-    // Get a *** sorted *** list of places for easier navigation
-    def thePlaces = state.places.sort { a, b -> a.name <=> b.name }
-    def home = state.places.find { it.id == settings.place }
-
-    placesMap = [:]
-    for (rec in thePlaces) {
-        placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
+    // use pre-built context from fetchLocations() poll cycle, or build on the spot (§4.2)
+    String placesJson = ctx?.placesJson
+    def home = ctx?.home
+    if (placesJson == null) {
+        def built = buildPlacesContext()
+        placesJson = built.placesJson
+        home = built.home
     }
 
     def externalId = "${app.id}.${memberId}"
@@ -668,35 +1325,113 @@ def notifyChildDevice(memberId, memberObj) {
         def deviceWrapper = getChildDevice("${externalId}")
         if (deviceWrapper != null) {
             // send location, places and home to device driver
-            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesMap, home)
+            boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, placesJson, home, ctx)
             boolean prevInTransit = isMemberInTransit(memberId)
-            if (prevInTransit != inTransit && logEnable) log.trace("notifyChildDevice: ${memberObj.firstName}: state changed: inTransit:${inTransit}")
-            // save inTransit state per member
-            state["inTransit-${memberId}"] = inTransit
+            boolean transitFlipped = (prevInTransit != inTransit)
+            if (transitFlipped) {
+                if (logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
+                state["inTransit-${memberId}"] = inTransit
+            }
+            // Re-seed even without a transit flip: after a reboot the runIn chain is gone but
+            // inTransit- persists, so this restarts it on the next slow tick. ensureFastChain
+            // no-ops if a chain is already running or dynamic is ineligible.
+            if (inTransit && settings.dynamicPolling) ensureFastChain(memberId)
         } else {
             log.error("notifyChildDevice: device not found: ${externalId}")
         }
     } catch (e) {
-        log.error "notifyChildDevice: Exception: member: ${memberObj}"
-        log.error e
+        log.error("notifyChildDevice: Exception for member:${memberDisplayName(memberId)}: ${e}")
     }
 }
 
+private Map buildPlacesContext() {
+    def thePlaces = state.places?.sort { a, b -> a.name <=> b.name } ?: []
+    def home = state.places?.find { it.id == settings.place }
+    def placesMap = [:]
+    for (rec in thePlaces) {
+        placesMap.put(rec.name, "${rec.latitude};${rec.longitude};${rec.radius}")
+    }
+    return [placesJson: new groovy.json.JsonBuilder(placesMap).toString(), home: home]
+}
+
 void captureCookies(response) {
-    def responseCookies = []
     try {
-        // Extract just the "Set-Cookie" headers from the Response.
         response.getHeaders('Set-Cookie')?.each {
-            def cookie = it.value?.tokenize(';|,')?.getAt(0)
-            if (cookie) responseCookies << cookie
-            if (logEnable) log.trace("captureCookies: ${it.value}")
+            def cookieVal = it.value?.tokenize(';')?.getAt(0)
+            if (getLogRawPayload()) log.trace("captureCookies: Set-Cookie: ${it.value}")
+            if (cookieVal && cookieVal.contains("=")) {
+                mergeCookie(cookieVal)
+            }
         }
     } catch (e) {
-        if (logEnable) log.trace("captureCookies: ${e.message}")
+        log.error("captureCookies: ${e.message}")
     }
-    if (responseCookies) {
-        state["cookies"] = responseCookies.join(";")
+    if (getLogRawPayload()) log.trace("captureCookies: jar [${cookieJarSummary()}]")
+}
+
+/**
+ * Summarize the current cookie jar for logs. Always safe to log: shows cookie NAMES
+ * (e.g. "__cf_bm, _cfuvid") so you can confirm the Cloudflare cookies are present without
+ * leaking their values. When logRawPayload is on, also appends a short value head per cookie
+ * for deeper debugging. Used to watch jar health before/after a Cloudflare 403.
+ */
+private String cookieJarSummary() {
+    String jar = state["cookies"] ?: ""
+    if (!jar) return "empty"
+    boolean raw = getLogRawPayload()
+    return jar.tokenize(";").collect { entry ->
+        int eq = entry.indexOf("=")
+        if (eq <= 0) return entry
+        String name = entry.substring(0, eq)
+        if (!raw) return name
+        String val = entry.substring(eq + 1)
+        return "${name}=${val.take(8)}…"
+    }.join(", ")
+}
+
+void captureCookiesAsync(response) {
+    // AsyncResponse headers are a plain Map — one value per name, no getHeaders() list.
+    // The __cf_bm Cloudflare cookie arrives here; missing it causes 403 within minutes.
+    try {
+        def cookie = response.headers?.get("Set-Cookie")
+        if (cookie) {
+            def cookieVal = cookie.tokenize(';')?.getAt(0)
+            // need a well-formed name=value to upsert; otherwise ignore this header
+            if (cookieVal && cookieVal.contains("=")) {
+                String name = cookieVal.substring(0, cookieVal.indexOf("="))
+                boolean isNew = mergeCookie(cookieVal)
+                if (logEnable) {
+                    log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'; jar now [${cookieJarSummary()}]")
+                }
+                if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}…")
+            } else if (logEnable) {
+                log.debug("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
+            }
+        }
+    } catch (e) {
+        log.error("captureCookiesAsync: ${e.message}")
     }
+}
+
+/**
+ * Upsert a single "name=value" cookie into the jar, preserving every other cookie.
+ * Parse existing jar -> upsert this name -> re-serialize. This is the U1 fix: a rotating
+ * __cf_bm replaces only its own entry and never drops _cfuvid.
+ * Returns true if the cookie name was newly added, false if it updated an existing one.
+ */
+private boolean mergeCookie(String cookieVal) {
+    int eq = cookieVal.indexOf("=")
+    String name = cookieVal.substring(0, eq)
+    String value = cookieVal.substring(eq + 1)
+    Map<String, String> jar = [:]
+    (state["cookies"] ?: "").tokenize(";").each { entry ->
+        int e2 = entry.indexOf("=")
+        if (e2 > 0) jar[entry.substring(0, e2)] = entry.substring(e2 + 1)
+    }
+    boolean isNew = !jar.containsKey(name)
+    jar[name] = value
+    state["cookies"] = jar.collect { k, v -> "${k}=${v}" }.join(";")
+    return isNew
 }
 
 /**
@@ -704,42 +1439,11 @@ void captureCookies(response) {
  * ha-life360's coordinator does when it sees a LoginError before re-auth.
  */
 void clearSessionCache() {
+    if (logEnable) log.debug("clearSessionCache: dropping cookie jar [${cookieJarSummary()}] + etags/inflight/backoff (likely after auth failure)")
     state.remove("cookies")
-    def toRemove = []
-    state.each { k, v ->
-        if (k?.toString()?.startsWith("etag-")) toRemove << k
-    }
-    toRemove.each { state.remove(it) }
-}
-
-void dynamicPolling() {
-
-    // if (logEnable) log.trace("dynamicPolling - INFO: dynamicPolling:${dynamicPolling} || memberInTransit:${state.memberInTransit} || dynamicPollingActive:${state.dynamicPollingActive}")
-
-    state.memberInTransit = false
-
-    // iterate over every selected member
-    settings.users.each { memberId ->
-        boolean inTransit = isMemberInTransit(memberId)
-        if (inTransit) {
-            state.memberInTransit = true
-        }
-    }
-
-    if (state.memberInTransit && ! state.dynamicPollingActive) {
-        if (logEnable) log.debug("dynamicPolling - SET DYNAMIC POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
-        scheduleUpdates()
-
-    } else if (state.memberInTransit && state.dynamicPollingActive) {
-        //if (logEnable) log.debug("dynamicPolling - ALREADY ACTIVE - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
-
-    } else if (! state.memberInTransit && state.dynamicPollingActive) {
-        if (logEnable) log.debug("dynamicPolling - SET STANDARD POLLING - memberInTransit: ${state.memberInTransit} || dynamicPollingActive: ${state.dynamicPollingActive}")
-        state.memberInTransit = false
-        scheduleUpdates()
-    } else {
-        // if (logEnable) log.trace("dynamicPolling - DO NOTHING")
-    }
+    // only session-scoped keys — identity keys (inTransit) survive a re-auth so transit state
+    // isn't lost when a token is merely re-pasted.
+    removeStateKeysWithPrefix(MEMBER_STATE_PREFIXES_SESSION)
 }
 
 boolean isMemberInTransit(memberId) {
@@ -777,12 +1481,17 @@ def renderView() {
         }
     }
 
+    // Unicode-escape <, >, & so they can't break out of the <script> block if a member
+    // name or address contains "</script>" — Groovy's JsonBuilder does not HTML-escape these.
     String membersJson = new groovy.json.JsonBuilder(members).toString()
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
     String apiKey = settings.googleMapsApiKey?.toString()?.trim()
     String html = isEmpty(apiKey) ?
         buildOsmMapHtml(membersJson, members.size()) :
         buildGoogleMapHtml(membersJson, members.size(), apiKey)
-    render contentType: "text/html", data: html, status: 200
+    render contentType: "text/html; charset=utf-8", data: html, status: 200
 }
 
 private String commonMapStyles() {
@@ -884,7 +1593,12 @@ ${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wa
 """
 }
 
-private String buildGoogleMapHtml(String membersJson, int count, String apiKey) {
+private String buildGoogleMapHtml(String membersJson, int count, String apiKeyRaw) {
+    String apiKey = apiKeyRaw
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
     return """<!doctype html>
 <html>
 <head>

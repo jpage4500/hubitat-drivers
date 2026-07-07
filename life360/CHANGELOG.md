@@ -1,0 +1,110 @@
+- [Life360+ Changelog](#life360-changelog)
+  - [5.2.0](#520)
+    - [Reliability](#reliability)
+    - [New capabilities](#new-capabilities)
+    - [Settings page](#settings-page)
+    - [Notifications](#notifications)
+    - [Privacy](#privacy)
+    - [Performance](#performance)
+    - [Documentation](#documentation)
+  - [Historical — App (5.1.3 and earlier)](#historical--app-513-and-earlier)
+  - [Historical — Driver (5.1.4 and earlier)](#historical--driver-514-and-earlier)
+  - [Pre-history](#pre-history)
+
+# Life360+ Changelog
+
+## 5.2.0
+
+Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integration now stays online** through Cloudflare cookie rotations and transient Life360 outages that previously caused permanent silent failures.
+
+### Reliability
+
+**Auto-recovery from token-expired state.** Three consecutive 401/403 errors still flag the token as likely expired and slow polling to 5-minute ticks — but the app now probes `/users/me` on each of those ticks. The moment Life360 responds normally (service healed, transient blip cleared), polling resumes at the normal rate automatically. Previously the integration was permanently dead until you manually re-pasted a token.
+
+**Polling survives hub reboots cleanly.** Previously, a hub reboot while a location fetch was in-flight would permanently block polling for those members until the app was re-saved. Fixed.
+
+**Token-expiry notifications stay armed.** Changing the poll frequency while the token is expired no longer silently kills the repeat-notification schedule.
+
+**Cloudflare cookie bug fixed.** Life360 sits behind Cloudflare, which issues two cookies: `_cfuvid` (stable) and `__cf_bm` (rotates every ~30 min). The async cookie handler was overwriting the entire cookie jar with just the fresh rotating cookie each time `__cf_bm` refreshed — silently dropping `_cfuvid`. Without both, Cloudflare returns 403 within minutes and polling goes completely dark. The failure was delayed and silent, which made it look like a Life360 outage. Fixed: cookie updates now merge by name so only the rotating entry is replaced. See the [Privacy & security](README.md#privacy--security) section in the README and [Cookie management](CHANGES_TECHNICAL.md#cookie-management) in CHANGES_TECHNICAL.md.
+
+### New capabilities
+
+- **Force Update** — settings-page button that POSTs a location-refresh request to a member's phone. Life360 signals the device for a fresh GPS fix (~5 seconds), which the next poll cycle picks up.
+- **Check Token** — validates your access token with an inline success/failure result on the settings page, including a "Hi, name!" confirmation. Also re-reads the account's units preference.
+- **Units auto-detected** — speed and distance follow your Life360 account's imperial/metric preference, fetched automatically from `/users/me`. The per-device `unitOverride` setting is a fallback only (old `isMiles` bool is migrated automatically).
+- **Dynamic polling reacts immediately** — when a member starts or stops moving, the polling rate switches on the same tick instead of lagging a full cycle.
+- **Membership auto-sync** — a once-per-minute circles poll watches the circle's member count; when it changes, the member list is refreshed and child devices are reconciled (new members get a device, departed members' devices are removed) and existing devices get refreshed names/avatars — no need to reopen the app.
+
+### Settings page
+
+"Other Options" reorganized into focused **Polling**, **Notifications**, **Logging**, and **Map View** sections. New **STEP 5: Verify Connectivity** shows how long ago the last successful fetch was. Map View has explicit Generate/Revoke buttons for the OAuth link.
+
+### Notifications
+
+Token-expiry alerts now have a master enable/disable toggle plus a configurable repeat reminder (2 h / 6 h / 12 h / 24 h / 48 h / never). Reminders stop automatically when a fresh token is pasted or auto-recovery succeeds.
+
+### Privacy
+
+Two opt-in logging toggles under app settings → Logging, both default on: **Include Names and Places in Logs** (off = UUIDs only, safe for sharing) and **Include Google Maps Link in Logs** (off = coordinates omitted from the "moved" log line).
+
+**Map view security hardened.** Member names and place names in the map view are now HTML-escaped, preventing a maliciously crafted Life360 profile from injecting content into the page.
+
+### Performance
+
+All member location fetches are now async, with a per-member in-flight guard so a slow Life360 response can't pile up duplicate requests. Exponential backoff on repeated 5xx errors (capped at 5 min) instead of hammering the API at full rate. Places context is built once per poll cycle and shared across all member fetches.
+
+### Documentation
+
+[README.md](README.md) rewritten. [STATE_REFERENCE.md](STATE_REFERENCE.md) added (every setting, state var, scheduled job, and attribute). [APP_SPEC.md](APP_SPEC.md) records the clean-room design (the code is authoritative). Developer-level change details in [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
+
+---
+
+## Historical — App (5.1.3 and earlier)
+
+Versions below come directly from the `Changes:` block previously at the top of [life360_app.groovy](life360_app.groovy).
+
+- `5.1.3` - 05/09/26 - add `/view` endpoint to view members on a map
+- `5.1.2` - 05/01/26 - merge in changes by iEnam: API change (`api-cloudfront.life360.com`); better cookie handling
+- `5.1.1` - 05/01/26 - add device notification when token expires
+- `5.1.0` - 05/01/26 - hardening: HTTP timeouts; classify 401/403/429/5xx in `handleException`; clear cookies + etags on auth error; backoff on rate-limit; watchdog warns when no successful update in N minutes; loud banner when token expired
+- `5.0.15` - 12/31/24 - minor fixes
+- `5.0.14` - 12/24/24 - Dynamic Polling
+- `5.0.13` - 12/24/24 - restore original scheduling routine
+- `5.0.10` - 12/21/24 - add some randomness
+- `5.0.9` - 12/19/24 - try a different API when hitting 403 error
+- `5.0.8` - 12/18/24 - added cookies found by @user3774
+- `5.0.7` - 12/11/24 - try to match Home Assistant
+- `5.0.6` - 12/05/24 - return to older API version (keeping eTag support)
+- `5.0.5` - 11/12/24 - support eTag for locations call
+- `5.0.4` - 11/09/24 - use newer API
+- `5.0.2` - 11/03/24 - restore webhook
+- `5.0.0` - 11/01/24 - fix Life360+ support (requires manual entry of `access_token`)
+- `4.0.0` - 02/08/24 - implement new Life360 API
+
+---
+
+## Historical — Driver (5.1.4 and earlier)
+
+Versions below come directly from the `Changes:` block previously at the top of [life360_driver.groovy](life360_driver.groovy). The driver had its own version stream that ran parallel to (and sometimes diverged from) the app; from `X.X.X` onward the two files share a single version line.
+
+- `5.1.4` - 06/30/26 - add history preference
+- `5.0.15` - 12/31/24 - minor fixes
+- `5.0.12` - 12/24/24 - Dynamic Polling (mpalermo73)
+- `5.0.12` - 12/24/24 - Improve Randomness (mpalermo73 / @user3774)
+- `5.0.11` - 12/22/24 - bugfix when polling > 1 min
+- `5.0.10` - 12/21/24 - add some randomness
+- `5.0.9` - 12/19/24 - try a different API when hitting 403 error
+- `5.0.8` - 12/18/24 - added cookies found by @user3774
+- `5.0.7` - 12/11/24 - try to match Home Assistant
+- `5.0.6` - 12/05/24 - return to older API version (keeping eTag support)
+- `5.0.5` - 11/12/24 - support eTag for locations call
+- `5.0.4` - 11/09/24 - use newer API
+- `5.0.2` - 11/03/24 - restore webhook
+- `5.0.0` - 11/01/24 - fix Life360+ support (requires manual entry of `access_token`)
+- `4.0.0` - 02/08/24 - implement new Life360 API
+
+---
+
+## Pre-history
+
+Life360+ began as "Life360 with States" — see the [original community thread](https://community.hubitat.com/t/release-life360-with-states-track-all-attributes-with-app-and-driver-also-supports-rm4-and-dashboards/18274) for the full pre-4.0 history of this app and driver.

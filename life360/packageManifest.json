@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "5.1.4",
+  "version": "5.2.0",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "add history to child driver (disabled by default) to track each user's location history",
+  "releaseNotes": "async per-member fetch; force update; check token; units auto-detection; cookie-jar merge fix; token-expiry notifications; per-member backoff; watchdog; privacy log toggles; map view (OSM + Google Maps); settings page redesign; membership auto-sync (devices reconciled when the circle roster changes)",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
