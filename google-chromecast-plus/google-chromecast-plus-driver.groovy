@@ -44,6 +44,7 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final Map lastRecvConn = new ConcurrentHashMap() // device.id -> Long epoch ms of last CONNECT to receiver-0
 // Same reason as lastRx: these are touched by both parse() (reset on RECEIVER_STATUS) and scheduled jobs
 // (increment on poll / re-CONNECT on heartbeat), so they can't live in state without racing.
+@Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -129,6 +130,7 @@ def uninstalled() {
     lastRx.remove(key)
     missedStatus.remove(key)
     lastRecvConn.remove(key)
+    lastMedia.remove(key)
     pending.remove("${device.id}:getStatus")
 }
 
@@ -569,7 +571,7 @@ private void sendCastMessage(String srcId, String dstId, String ns, String json)
         byte[] body = encodeCastMessage(srcId, dstId, ns, json)
         byte[] frame = concatBytes([int32BE((long) body.length), body])
         String hex = HexUtils.byteArrayToHexString(frame)
-        if (ns != NS_HEARTBEAT) logDebug("TX ${ns} -> ${dstId}: ${json}")
+        if (ns != NS_HEARTBEAT) logTrace("TX ${ns} -> ${dstId}: ${json}")
         interfaces.rawSocket.sendMessage(hex)
     } catch (e) {
         logError "sendCastMessage failed (${ns}): ${e.message}"
@@ -711,13 +713,15 @@ private void handleMediaStatus(Map p) {
     sendEventIfChanged("status", mapPlayerState(ps))
     if (s.currentTime != null) sendEventIfChanged("mediaPosition", (s.currentTime as BigDecimal).intValue())
 
+    String title = null
+    String artist = null
     def media = s.media
     if (media != null) {
         if (media.duration != null) sendEventIfChanged("mediaDuration", (media.duration as BigDecimal).intValue())
         if (media.contentId != null) sendEventIfChanged("mediaContentId", media.contentId)
         def md = media.metadata ?: [:]
-        String title = md.title
-        String artist = md.artist ?: md.subtitle
+        title = md.title
+        artist = md.artist ?: md.subtitle
         sendEventIfChanged("mediaTitle", title ?: "")
         sendEventIfChanged("mediaArtist", artist ?: "")
         sendEventIfChanged("mediaAlbum", md.albumName ?: "")
@@ -734,6 +738,13 @@ private void handleMediaStatus(Map p) {
     if (state.ttsActive) {
         if (ps == "PLAYING") state.ttsStarted = true
         else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
+    }
+
+    // one concise line whenever the now-playing state changes; skips the frequent position-only MEDIA_STATUS updates
+    String summary = [ps, [title, artist].findAll { it }.join(" - ")].findAll { it }.join(" | ")
+    if (lastMedia[device.id as String] != summary) {
+        lastMedia[device.id as String] = summary
+        logDebug("media: ${summary}")
     }
 
     parent?.childStatusChanged()
@@ -907,6 +918,7 @@ private void sendEventIfChanged(String name, def value, String unit = null) {
 
 private boolean isEmpty(def v) { return v == null || (v instanceof String && v.trim().isEmpty()) }
 
+private void logTrace(msg) { if (state.debug == true) logAt('trace', msg) }
 private void logDebug(msg) { if (state.debug == true) logAt('debug', msg) }
 private void logInfo(msg)  { logAt('info',  msg) }
 private void logWarn(msg)  { logAt('warn',  msg) }

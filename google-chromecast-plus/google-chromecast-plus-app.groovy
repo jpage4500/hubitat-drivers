@@ -60,6 +60,8 @@ def updated() {
         parent.setRefreshInterval((settings.refreshInterval ?: 60) as Integer)
         parent.setDebug(settings.debugOutput == true)   // single toggle -> broadcast to parent + all children
     }
+    // debug logging auto-disables 24h after being enabled so verbose logs are never left on
+    if (settings.debugOutput == true) runIn(86400, 'debugOff')
     schedulePolling()
     // give the hub a few seconds to populate its mDNS cache, then keep it fresh
     runIn(6, 'scanMdns')
@@ -74,6 +76,13 @@ def uninstalled() {
 
 // mDNS listener is cleared on reboot -> re-register on system start
 def bootHandler(evt) { registerMdns(true); runIn(10, 'scanMdns') }
+
+// scheduled by updated() 24h after debug is enabled: clear the app toggle + broadcast off to parent/children
+def debugOff() {
+    logInfo('auto-disabling debug logging (24h elapsed)')
+    app.updateSetting('debugOutput', [value: 'false', type: 'bool'])
+    getParentDevice()?.setDebug(false)
+}
 
 // throttled so rapid page re-renders don't spam the hub; force=true always re-registers
 private void registerMdns(boolean force = false) {
@@ -137,7 +146,7 @@ def mainPage() {
         }
         section(header('Settings')) {
             input name: 'refreshInterval', type: 'number', title: 'Status refresh interval (seconds)', defaultValue: 60, range: '10..3600', submitOnChange: true
-            input name: 'debugOutput', type: 'bool', title: 'Enable debug logging', defaultValue: false, submitOnChange: true
+            input name: 'debugOutput', type: 'bool', title: 'Enable debug logging (auto-off after 24h)', defaultValue: false, submitOnChange: true
         }
         section {
             paragraph "<small>Selected/added devices become child devices under the '${DRIVER}' parent device. Click <b>Done</b> to apply.</small>"
