@@ -20,6 +20,7 @@ import groovy.transform.Field
  **/
 
 definition(
+
     name: 'Google Chromecast+',
     namespace: 'jpage4500',
     author: 'Joe Page',
@@ -59,6 +60,8 @@ def updated() {
         parent.setRefreshInterval((settings.refreshInterval ?: 60) as Integer)
         parent.setDebug(settings.debugOutput == true)   // single toggle -> broadcast to parent + all children
     }
+    // debug logging auto-disables 24h after being enabled so verbose logs are never left on
+    if (settings.debugOutput == true) runIn(86400, 'debugOff')
     schedulePolling()
     // give the hub a few seconds to populate its mDNS cache, then keep it fresh
     runIn(6, 'scanMdns')
@@ -73,6 +76,13 @@ def uninstalled() {
 
 // mDNS listener is cleared on reboot -> re-register on system start
 def bootHandler(evt) { registerMdns(true); runIn(10, 'scanMdns') }
+
+// scheduled by updated() 24h after debug is enabled: clear the app toggle + broadcast off to parent/children
+def debugOff() {
+    logInfo('auto-disabling debug logging (24h elapsed)')
+    app.updateSetting('debugOutput', [value: 'false', type: 'bool'])
+    getParentDevice()?.setDebug(false)
+}
 
 // throttled so rapid page re-renders don't spam the hub; force=true always re-registers
 private void registerMdns(boolean force = false) {
@@ -136,7 +146,7 @@ def mainPage() {
         }
         section(header('Settings')) {
             input name: 'refreshInterval', type: 'number', title: 'Status refresh interval (seconds)', defaultValue: 60, range: '10..3600', submitOnChange: true
-            input name: 'debugOutput', type: 'bool', title: 'Enable debug logging', defaultValue: false, submitOnChange: true
+            input name: 'debugOutput', type: 'bool', title: 'Enable debug logging (auto-off after 24h)', defaultValue: false, submitOnChange: true
         }
         section {
             paragraph "<small>Selected/added devices become child devices under the '${DRIVER}' parent device. Click <b>Done</b> to apply.</small>"
@@ -195,8 +205,13 @@ def scanMdns() {
                     String name = v.friendlyName ?: v.name ?: ip
                     Integer port = (v.port ?: DEFAULT_PORT) as Integer
                     String model = v.model
+                    // the bean also carries the mDNS TXT records the code otherwise ignores; parse them for
+                    // a device-type hint (audio/video/group) and the current receiver-status text (rs).
+                    Map txt = parseTxt(v.txtProperties)
+                    String deviceType = castDeviceType(txt.ca)
                     String dni = "GoogleChromecastPlus-${cleanId((uuid ?: mac ?: ip).toString())}"
-                    disc[dni] = [ip: ip, port: port, name: name, uuid: uuid, mac: mac?.toString(), model: model]
+                    disc[dni] = [ip: ip, port: port, name: name, uuid: uuid, mac: mac?.toString(), model: model,
+                                 deviceType: deviceType, statusText: txt.rs, castVersion: txt.ve]
                 }
             } catch (ex) {
                 logWarn "scanMdns: skipping ${mac}: ${ex.message}"
@@ -212,7 +227,7 @@ def scanMdns() {
 Map discoverDevices() {
     scanMdns()
     Map candidates = [:]
-    (state.discovered ?: [:]).each { dni, d -> candidates[dni] = [ip: d.ip, port: d.port, name: d.name, uuid: d.uuid, model: d.model, source: 'mdns'] }
+    (state.discovered ?: [:]).each { dni, d -> candidates[dni] = [ip: d.ip, port: d.port, name: d.name, uuid: d.uuid, model: d.model, deviceType: d.deviceType, statusText: d.statusText, source: 'mdns'] }
     (state.manual ?: []).each { m ->
         candidates[manualDni(m.ip)] = [ip: m.ip, port: (m.port ?: DEFAULT_PORT), name: (m.name ?: m.ip), uuid: null, source: 'manual']
     }
@@ -223,12 +238,52 @@ Map discoverDevices() {
 private String cleanId(String s) { return (s ?: '').replaceAll('[^A-Za-z0-9]', '') }
 private String manualDni(String ip) { return "GoogleChromecastPlus-${cleanId(ip)}" }
 
+// The mDNS bean's txtProperties shape isn't documented for Hubitat's NetworkUtils, so handle whatever it is:
+// a Map<String,String>, a List/array of "key=value" strings, or a single space/newline-joined string.
+// Logs the raw form once at debug so the real shape can be confirmed on a live hub. Returns [:] on anything odd.
+private Map parseTxt(raw) {
+    if (raw == null) return [:]
+    // getClass() is blocked in the Hubitat sandbox, so log the raw value + instanceof flags instead (enough to ID the shape)
+    if (!state.loggedTxtShape) { logDebug("parseTxt: raw txtProperties=${raw} (map=${raw instanceof Map}, list=${raw instanceof List})"); state.loggedTxtShape = true }
+    Map out = [:]
+    try {
+        if (raw instanceof Map) {
+            raw.each { k, val -> if (k != null) out[k.toString()] = val?.toString() }
+        } else {
+            def items = (raw instanceof List || raw instanceof Object[]) ? raw.toList() : raw.toString().split(/[\r\n ]+/).toList()
+            items.each { entry ->
+                String e = entry?.toString()
+                int i = e ? e.indexOf('=') : -1
+                if (i > 0) out[e.substring(0, i)] = e.substring(i + 1)
+            }
+        }
+    } catch (ex) {
+        logWarn "parseTxt: could not parse txtProperties (${ex.message})"
+        return [:]
+    }
+    return out
+}
+
+// Map the Cast 'ca' capabilities bitmask to a coarse device type. Best-effort (bits are community-documented,
+// not official): bit0=video-out, bit2=audio-out, bit5=multizone group. Returns 'unknown' when absent/unparseable.
+private String castDeviceType(caValue) {
+    if (caValue == null) return 'unknown'
+    Integer ca
+    try { ca = caValue.toString().trim() as Integer } catch (ignored) { return 'unknown' }
+    if (ca & 0x20) return 'group'          // multizone -> speaker/display group
+    if (ca & 0x01) return 'video'          // has video output -> TV / dongle / display
+    if (ca & 0x04) return 'audio'          // audio out only -> speaker
+    return 'unknown'
+}
+
 // one selectable row: name/ip/model + a live-status line pulled from the created child (if any)
 private String deviceRow(Map d, child) {
     String s = "<b>${d.name}</b> &mdash; ${d.ip}"
     if (d.model) s += " &middot; ${d.model}"
+    if (d.deviceType && d.deviceType != 'unknown') s += " &middot; ${d.deviceType}"
     if (d.source == 'manual') s += " &middot; <i>manual</i>"
-    String extra = 'not added yet'
+    // before the device is added we have no child to query; fall back to the mDNS receiver-status text (rs)
+    String extra = d.statusText ?: 'not added yet'
     if (child) {
         String cs = child.currentValue('connectionStatus') ?: 'idle'
         String ps = child.currentValue('playbackStatus')
@@ -271,7 +326,7 @@ private void syncChildren() {
     if (!parent) { logError 'syncChildren: no parent device'; return }
     Set wanted = [] as Set
     (state.candidates ?: [:]).each { dni, d ->
-        if (isSelected(dni)) { parent.createChild(dni, d.name, d.ip, "${d.port}", d.uuid); wanted << dni }
+        if (isSelected(dni)) { parent.createChild(dni, d.name, d.ip, "${d.port}", d.uuid, d.deviceType); wanted << dni }
     }
     parent.getChildDevices().each { child ->
         if (!wanted.contains(child.deviceNetworkId)) parent.deleteChild(child.deviceNetworkId)

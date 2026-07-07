@@ -42,7 +42,7 @@ def initialize()  { recomputeSummary() }
 // ============================================================================
 // child management (called by the app)
 // ============================================================================
-def createChild(String dni, String label, String ip, String port, String uuid = null) {
+def createChild(String dni, String label, String ip, String port, String uuid = null, String deviceType = null) {
     if (isEmpty(dni)) { logError "createChild: missing dni"; return }
     def child = getChildDevice(dni)
     if (!child) {
@@ -55,6 +55,7 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     child.updateDataValue("ip", ip)
     child.updateDataValue("port", port ?: "8009")
     if (uuid) child.updateDataValue("uuid", uuid)
+    if (deviceType) child.updateDataValue("deviceType", deviceType)
     child.setDebug(state.debug == true)
     child.initialize()
     runIn(3, "recomputeSummary")

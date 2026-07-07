@@ -85,7 +85,7 @@ hpm manifest-add-app packageManifest.json --location=https://raw.githubuserconte
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-driver.groovy --required=true
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-parent-driver.groovy --required=true
 # add package to repository
-hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/packageManifest.json --name="Google Chromecast+" --category="Utility" --description="Google Chromecast integration for Hubitat dashboards"
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/packageManifest.json --name="Google Chromecast+" --category="Integrations" --description="Google Chromecast integration for Hubitat dashboards"
 
 -------------------------------------------------------------------------------
 -------------------------------------------------------------------------------

@@ -65,6 +65,17 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-photos-cloud/packageManifest.json",
       "description": "Google Photos slideshow for Hubitat dashboards (Picker + app-created albums)"
+    },
+    {
+      "id": "4a095de5-dab8-4462-9c15-0910b0a2dd3c",
+      "name": "Google Chromecast+",
+      "category": "Integrations",
+      "tags": [
+        "Multimedia",
+        "Speakers"
+      ],
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/packageManifest.json",
+      "description": "Google Chromecast integration for Hubitat dashboards"
     }
   ]
 }
