@@ -1,3 +1,11 @@
+- [Life360+](#life360)
+  - [What it does](#what-it-does)
+  - [Setup](#setup)
+  - [Getting your access token](#getting-your-access-token)
+  - [Privacy \& security](#privacy--security)
+  - [Related files](#related-files)
+  - [History](#history)
+
 # Life360+
 
 Unofficial Hubitat integration that tracks the members of your Life360 circle as Hubitat devices.

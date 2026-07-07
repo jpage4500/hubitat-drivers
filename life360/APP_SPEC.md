@@ -1,7 +1,40 @@
+- [Life360+ — Clean-Room App Specification](#life360--clean-room-app-specification)
+  - [0. The one rule that overrides everything: DO NOT BREAK THE COOKIE PATH](#0-the-one-rule-that-overrides-everything-do-not-break-the-cookie-path)
+    - [0.1 The exact wire contract](#01-the-exact-wire-contract)
+    - [0.2 Cookie capture/replay — the load-bearing mechanism](#02-cookie-capturereplay--the-load-bearing-mechanism)
+  - [1. Design principles](#1-design-principles)
+  - [2. Architecture](#2-architecture)
+  - [3. API surface](#3-api-surface)
+    - [3.1 Steady state](#31-steady-state)
+    - [3.2 Setup / on demand](#32-setup--on-demand)
+    - [3.3 Explicitly NOT used](#33-explicitly-not-used)
+    - [3.4 Key response shapes](#34-key-response-shapes)
+    - [3.5 Token acquisition — the ONLY known working method (PRESERVE VERBATIM)](#35-token-acquisition--the-only-known-working-method-preserve-verbatim)
+  - [4. The three loops](#4-the-three-loops)
+    - [4.1 `fetchLocations()` — the slow per-member location loop](#41-fetchlocations--the-slow-per-member-location-loop)
+    - [4.2 Membership refresh — the slow loop](#42-membership-refresh--the-slow-loop)
+    - [4.3 Dynamic polling (optional)](#43-dynamic-polling-optional)
+    - [4.4 Child-device reconciliation — `createChildDevices()` and `syncChildDevices()`](#44-child-device-reconciliation--createchilddevices-and-syncchilddevices)
+    - [4.5 Scheduler — `scheduleSlowTimer()`](#45-scheduler--scheduleslowtimer)
+  - [5. Error handling \& health](#5-error-handling--health)
+  - [6. Force-update](#6-force-update)
+  - [7. Driver (child device)](#7-driver-child-device)
+    - [7.1 Presence logic](#71-presence-logic)
+    - [7.2 Capability repurposing (document loudly — README + inline)](#72-capability-repurposing-document-loudly--readme--inline)
+    - [7.3 Backward-compatibility contract — DO NOT CHANGE DEVICE-FACING NAMES OR VALUES](#73-backward-compatibility-contract--do-not-change-device-facing-names-or-values)
+    - [7.4 Location history (driver-side, `saveHistory`, default OFF)](#74-location-history-driver-side-savehistory-default-off)
+  - [8. State model](#8-state-model)
+  - [9. Settings (app preferences)](#9-settings-app-preferences)
+  - [10. Privacy / PII \& security](#10-privacy--pii--security)
+    - [10.1 Logging controls — two orthogonal axes](#101-logging-controls--two-orthogonal-axes)
+    - [10.2 Other security surfaces](#102-other-security-surfaces)
+  - [11. Map view (`/view` endpoint)](#11-map-view-view-endpoint)
+  - [12. Recreation checklist](#12-recreation-checklist)
+
 # Life360+ — Clean-Room App Specification
 
 > **Purpose.** This document specifies the Life360+ Hubitat integration in enough detail to
-> **recreate it from scratch**. It describes the app and driver *as they are*, not a design under
+> **recreate it from scratch**. It describes the app and driver _as they are_, not a design under
 > debate. The code in `life360_app.groovy` / `life360_driver.groovy` is the final authority; this
 > spec is the blueprint. Companion docs: [STATE_REFERENCE.md](STATE_REFERENCE.md) (every
 > setting/state var/attribute), [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md) (delta from the
@@ -24,21 +57,21 @@ implementation that still does the job.
 > The integration has been **completely dead** several times when Life360 changed their backend; the
 > most recent rescue was the Cloudflare cookie handling. The wire-level behavior below is a
 > **known-working configuration**. Treat the bytes on the wire — URL, headers, cookie capture/replay
-> — as load-bearing. Anything may be restructured *around* it, but the wire contract must stay
+> — as load-bearing. Anything may be restructured _around_ it, but the wire contract must stay
 > byte-for-byte identical to what is specified here.
 
 ### 0.1 The exact wire contract
 
-| Element | Required value | Why |
-| --- | --- | --- |
-| Base URL | `https://api-cloudfront.life360.com/v{version}` | The cloudfront host is what works. `api.life360.com` is a documented fallback only (commented in `life360BaseUrl`). |
-| API version | `3` for member/location/place/force-update calls; `4` for all `/circles` fetches (setup and steady-state) | v4 `/circles` returns richer circle data and works for membership polling; v3 is used for the per-member location path and other endpoints. |
-| `Accept` | `application/json` | — |
-| `cache-control` | `no-cache` | — |
-| `User-Agent` | `com.life360.android.safetymapd/KOKO/23.50.0 android/13` | Exact mobile-app fingerprint. An alternate fingerprint is kept commented in `getHttpHeaders` as a fallback. |
-| `Authorization` | `Bearer <access_token>` | — |
-| **No other headers** | — | Extra headers (e.g. `X-Application`, `circleid`) have triggered 403s. Do not add any unless a future break forces it. |
-| `Cookie` | replayed from the captured jar | **The Cloudflare gate.** See §0.2. |
+| Element              | Required value                                                                                            | Why                                                                                                                                         |
+| -------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Base URL             | `https://api-cloudfront.life360.com/v{version}`                                                           | The cloudfront host is what works. `api.life360.com` is a documented fallback only (commented in `life360BaseUrl`).                         |
+| API version          | `3` for member/location/place/force-update calls; `4` for all `/circles` fetches (setup and steady-state) | v4 `/circles` returns richer circle data and works for membership polling; v3 is used for the per-member location path and other endpoints. |
+| `Accept`             | `application/json`                                                                                        | —                                                                                                                                           |
+| `cache-control`      | `no-cache`                                                                                                | —                                                                                                                                           |
+| `User-Agent`         | `com.life360.android.safetymapd/KOKO/23.50.0 android/13`                                                  | Exact mobile-app fingerprint. An alternate fingerprint is kept commented in `getHttpHeaders` as a fallback.                                 |
+| `Authorization`      | `Bearer <access_token>`                                                                                   | —                                                                                                                                           |
+| **No other headers** | —                                                                                                         | Extra headers (e.g. `X-Application`, `circleid`) have triggered 403s. Do not add any unless a future break forces it.                       |
+| `Cookie`             | replayed from the captured jar                                                                            | **The Cloudflare gate.** See §0.2.                                                                                                          |
 
 `life360Params(String path, int version = 3)` returns `[uri, headers: getHttpHeaders(), timeout: 30]`.
 The `Cookie` header is added by callers from `state.cookies` when present.
@@ -67,8 +100,8 @@ The `Cookie` header is added by callers from `state.cookies` when present.
 token problem (jar intact) can be told apart from a cookie-path problem (jar missing a Cloudflare
 cookie).
 
-> **Soak-test requirement:** any change to §0.1/§0.2 must be tested against a *live circle for at
-> least several hours* — Cloudflare 403s appear minutes-to-hours after a bad change, not immediately.
+> **Soak-test requirement:** any change to §0.1/§0.2 must be tested against a _live circle for at
+> least several hours_ — Cloudflare 403s appear minutes-to-hours after a bad change, not immediately.
 
 ---
 
@@ -88,8 +121,8 @@ cookie).
    correct it" logic. The only sanctioned override is the user's explicit manual speed thresholds
    (`transitThreshold` / `drivingThreshold`). If part of Life360's API is genuinely broken, Life360
    fixes it upstream — the client does not accrete more workarounds.
-4. **Force-update for freshness, not inference.** When a fresh fix is genuinely needed, *ask the
-   phone* (§6) instead of inferring movement from noisy data.
+4. **Force-update for freshness, not inference.** When a fresh fix is genuinely needed, _ask the
+   phone_ (§6) instead of inferring movement from noisy data.
 5. **Fail loud, fail safe.** On auth failure: clear session, flag the token, slow polling, notify
    once. Never hammer a dead endpoint; never silently spin.
 6. **Read-only and unobtrusive.** No webhooks (disabled by Life360); no writes except the
@@ -100,7 +133,7 @@ cookie).
    (§10).
 8. **Device-facing backward compatibility is non-negotiable.** Existing users have Rule Machine
    rules, dashboards, and webCoRE pistons bound to the child-device attributes, capabilities, and
-   commands. Every device-facing name and value is frozen (§7.3); improve *behind* the contract,
+   commands. Every device-facing name and value is frozen (§7.3); improve _behind_ the contract,
    never by changing it.
 
 ---
@@ -145,20 +178,20 @@ Base path `https://api-cloudfront.life360.com/v{version}`.
 
 ### 3.1 Steady state
 
-| Purpose | Method + path | Version | Notes |
-| --- | --- | --- | --- |
-| **Poll one member's location** | `GET /circles/{circle}/members/{member}` | 3 | **Core location call.** Per member, with that member's `If-None-Match`. `200` = changed (full member + `location`); `304` = unchanged (near-free). One per selected member per tick. |
-| **Detect roster changes** | `GET /circles` | 4 | **Slow cadence (≤1/min).** Returns all circles; the selected circle's `memberCount` is compared against `state.memberCount`. A change triggers `fetchMembers()`. Uses `CIRCLES_API_VERSION = 4`. |
-| **Refresh membership / names** | `GET /circles/{circle}/members` | 3 | Fired by `fetchMembers()` when the roster changes (or on first baseline). Refreshes `state.members`, reconciles child devices, pushes refreshed name/avatar/location. |
-| Force fresh GPS fix | `POST /circles/{circle}/members/{member}/request` | 3 | Body `{"type":"location"}`, `Content-Type: application/json`. Returns `{requestId, isPollable}`. Cookies required (Cloudflare). |
+| Purpose                        | Method + path                                     | Version | Notes                                                                                                                                                                                            |
+| ------------------------------ | ------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Poll one member's location** | `GET /circles/{circle}/members/{member}`          | 3       | **Core location call.** Per member, with that member's `If-None-Match`. `200` = changed (full member + `location`); `304` = unchanged (near-free). One per selected member per tick.             |
+| **Detect roster changes**      | `GET /circles`                                    | 4       | **Slow cadence (≤1/min).** Returns all circles; the selected circle's `memberCount` is compared against `state.memberCount`. A change triggers `fetchMembers()`. Uses `CIRCLES_API_VERSION = 4`. |
+| **Refresh membership / names** | `GET /circles/{circle}/members`                   | 3       | Fired by `fetchMembers()` when the roster changes (or on first baseline). Refreshes `state.members`, reconciles child devices, pushes refreshed name/avatar/location.                            |
+| Force fresh GPS fix            | `POST /circles/{circle}/members/{member}/request` | 3       | Body `{"type":"location"}`, `Content-Type: application/json`. Returns `{requestId, isPollable}`. Cookies required (Cloudflare).                                                                  |
 
 ### 3.2 Setup / on demand
 
-| Purpose | Method + path | Version | Notes |
-| --- | --- | --- | --- |
-| Validate token / get units | `GET /users/me` | 3 | Cheap. Run on **Check Token**, on `installed()`/`updated()` (async, `refreshUserSettings()` — to learn the account's units preference), and on each 5-min tick while the token is flagged expired (auto-recovery probe). |
-| List circles | `GET /circles` | **4** | Setup only — the "Fetch Circles" button populates the circle picker. Same `CIRCLES_API_VERSION = 4` constant used for both setup and steady-state. |
-| List places | `GET /circles/{circle}/places` | 3 | Setup only — populate the HOME picker. |
+| Purpose                    | Method + path                  | Version | Notes                                                                                                                                                                                                                    |
+| -------------------------- | ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Validate token / get units | `GET /users/me`                | 3       | Cheap. Run on **Check Token**, on `installed()`/`updated()` (async, `refreshUserSettings()` — to learn the account's units preference), and on each 5-min tick while the token is flagged expired (auto-recovery probe). |
+| List circles               | `GET /circles`                 | **4**   | Setup only — the "Fetch Circles" button populates the circle picker. Same `CIRCLES_API_VERSION = 4` constant used for both setup and steady-state.                                                                       |
+| List places                | `GET /circles/{circle}/places` | 3       | Setup only — populate the HOME picker.                                                                                                                                                                                   |
 
 ### 3.3 Explicitly NOT used
 
@@ -375,6 +408,7 @@ fastPollMember(data):
 ```
 
 **Chain lifecycle:**
+
 - Chains are seeded from `notifyChildDevice` when a `200` shows a member in transit:
   `if (inTransit && dynamicPolling) ensureFastChain(memberId)`. This also fires on a 304 (member
   still in transit from persisted state) so a reboot doesn't permanently lose the chain for a
@@ -385,6 +419,7 @@ fastPollMember(data):
   dropped by `scheduleSlowTimer()` or when the chain intentionally ends.
 
 **Does not engage when:**
+
 - `dynamicPolling` is off
 - `dynamicPollFreqSecs >= pollFreqSecs` (no point "speeding up" to a slower rate)
 - `tokenLikelyExpired` (degraded mode — only the slow probe runs)
@@ -455,13 +490,13 @@ scheduleSlowTimer():
 Each member fetch is judged independently; a small set of **account-level** flags is shared across all
 members (an auth failure or 429 affects every member).
 
-| Condition (per member) | Action |
-| --- | --- |
-| `200` | `notifyChildDevice`; store member etag; `markFetchSuccess(memberId)` clears `failCount`/`tokenLikelyExpired`/`rateLimitedUntilMs`, member's backoff, `lastSuccessMs`, watchdog |
-| `304` | `markFetchSuccess(memberId)` |
-| `401`/`403` | **account-level:** `clearSessionCache()` (drop cookies + all etags + inflight/backoff); `failCount++`; at `failCount >= 3` set `tokenLikelyExpired`, then `scheduleSlowTimer()` (slows loop to 300s) **before** `notifyTokenExpired()` — order matters: `scheduleSlowTimer()` calls `unschedule()` which would cancel the reminder job registered by `notifyTokenExpired()` if the order were reversed. Banner text names a re-paste; below 3, a transient "will retry" banner. **Known limitation:** `failCount` read-modify-write is racy across concurrent 401 callbacks — Hubitat state writes are not atomic and no lock primitive is available in the Groovy sandbox. Practical impact: the threshold may take 5–6 trips instead of 3 (delayed notification, not silent failure). No fix available. |
-| `429` | **account-level:** `rateLimitedUntilMs = now + (Retry-After ?: 60) + 10s` — pauses the whole loop. Transient banner. |
-| `502`/`503`/`504`/`520`/`522`/`525` / network error (no status) | **per-member** exponential backoff (below) |
+| Condition (per member)                                          | Action                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`                                                           | `notifyChildDevice`; store member etag; `markFetchSuccess(memberId)` clears `failCount`/`tokenLikelyExpired`/`rateLimitedUntilMs`, member's backoff, `lastSuccessMs`, watchdog                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `304`                                                           | `markFetchSuccess(memberId)`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `401`/`403`                                                     | **account-level:** `clearSessionCache()` (drop cookies + all etags + inflight/backoff); `failCount++`; at `failCount >= 3` set `tokenLikelyExpired`, then `scheduleSlowTimer()` (slows loop to 300s) **before** `notifyTokenExpired()` — order matters: `scheduleSlowTimer()` calls `unschedule()` which would cancel the reminder job registered by `notifyTokenExpired()` if the order were reversed. Banner text names a re-paste; below 3, a transient "will retry" banner. **Known limitation:** `failCount` read-modify-write is racy across concurrent 401 callbacks — Hubitat state writes are not atomic and no lock primitive is available in the Groovy sandbox. Practical impact: the threshold may take 5–6 trips instead of 3 (delayed notification, not silent failure). No fix available. |
+| `429`                                                           | **account-level:** `rateLimitedUntilMs = now + (Retry-After ?: 60) + 10s` — pauses the whole loop. Transient banner.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `502`/`503`/`504`/`520`/`522`/`525` / network error (no status) | **per-member** exponential backoff (below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
 **Per-member transient backoff.** Each member tracks `transientCount-<id>` and
 `transientUntilMs-<id>`:
@@ -574,10 +609,10 @@ missing place/address ⇒ `"No Data"`. `status` is `"At Home"` or `"<x.x> miles 
 
 ### 7.2 Capability repurposing (document loudly — README + inline)
 
-| Standard capability | Real meaning |
-| --- | --- |
-| `Switch` on/off | WiFi connected / not |
-| `Contact Sensor` open/closed | Charging / on battery |
+| Standard capability                   | Real meaning                            |
+| ------------------------------------- | --------------------------------------- |
+| `Switch` on/off                       | WiFi connected / not                    |
+| `Contact Sensor` open/closed          | Charging / on battery                   |
 | `Acceleration Sensor` active/inactive | In transit OR driving OR away from home |
 
 ### 7.3 Backward-compatibility contract — DO NOT CHANGE DEVICE-FACING NAMES OR VALUES
@@ -592,14 +627,14 @@ missing place/address ⇒ `"No Data"`. `status` is `"At Home"` or `"<x.x> miles 
 
 **Attributes (exact names, types, value vocabularies):**
 
-| Group | Attributes (frozen) |
-| --- | --- |
+| Group          | Attributes (frozen)                                                                                                                                                               |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Presence/power | `presence` (`present`/`not present`), `battery` (0–100), `powerSource` (`dc`/`battery`), `switch` (`on`/`off`), `contact` (`open`/`closed`), `acceleration` (`active`/`inactive`) |
-| Location | `latitude`, `longitude`, `accuracy`, `address1`, `address1prev`, `lastLocationUpdate`, `lastUpdated`, `since`, `status`, `distance`, `savedPlaces` |
-| Motion | `inTransit` (`"true"`/`"false"`), `isDriving` (`"true"`/`"false"`), `speed`, `userActivity` |
-| Phone | `charge` (`"true"`/`"false"`), `wifiState` (`"true"`/`"false"`), `shareLocation` |
-| Identity | `memberName`, `avatar`, `phone`, `email` |
-| HTML / history | `avatarHtml`, `html`, `history`, plus external-app attrs `bpt-history`, `numOfCharacters`, `lastLogMessage`, `lastMap` |
+| Location       | `latitude`, `longitude`, `accuracy`, `address1`, `address1prev`, `lastLocationUpdate`, `lastUpdated`, `since`, `status`, `distance`, `savedPlaces`                                |
+| Motion         | `inTransit` (`"true"`/`"false"`), `isDriving` (`"true"`/`"false"`), `speed`, `userActivity`                                                                                       |
+| Phone          | `charge` (`"true"`/`"false"`), `wifiState` (`"true"`/`"false"`), `shareLocation`                                                                                                  |
+| Identity       | `memberName`, `avatar`, `phone`, `email`                                                                                                                                          |
+| HTML / history | `avatarHtml`, `html`, `history`, plus external-app attrs `bpt-history`, `numOfCharacters`, `lastLogMessage`, `lastMap`                                                            |
 
 > Subtle semantics to preserve, not "fix": `address1` is the literal `"Home"` inside the home radius
 > and `"No Data"` when missing; `lastLocationUpdate` updates only when `address1` changes (`lastUpdated`
@@ -627,7 +662,7 @@ preference; it was replaced by `unitOverride` (an `enum`) with a one-time migrat
 settings vocabulary (§9/§10).
 
 **Where improvement is allowed (behind the contract):** add new attributes/commands (purely additive);
-change *how* a value is computed or *how often* it's sent (Hubitat dedupes by value); alias a
+change _how_ a value is computed or _how often_ it's sent (Hubitat dedupes by value); alias a
 badly-named legacy attribute with a clearer new one **in addition to** — never instead of — the legacy
 one.
 
@@ -707,19 +742,19 @@ into forum posts.
 
 ### 10.1 Logging controls — two orthogonal axes
 
-| Setting | Type | Default | Controls |
-| --- | --- | --- | --- |
-| `logEnable` | bool | OFF | **Verbosity.** Debug/trace on/off. |
-| `logRawPayload` | bool | OFF | **Verbosity + sensitive.** Raw payloads, partial token, partial cookie head, GPS — the full firehose. Labeled sensitive; warn not to share. |
-| `logShowNames` | bool | ON | **PII redaction.** ON = names; OFF = opaque UUIDs everywhere (app `getShowNamesInLogs()` + driver `displayMember()`). |
-| `logShowMapsLink` | bool | ON | **PII redaction.** ON = "moving" log includes a Maps link to exact coords; OFF = link (and coords) omitted. |
+| Setting           | Type | Default | Controls                                                                                                                                    |
+| ----------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `logEnable`       | bool | OFF     | **Verbosity.** Debug/trace on/off.                                                                                                          |
+| `logRawPayload`   | bool | OFF     | **Verbosity + sensitive.** Raw payloads, partial token, partial cookie head, GPS — the full firehose. Labeled sensitive; warn not to share. |
+| `logShowNames`    | bool | ON      | **PII redaction.** ON = names; OFF = opaque UUIDs everywhere (app `getShowNamesInLogs()` + driver `displayMember()`).                       |
+| `logShowMapsLink` | bool | ON      | **PII redaction.** ON = "moving" log includes a Maps link to exact coords; OFF = link (and coords) omitted.                                 |
 
 **Upgrade-safe defaults.** All four settings use null-safe comparisons (`!= false` for ON-by-default,
 `== true` for OFF-by-default) so that an upgrader who has never opened the app's settings page gets
 the intended defaults without needing to hit Done. `null` (never configured) evaluates the same as
 the documented default.
 
-- `logShowNames` OFF must replace *all* names with IDs, not just some.
+- `logShowNames` OFF must replace _all_ names with IDs, not just some.
 - `logRawPayload` is the one switch that intentionally logs sensitive data — its description says so.
   Never log the **full** bearer token or **full** cookie jar even behind it — partial/head only.
 

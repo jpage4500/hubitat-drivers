@@ -1,12 +1,17 @@
+- [Life360+ Changelog](#life360-changelog)
+  - [5.2.0](#520)
+    - [Reliability](#reliability)
+    - [New capabilities](#new-capabilities)
+    - [Settings page](#settings-page)
+    - [Notifications](#notifications)
+    - [Privacy](#privacy)
+    - [Performance](#performance)
+    - [Documentation](#documentation)
+  - [Historical — App (5.1.3 and earlier)](#historical--app-513-and-earlier)
+  - [Historical — Driver (5.1.4 and earlier)](#historical--driver-514-and-earlier)
+  - [Pre-history](#pre-history)
+
 # Life360+ Changelog
-
-One file covering both [life360_app.groovy](life360_app.groovy) and [life360_driver.groovy](life360_driver.groovy). Hubitat has no built-in way to surface a changelog inside the hub UI, so this file replaces the per-file `Changes:` comment blocks that used to live at the top of each script.
-
-Versions below `5.1.x` come from the original per-file change logs and are preserved verbatim, including the cases where the app and driver carried different version numbers. New releases are versioned together going forward.
-
-Last published release on [the community thread](https://community.hubitat.com/t/life360/118544/929): **app 5.1.3, driver 5.1.4** (May–June 2026).
-
----
 
 ## 5.2.0
 
