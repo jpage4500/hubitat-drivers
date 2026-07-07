@@ -15,6 +15,7 @@ import groovy.transform.Field
  * take 15-60s on first install. Results are accumulated into state so devices stay listed once seen.
  *
  *  Changes:
+ *  1.0.1 - fix TTS text being clipped at the beginning (pre-roll silence)
  *  1.0.0 - initial version
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
@@ -59,6 +60,7 @@ def updated() {
     if (parent) {
         parent.setRefreshInterval((settings.refreshInterval ?: 60) as Integer)
         parent.setDebug(settings.debugOutput == true)   // single toggle -> broadcast to parent + all children
+        parent.setPreRoll(settings.preRoll != false)    // default ON (null = never saved)
     }
     // debug logging auto-disables 24h after being enabled so verbose logs are never left on
     if (settings.debugOutput == true) runIn(86400, 'debugOff')
@@ -146,6 +148,7 @@ def mainPage() {
         }
         section(header('Settings')) {
             input name: 'refreshInterval', type: 'number', title: 'Status refresh interval (seconds)', defaultValue: 60, range: '10..3600', submitOnChange: true
+            input name: 'preRoll', type: 'bool', title: 'Pre-roll silence (wake the speaker so the start of announcements is not clipped)', defaultValue: true, submitOnChange: true
             input name: 'debugOutput', type: 'bool', title: 'Enable debug logging (auto-off after 24h)', defaultValue: false, submitOnChange: true
         }
         section {
