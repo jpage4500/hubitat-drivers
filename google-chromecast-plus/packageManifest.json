@@ -4,11 +4,13 @@
   "version": "1.0.0",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2026-07-05",
+  "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
+  "releaseNotes": "Initial Version",
   "apps": [
     {
       "id": "8f2ca643-8da9-4001-bea6-e0310ab85f8a",
-      "name": "",
-      "namespace": "",
+      "name": "Google Chromecast+",
+      "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-app.groovy",
       "required": true,
       "oauth": false,
@@ -18,7 +20,7 @@
   "drivers": [
     {
       "id": "685da825-9635-427c-b554-aab3a3829c8d",
-      "name": "Google Chromecast+",
+      "name": "Google Chromecast+ Driver",
       "namespace": "jpage4500",
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-driver.groovy",
       "required": true
