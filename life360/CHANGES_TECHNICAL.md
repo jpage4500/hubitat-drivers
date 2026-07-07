@@ -57,14 +57,14 @@ Added to eliminate magic literals: `FORCE_UPDATE_FETCH_DELAY_SECS = 6`, `CIRCLES
 - `savedPlaces` JSON serialized once in the app and passed as a string to the driver; previously the driver re-serialized a raw Map N times per tick.
 
 ### Scheduling
-- `scheduleUpdates()` tracks `state.scheduledBaseSecs` and short-circuits no-op re-arms; previously stacked overlapping timers on every `updated()` / `initialize()` / `handleTimerFired` call.
+- `scheduleSlowTimer()` replaces `scheduleUpdates()` (renamed and simplified). The old no-op guard (`state.scheduledBaseSecs` tracking) was removed — the rebuild is now always a full `unschedule()` + `schedule()` so there is no hidden scheduling state to go stale. `scheduledBaseSecs`, `pollIntervalSecs`, `dynamicPollingActive`, and `memberInTransit` are all obsolete and removed by `removeObsoleteStateKeys()`.
 - Polling randomness jitter (`±0–4s`) removed — was a workaround for an old communications issue; no longer serves a purpose.
 - `pollFreq = 0` (Disabled) now reliably disables polling; previously the jitter addition caused it to schedule at 1–4s regardless.
 - Polling slows to 300s when `tokenLikelyExpired` is set, regardless of user's poll setting.
-- Dynamic polling mode transition now happens immediately in `notifyChildDevice` when `inTransit` flips, instead of after a full poll cycle in `fetchLocations` (which ran before async responses returned).
+- **Dynamic polling** for in-transit members now uses per-member `runIn` chains (`ensureFastChain` / `fastPollMember`) rather than switching the slow-timer rate. Each in-transit member gets its own independent chain at `dynamicPollFreq`; the slow timer continues polling all members at `pollFreq`. The chain ends when the member stops moving or `scheduleSlowTimer()` is called. The old `dynamicPolling()` function (global rate switch) is gone.
 
 ### Token / session recovery
-- **Auto-recovery from `tokenLikelyExpired`:** `handleTimerFired` now calls `probeTokenAfterExpiry()` → async `GET /users/me` → `handleTokenProbeResponse` when the flag is set, instead of returning immediately. A 200 response clears `tokenLikelyExpired`, resets `failCount`, cancels reminder schedules, and calls `scheduleUpdates()` to restore normal polling. Previously the app was dead until manual intervention.
+- **Auto-recovery from `tokenLikelyExpired`:** `handleSlowTimer` now calls `probeTokenAfterExpiry()` → async `GET /users/me` → `handleTokenProbeResponse` when the flag is set, instead of returning immediately. A 200 response clears `tokenLikelyExpired`, resets `failCount`, cancels reminder schedules, and calls `scheduleSlowTimer()` to restore normal polling. Previously the app was dead until manual intervention.
 - New **Check Token** button calls synchronous `GET /users/me`, populates `state.tokenStatus` with a success/failure span, and captures units preference. One-shot flag (`state.tokenStatusPending`) ensures the result persists through the one page re-render after the button press.
 - `refreshUserSettings()` fires async `GET /users/me` on `installed()` and `updated()` to capture the account's `settings.unitOfMeasure` (`"i"` / `"m"`). `getUnitIsMiles()` exposes this to the driver.
 - Token expiry notifications: added master `notifyTokenExpiry` toggle and `notifyRepeatHours` repeat schedule. `scheduleTokenExpiryReminder()` / `sendTokenExpiryReminder()` implement the repeat chain; `unschedule("sendTokenExpiryReminder")` cancels on `updated()`.
@@ -84,7 +84,7 @@ Added to eliminate magic literals: `FORCE_UPDATE_FETCH_DELAY_SECS = 6`, `CIRCLES
 
 ### New endpoints
 - **Force Update:** `POST /circles/<circleId>/members/<memberId>/request` with `body: {type: "location"}` via `forceMemberUpdate()` → `asynchttpPost` → `handleForceUpdateResponse`. Schedules `fetchLocations` 6 seconds later on success. UI: member dropdown + **Force Update** button in a section gated on `!isEmpty(settings.users)`.
-- **Circles poll:** `handleTimerFired` fires `asynchttpGet` to `GET /circles` (v3) once per minute (rate-limited via `state.lastCirclesFetchMs`). `handleCirclesPollResponse` compares `circle.memberCount` against `state.memberCount`; triggers `fetchMembers()` on change or on first-seen baseline. (v3 is used for the poll because the v4 `/circles` list response returns `memberCount:"0"`; the setup-only Fetch Circles button uses v4 for its richer circle data.)
+- **Circles poll:** `handleSlowTimer` fires `asynchttpGet` to `GET /circles` (v4, `CIRCLES_API_VERSION`) at most once per `max(pollFreq, 60)` seconds (rate-limited via `state.lastCirclesPollMs`). `handleCirclesPollResponse` compares `circle.memberCount` against `state.memberCount`; triggers `fetchMembers()` on change or on first-seen baseline. v4 is used for both the setup button and the steady-state poll. The `lastCirclesFetchMs` key is obsolete and removed by `removeObsoleteStateKeys()`.
 - **Membership → device reconciliation:** `handleMembersResponse` (the `fetchMembers` callback) now calls `createChildDevices()` on a 200 — creating devices for newly selected members, removing orphans — and pushes refreshed name/avatar/location to every selected member that has a device. Previously the membership poll refreshed only `state.members`; device create/cleanup happened solely on `installed()`/`updated()`.
 
 ### Child device management

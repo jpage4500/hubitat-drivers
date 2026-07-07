@@ -1481,7 +1481,12 @@ def renderView() {
         }
     }
 
+    // Unicode-escape <, >, & so they can't break out of the <script> block if a member
+    // name or address contains "</script>" — Groovy's JsonBuilder does not HTML-escape these.
     String membersJson = new groovy.json.JsonBuilder(members).toString()
+        .replace("&", "\\u0026")
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
     String apiKey = settings.googleMapsApiKey?.toString()?.trim()
     String html = isEmpty(apiKey) ?
         buildOsmMapHtml(membersJson, members.size()) :

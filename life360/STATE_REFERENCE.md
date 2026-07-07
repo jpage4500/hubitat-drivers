@@ -27,6 +27,7 @@ Configured via the app's preferences page. Read at runtime as `settings.<name>` 
 | `logRawPayload` | bool | Verbose raw-API diagnostics — logs sensitive data (GPS, partial token, cookie heads, full payloads). Debug only | `false` |
 | `logShowNames` | bool | Include member/place/circle names in logs (default on). Off → UUIDs only, for safe log sharing | `true` |
 | `logShowMapsLink` | bool | Include a Google Maps link in the "member moved" info log (default on) | `true` |
+| `logUnits` | enum | Units for speed/distance in logs and device attributes: `"life360"` (follow account pref), `"hubitat"` (hub °F/°C), `"imperial"`, `"metric"`. App-level override — takes priority over each driver's `unitOverride` when set to anything other than `"life360"` | `"life360"` |
 | `forceUpdateMember` | enum (transient) | Member targeted by the Force Update button. Fire-once — cleared (`app.removeSetting`) immediately after the request is sent, so the dropdown resets to blank | (blank) |
 
 ---
@@ -39,9 +40,9 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 
 | Variable | Type | Set by | Notes |
 | --- | --- | --- | --- |
-| `circles` | List | `fetchCircles()` | Raw response from `/v4/circles` for the circle picker (the setup button uses v4; the once-per-minute membership poll uses v3) |
-| `places` | List | `fetchPlaces()` | Raw response from `/v3/circles/<id>/places` for the HOME picker |
-| `members` | List | `fetchMembers()` | Raw response from `/v3/circles/<id>/members` for the user picker. A successful fetch also runs `createChildDevices()` (create new / remove orphaned) and pushes refreshed name/avatar/location to existing devices |
+| `circles` | List | `fetchCircles()` | Response from `/v4/circles` for the circle picker |
+| `places` | List | `fetchPlaces()` | Response from `/v3/circles/<id>/places` for the HOME picker |
+| `members` | List | `fetchMembers()` | **Trimmed** — stores only `[id, firstName, lastName, issues.disconnected]` per member (not the full API response). A successful fetch also runs `syncChildDevices()` (create new / remove orphaned) and pushes refreshed location to existing devices using the untrimmed `rawMembers` objects |
 | `accessToken` | String | `createAccessToken()` (OAuth) | Token used for the `/view` map endpoint URL |
 
 ---
@@ -67,18 +68,15 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | Variable | Type | Set by | Notes |
 | --- | --- | --- | --- |
 | `lastSuccessMs` | Long | `handleMemberLocationResponse` on 200/304 | Watchdog input; triggers warn if stale > `max(pollFreq×10, 10min)` |
-| `scheduledBaseSecs` | Integer | `scheduleUpdates()` | Last base interval armed (no jitter). No-op guard: skips re-arming the cron when the rate hasn't changed. Reset to `null` by `installed`/`updated`/`initialize` to force a re-arm |
-| `pollIntervalSecs` | Integer | `scheduleUpdates()` | Current effective poll interval; used for the per-request HTTP timeout and 5xx backoff base |
-| `dynamicPollingActive` | Boolean | `scheduleUpdates()` | True while polling at `dynamicPollFreq` (a member is in transit) |
-| `memberInTransit` | Boolean | `dynamicPolling()` | True if ANY tracked member's `inTransit-<id>` is true |
-| `inTransit-<memberId>` | Boolean | `notifyChildDevice` (echo from driver) | Per-member in-transit flag; drives `dynamicPolling`. On a flip, `notifyChildDevice` re-evaluates the poll rate immediately |
+| `inTransit-<memberId>` | Boolean | `notifyChildDevice` (echo from driver) | Per-member in-transit flag (identity-scoped; survives re-auth). Used by `ensureFastChain` to decide whether to seed a fast-poll chain for this member |
+| `fastChain-<memberId>` | Boolean | `ensureFastChain()` | True while a per-member `runIn` fast-poll chain is active. Dropped by `scheduleSlowTimer()` (which calls `unschedule()`) and cleared when a chain ends naturally |
 
 ### Membership / discovery polling
 
 | Variable | Type | Set by | Notes |
 | --- | --- | --- | --- |
-| `memberCount` | Integer | `handleCirclesPollResponse` | Baseline circle member count from the once-per-minute v3 `/circles` poll; a change triggers `fetchMembers()` (which reconciles child devices and refreshes names/avatars). On first baseline, also triggers an initial `fetchMembers()` if `state.members` is empty. Reset to `null` by `updated()` to re-baseline |
-| `lastCirclesFetchMs` | Long | `handleTimerFired` | Throttles the v3 `/circles` membership poll to at most once per minute. Reset to `null` by `updated()` so the next tick re-checks membership |
+| `memberCount` | Integer | `handleCirclesPollResponse` | Baseline circle member count from the once-per-minute v4 `/circles` poll; a change triggers `fetchMembers()` (which reconciles child devices and refreshes names/avatars). On first baseline, also triggers an initial `fetchMembers()` if `state.members` is empty. Reset to `null` by `updated()` to re-baseline |
+| `lastCirclesPollMs` | Long | `handleSlowTimer` | Throttles the v4 `/circles` membership poll to at most once per `max(pollFreq, 60)` seconds. Reset to `null` by `updated()` so the next tick re-checks membership |
 
 ### UI one-shot status (button results)
 
@@ -96,8 +94,9 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | `failCount` | Integer | `handleException` / `handleMemberLocationResponse` on 401/403 | 200-OK response, `updated()` | Auth-failure streak; triggers `tokenLikelyExpired` at ≥3 |
 | `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | `handleTokenProbeResponse` on 200 (auto-recovery), `updated()` | When true, normal polling is short-circuited and slowed to 5 min. Each 5-min tick fires `probeTokenAfterExpiry()` (async `GET /users/me`); a 200 response auto-recovers — clears this flag, resets `failCount`, restores normal polling. A 401/403 probe stays quiet and retries next tick. |
 | `rateLimitedUntilMs` | Long | `handleException` / `handleMemberLocationResponse` on 429 | 200-OK response, `updated()` | Honors `Retry-After`; polling skipped until this time |
-| `watchdogWarned` | Boolean | `handleTimerFired` watchdog (rising edge) | 200/304 success | Prevents the "no successful update" warning from spamming every tick |
+| `watchdogWarned` | Boolean | `handleSlowTimer` watchdog (rising edge) | 200/304 success | Prevents the "no successful update" warning from spamming every tick |
 | `message` | String | various error paths | 200-OK success / `updated()` / no-arg `initialize()` | Red banner shown on the app's main page |
+| `placesEmptyWarned` | Boolean | `notifyChildDevice` (rising edge) | `fetchPlaces()` success | Prevents the "state.places is empty" error from spamming every tick while places are missing |
 
 ---
 
@@ -105,10 +104,11 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Handler | Schedule | Set by | Purpose |
 | --- | --- | --- | --- |
-| `handleTimerFired` | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *` | `scheduleUpdates()` | Each tick: run the stale-data watchdog, poll v3 `/circles` at most once per minute to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then either probe `/users/me` (when `tokenLikelyExpired`) or call `fetchLocations()` |
-| `sendTokenExpiryReminder` | one-shot `runIn(<notifyRepeatHours>h)`, self-rescheduling | `notifyTokenExpired()` / `scheduleTokenExpiryReminder()` | Repeats the token-expiry notification while `tokenLikelyExpired` stays true; chain stops once the token is refreshed or `notifyRepeatHours = never` |
+| `handleSlowTimer` | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *` | `scheduleSlowTimer()` | Each tick: run the stale-data watchdog, poll v4 `/circles` at most once per `max(pollFreq, 60)` seconds to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then either probe `/users/me` (when `tokenLikelyExpired`) or call `fetchLocations()` |
+| `fastPollMember` | one-shot `runIn(<dynamicPollFreq>s)`, self-rescheduling per member | `ensureFastChain()` / `fastPollMember()` | Per-member fast-poll chain; fires extra location fetches for in-transit members while dynamic polling is enabled. Chain ends when the member stops moving, is deselected, or `scheduleSlowTimer()` is called |
+| `sendTokenExpiryReminder` | one-shot `runIn(<notifyRepeatHours>h)`, self-rescheduling | `scheduleTokenExpiryReminder()` | Repeats the token-expiry notification while `tokenLikelyExpired` stays true; chain stops once the token is refreshed or `notifyRepeatHours = never` |
 
-`baseSecs` = `pollFreq` (or `dynamicPollFreq` when dynamic polling is active); forced to 300 when `tokenLikelyExpired`. The fixed periodic `fetchMembers` timer was removed — membership is now detected via the once-per-minute `/circles` poll-count diff in `handleTimerFired`.
+`baseSecs` = `pollFreq`; forced to 300 when `tokenLikelyExpired`. Dynamic polling for movers is handled by per-member `runIn` chains (`fastPollMember`), not by changing the slow-timer rate.
 
 ---
 
@@ -132,7 +132,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Setting | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `isMiles` | bool | true | Distance/speed units: miles+mph (true) or km+kph (false). **Fallback only** — when the app has learned the Life360 account's units preference (`state.unitOfMeasure`) via `GET /users/me`, that takes priority and this toggle is ignored |
+| `unitOverride` | enum | `"life360"` | Per-device units override: `"life360"` (follow account preference), `"hubitat"` (follow hub's °F/°C), `"imperial"` (miles/mph), `"metric"` (km/kph). When set to anything other than `"life360"`, the app-level `logUnits` setting and Life360 account preference are both ignored for this device. **Migrated** from the old `isMiles` bool in `updated()` (if `isMiles == false` → `unitOverride = "metric"`) |
 | `generateHtml` | bool | false | Build `html` / `avatarHtml` tile attributes |
 | `transitThreshold` | number | 0 | Override Life360's `inTransit` — flip true at this speed (in display units); `0` = use Life360 |
 | `drivingThreshold` | number | 0 | Override Life360's `isDriving` — flip true at this speed; `0` = use Life360 |

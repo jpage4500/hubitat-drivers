@@ -8,7 +8,7 @@ Last published release on [the community thread](https://community.hubitat.com/t
 
 ---
 
-## Y.Y.Y — unreleased
+## 5.2.0
 
 Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integration now stays online** through Cloudflare cookie rotations and transient Life360 outages that previously caused permanent silent failures.
 
@@ -20,13 +20,13 @@ Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integratio
 
 **Token-expiry notifications stay armed.** Changing the poll frequency while the token is expired no longer silently kills the repeat-notification schedule.
 
-**Cloudflare cookie bug fixed.** Life360 sits behind Cloudflare, which issues two cookies: `_cfuvid` (stable) and `__cf_bm` (rotates every ~30 min). The async cookie handler was overwriting the entire cookie jar with just the fresh rotating cookie each time `__cf_bm` refreshed — silently dropping `_cfuvid`. Without both, Cloudflare returns 403 within minutes and polling goes completely dark. The failure was delayed and silent, which made it look like a Life360 outage. Fixed: cookie updates now merge by name so only the rotating entry is replaced. See [Cookie handling](README.md#cookie-handling-load-bearing--dont-break-this) in the README.
+**Cloudflare cookie bug fixed.** Life360 sits behind Cloudflare, which issues two cookies: `_cfuvid` (stable) and `__cf_bm` (rotates every ~30 min). The async cookie handler was overwriting the entire cookie jar with just the fresh rotating cookie each time `__cf_bm` refreshed — silently dropping `_cfuvid`. Without both, Cloudflare returns 403 within minutes and polling goes completely dark. The failure was delayed and silent, which made it look like a Life360 outage. Fixed: cookie updates now merge by name so only the rotating entry is replaced. See the [Privacy & security](README.md#privacy--security) section in the README and [Cookie management](CHANGES_TECHNICAL.md#cookie-management) in CHANGES_TECHNICAL.md.
 
 ### New capabilities
 
 - **Force Update** — settings-page button that POSTs a location-refresh request to a member's phone. Life360 signals the device for a fresh GPS fix (~5 seconds), which the next poll cycle picks up.
 - **Check Token** — validates your access token with an inline success/failure result on the settings page, including a "Hi, name!" confirmation. Also re-reads the account's units preference.
-- **Units auto-detected** — speed and distance follow your Life360 account's imperial/metric preference, fetched automatically from `/users/me`. The per-device `isMiles` toggle is a fallback only.
+- **Units auto-detected** — speed and distance follow your Life360 account's imperial/metric preference, fetched automatically from `/users/me`. The per-device `unitOverride` setting is a fallback only (old `isMiles` bool is migrated automatically).
 - **Dynamic polling reacts immediately** — when a member starts or stops moving, the polling rate switches on the same tick instead of lagging a full cycle.
 - **Membership auto-sync** — a once-per-minute circles poll watches the circle's member count; when it changes, the member list is refreshed and child devices are reconciled (new members get a device, departed members' devices are removed) and existing devices get refreshed names/avatars — no need to reopen the app.
 
