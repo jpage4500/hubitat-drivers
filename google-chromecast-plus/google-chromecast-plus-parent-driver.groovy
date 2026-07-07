@@ -7,9 +7,6 @@
  * management hooks the app calls (create/delete children, broadcast the refresh interval + debug flag).
  * It intentionally has NO user-facing capabilities/commands - each Chromecast lives in its own child
  * device (driver "Google Chromecast+").
- *
- *  Changes:
- *  1.0.0 - initial version (split out of the bimodal driver)
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -57,6 +54,7 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     if (uuid) child.updateDataValue("uuid", uuid)
     if (deviceType) child.updateDataValue("deviceType", deviceType)
     child.setDebug(state.debug == true)
+    child.setPreRoll(state.preRoll != false)
     child.initialize()
     runIn(3, "recomputeSummary")
     return child
@@ -83,6 +81,12 @@ def setRefreshInterval(seconds) {
 def setDebug(flag) {
     state.debug = (flag as Boolean)
     getChildDevices().each { it.setDebug(flag) }
+}
+
+// pre-roll silence toggle: the app broadcasts here, we fan out to children
+def setPreRoll(flag) {
+    state.preRoll = (flag as Boolean)
+    getChildDevices().each { it.setPreRoll(flag) }
 }
 
 // ============================================================================

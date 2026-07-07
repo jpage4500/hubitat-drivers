@@ -10,10 +10,12 @@
  *   - PARENT (role=parent, created by the app): manages child devices + group actions + aggregate status.
  *   - CHILD  (role=child, one per Chromecast):  owns a socket, full protocol, TTS/media/transport/status.
  *
- * Fixes the built-in integration's headline bugs (2-second TTS cutoff / first-word clip) by answering
- * heartbeat PINGs synchronously and gating announcements on real MEDIA_STATUS transitions.
+ * Fixes the built-in integration's headline bugs: the 2-second TTS cutoff (answer heartbeat PINGs
+ * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (play a
+ * short hub-hosted silent lead-in that wakes the speaker's amp before the announcement loads).
  *
  *  Changes:
+ *  1.1.0 - pre-roll silent lead-in so the first word isn't clipped; relaunch DMR when it has auto-exited; log user commands at info level
  *  1.0.0 - initial version
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
@@ -33,6 +35,11 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final String RECV    = "receiver-0"
 @Field static final String APP_DMR = "CC1AD845"          // Default Media Receiver
 @Field static final Integer CAST_PORT = 8009
+
+// -- pre-roll silence (first-word-clip fix) --
+@Field static final String SILENCE_FILE = "gcplus-silence.wav"  // hub-hosted silent lead-in, written on demand
+@Field static final Integer PREROLL_MS  = 2000                  // lead-in length; only needs to outlast the amp wake-up
+@Field static boolean silenceEnsured = false                    // JVM-wide latch: silence file already written to the hub
 
 // per-device, cross-callback state (parse/socketStatus/scheduled jobs can run on different threads)
 @Field static final Map rxBuf   = new ConcurrentHashMap()   // device.id -> hex String (rx accumulator)
@@ -94,7 +101,7 @@ metadata {
     preferences {
         input name: "keepAlive", type: "bool", title: "Real-time updates (keep a persistent connection). Turn OFF to poll on-demand (quieter, higher latency).", defaultValue: true
         input name: "ttsVolume", type: "number", title: "Announcement volume (0-100, blank = leave current)", required: false, range: "0..100"
-        // debug logging is a single toggle in the app (broadcast here as state.debug); no per-device switch
+        // debug logging + pre-roll are single toggles in the app (broadcast as state.debug / state.preRoll); no per-device switch
     }
 }
 
@@ -105,6 +112,8 @@ private String getIp()     { return getDataValue("ip") }
 private Integer getPort()  { return (getDataValue("port") ?: "${CAST_PORT}") as Integer }
 // null (never saved) counts as ON, so app-created children get real-time until explicitly turned off
 private boolean isKeepAlive() { return settings.keepAlive != false }
+// pre-roll is a single toggle in the app (broadcast here as state.preRoll); null = never set = on
+private boolean isPreRoll()   { return state.preRoll != false }
 
 // ============================================================================
 // lifecycle
@@ -167,6 +176,9 @@ def setRefreshInterval(seconds) {
 // single debug toggle: the parent broadcasts the flag here; it gates this device's debug logs
 def setDebug(flag) { state.debug = (flag as Boolean) }
 
+// pre-roll silence toggle: the parent broadcasts the app setting here (used by startAnnounce via isPreRoll)
+def setPreRoll(flag) { state.preRoll = (flag as Boolean) }
+
 // ============================================================================
 // PUBLIC COMMANDS (per-device Chromecast control)
 // ============================================================================
@@ -189,17 +201,17 @@ def playTrackAndRestore(uri, volume = null) { playMedia(uri, null, null, volume,
 def playTrackAndResume(uri, volume = null)  { playMedia(uri, null, null, volume, "resume") }
 
 // -- MusicPlayer transport --
-def play()          { sendMediaCommand("PLAY") }
-def pause()         { sendMediaCommand("PAUSE") }
-def stop()          { sendMediaCommand("STOP") }
-def nextTrack()     { sendMediaCommand("QUEUE_NEXT") }
-def previousTrack() { sendMediaCommand("QUEUE_PREV") }
+def play()          { logInfo "play";          sendMediaCommand("PLAY") }
+def pause()         { logInfo "pause";         sendMediaCommand("PAUSE") }
+def stop()          { logInfo "stop";          sendMediaCommand("STOP") }
+def nextTrack()     { logInfo "nextTrack";     sendMediaCommand("QUEUE_NEXT") }
+def previousTrack() { logInfo "previousTrack"; sendMediaCommand("QUEUE_PREV") }
 def setTrack(uri)     { /* stage a track without playing - not supported by DMR; treat as playTrack */ playTrack(uri) }
 def restoreTrack(uri) { playTrack(uri) }
 def resumeTrack(uri)  { playTrack(uri) }
 
 // seek (seconds) - custom convenience
-def seek(pos) { sendMediaCommand("SEEK", [currentTime: (pos ?: 0) as BigDecimal]) }
+def seek(pos) { logInfo "seek: ${pos}"; sendMediaCommand("SEEK", [currentTime: (pos ?: 0) as BigDecimal]) }
 
 // -- AudioVolume / level --
 def setVolume(vol) { setDeviceVolume(vol) }
@@ -210,10 +222,10 @@ def mute()         { setMute(true) }
 def unmute()       { setMute(false) }
 
 // -- app control --
-def launchApp(appId) { enqueue([type: "launch", stage: "receiver", appId: appId]) }
-def stopApp()        { if (state.sessionId) sendReceiverStop(state.sessionId) }
-def reconnect()      { closeSocket(); runIn(1, "connect") }
-def disconnect()     { state.pendingActions = []; closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
+def launchApp(appId) { logInfo "launchApp: ${appId}"; enqueue([type: "launch", stage: "receiver", appId: appId]) }
+def stopApp()        { logInfo "stopApp"; if (state.sessionId) sendReceiverStop(state.sessionId) }
+def reconnect()      { logInfo "reconnect"; closeSocket(); runIn(1, "connect") }
+def disconnect()     { logInfo "disconnect"; state.pendingActions = []; closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
 
 // ============================================================================
 // CHILD mode: high-level actions
@@ -221,6 +233,7 @@ def disconnect()     { state.pendingActions = []; closeSocket(); sendEventIfChan
 
 private void announce(String text, volume, String mode, String voice = null) {
     if (isEmpty(text)) return
+    logInfo "TTS: \"${text}\" (mode=${mode}${volume != null ? ", volume=${volume}" : ""}${voice ? ", voice=${voice}" : ""})"
     Map tts = voice ? textToSpeech(text, voice) : textToSpeech(text)
     if (!tts?.uri) { logError "announce: textToSpeech returned no uri for '${text}'"; return }
     enqueue([type: "announce", stage: "app", url: tts.uri, dur: (tts.duration ?: 0),
@@ -229,18 +242,21 @@ private void announce(String text, volume, String mode, String voice = null) {
 
 private void playMedia(String url, String title, String subtitle, volume, String mode) {
     if (isEmpty(url)) return
+    logInfo "playMedia: ${url} (mode=${mode ?: "none"}${volume != null ? ", volume=${volume}" : ""})"
     enqueue([type: "media", stage: "app", url: url, title: title, subtitle: subtitle,
              volume: volume, mode: mode ?: "none"])
 }
 
 private void setDeviceVolume(vol) {
     Integer v = Math.max(0, Math.min(100, (vol ?: 0) as Integer))
+    logInfo "setVolume: ${v}"
     enqueue([type: "setVolume", stage: "receiver", level: (v / 100.0d)])
     // reflect optimistically; confirmed by RECEIVER_STATUS
     sendEventIfChanged("volume", v)
 }
 
 private void setMute(boolean muted) {
+    logInfo "${muted ? "mute" : "unmute"}"
     enqueue([type: "setMute", stage: "receiver", muted: muted])
     sendEventIfChanged("mute", muted ? "muted" : "unmuted")
 }
@@ -267,6 +283,11 @@ private void pump() {
             if (remaining.any { it.stage == "app" }) ensureApp()
             break
         case "APP_CONNECTED":
+            if (!state.transportId) {          // stale APP_CONNECTED (DMR exited); relaunch before running actions
+                state.conn = "READY"
+                pump()
+                return
+            }
             acts.each { runAction(it) }
             state.pendingActions = []
             break
@@ -296,9 +317,106 @@ private void startAnnounce(Map a) {
     state.ttsActive = true
     state.ttsStarted = false
     state.ttsMode = a.mode
+    state.ttsPhase = "init"
+    state.ttsUrl = a.url
+    state.ttsTitle = a.title ?: "Announcement"
+    state.ttsDur = (a.dur ?: 0)
+    state.ttsPrerollUrl = null
     if (a.volume != null) sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
-    sendMediaLoad(a.url, a.title ?: "Announcement", null, null)
-    if ((a.dur ?: 0) > 0) runIn((Math.ceil((a.dur as BigDecimal).doubleValue()) as Integer) + 3, "ttsTimeoutRestore")
+
+    String preroll = isPreRoll() ? prerollUrl() : null
+    if (preroll) {
+        // Idle Google/Nest speakers sleep the amp and only wake it once audio is actually flowing, so the
+        // first word of the announcement gets swallowed. Play a silent clip first; handleMediaStatus swaps in
+        // the real announcement the instant this silence reaches PLAYING (amp now warm) via loadTtsNow().
+        state.ttsPhase = "preroll"
+        state.ttsPrerollUrl = preroll
+        sendMediaLoad(preroll, "Announcement", null, null)
+        runIn(5, "prerollTimeout")   // watchdog: if the silence never PLAYs (device can't reach the hub), play anyway
+    } else {
+        loadTtsNow()
+    }
+}
+
+// load the actual announcement audio and arm the end-of-speech restore watchdog
+private void loadTtsNow() {
+    if (!state.ttsActive || state.ttsPhase == "tts") return   // guard the preroll PLAYING-vs-timeout race
+    state.ttsPhase = "tts"
+    state.ttsStarted = false
+    unschedule("prerollTimeout")
+    sendMediaLoad(state.ttsUrl, state.ttsTitle ?: "Announcement", null, null)
+    if ((state.ttsDur ?: 0) > 0) runIn((Math.ceil((state.ttsDur as BigDecimal).doubleValue()) as Integer) + 3, "ttsTimeoutRestore")
+}
+
+def prerollTimeout() {
+    if (state.ttsActive && state.ttsPhase == "preroll") {
+        logDebug "preroll: silence never reported PLAYING - loading announcement directly"
+        loadTtsNow()
+    }
+}
+
+// ============================================================================
+// pre-roll silence: a short silent WAV, generated once and hosted on the hub
+// ============================================================================
+// http URL for the hub-hosted silent clip, or null if we can't build/serve it (-> pre-roll skipped)
+private String prerollUrl() {
+    String ip = hubLocalIp()
+    if (!ip) { logDebug "preroll: hub IP unavailable - skipping pre-roll"; return null }
+    if (!ensureSilenceFile()) return null
+    return "http://${ip}/local/${SILENCE_FILE}"
+}
+
+private boolean ensureSilenceFile() {
+    if (silenceEnsured) return true
+    try {
+        uploadHubFile(SILENCE_FILE, buildSilenceWav())
+        silenceEnsured = true
+        logDebug "preroll: wrote ${SILENCE_FILE} (${PREROLL_MS}ms silence)"
+        return true
+    } catch (e) {
+        logWarn "preroll: could not write silence file (${e.message}) - pre-roll disabled"
+        return false
+    }
+}
+
+private String hubLocalIp() {
+    try { return location.hubs[0]?.localIP } catch (e) { return null }
+}
+
+// a minimal PCM WAV of silence (16-bit mono); samples default to zero, so we only fill the 44-byte header
+private byte[] buildSilenceWav() {
+    int sampleRate = 8000
+    int bytesPerSample = 2                          // 16-bit
+    int channels = 1
+    int numSamples = (sampleRate * PREROLL_MS).intdiv(1000)
+    int dataSize = numSamples * channels * bytesPerSample
+    byte[] out = new byte[44 + dataSize]            // trailing sample bytes stay 0 = silence
+    writeAscii(out, 0, "RIFF")
+    writeLE32(out, 4, 36 + dataSize)
+    writeAscii(out, 8, "WAVE")
+    writeAscii(out, 12, "fmt ")
+    writeLE32(out, 16, 16)                          // PCM fmt chunk size
+    writeLE16(out, 20, 1)                           // audio format = PCM
+    writeLE16(out, 22, channels)
+    writeLE32(out, 24, sampleRate)
+    writeLE32(out, 28, sampleRate * channels * bytesPerSample)  // byte rate
+    writeLE16(out, 32, channels * bytesPerSample)               // block align
+    writeLE16(out, 34, bytesPerSample * 8)                      // bits per sample
+    writeAscii(out, 36, "data")
+    writeLE32(out, 40, dataSize)
+    return out
+}
+
+private void writeAscii(byte[] b, int off, String s) {
+    byte[] a = s.getBytes("US-ASCII")
+    for (int i = 0; i < a.length; i++) b[off + i] = a[i]
+}
+private void writeLE16(byte[] b, int off, int v) {
+    b[off] = (byte) (v & 0xFF); b[off + 1] = (byte) ((v >> 8) & 0xFF)
+}
+private void writeLE32(byte[] b, int off, int v) {
+    b[off]     = (byte) (v & 0xFF);         b[off + 1] = (byte) ((v >> 8) & 0xFF)
+    b[off + 2] = (byte) ((v >> 16) & 0xFF); b[off + 3] = (byte) ((v >> 24) & 0xFF)
 }
 
 private void startMedia(Map a) {
@@ -327,7 +445,9 @@ def ttsTimeoutRestore() { finishTts() }
 private void finishTts() {
     if (!state.ttsActive) return
     state.ttsActive = false
+    state.ttsPhase = "none"
     unschedule("ttsTimeoutRestore")
+    unschedule("prerollTimeout")
     maybeIdleDisconnect()
     String mode = state.ttsMode ?: "none"
     Map snap = state.ttsRestore ?: [:]
@@ -660,6 +780,7 @@ private void handleReceiverStatus(Map p) {
         sendEventIfChanged("status", "stopped")
         clearNowPlaying()
         state.appId = null; state.transportId = null; state.sessionId = null; state.mediaSessionId = null
+        if (state.conn == "APP_CONNECTED") state.conn = "READY"   // DMR auto-exited when idle; a new announce must relaunch it
     } else {
         // prefer the media-capable app: a receiver can list a control/idle app alongside the one actually playing
         def mediaApp = apps.find { a -> (a.namespaces ?: []).any { it?.name == NS_MEDIA } }
@@ -733,11 +854,20 @@ private void handleMediaStatus(Map p) {
         sendEvent(name: "trackData", value: JsonOutput.toJson([title: title, artist: artist, album: md.albumName, image: art]))
     }
 
-    // TTS completion: only after the announcement has actually started playing, so a transient
-    // IDLE/INTERRUPTED before playback can't trigger a premature restore (the first-word/2s bug).
+    // TTS state machine:
+    //   preroll -> a silent clip is playing only to wake the amp; when it reaches PLAYING, swap in the
+    //              real announcement (loadTtsNow) so its first word isn't clipped.
+    //   tts     -> the announcement itself; restore only after it has really PLAYED, and never on a
+    //              transient IDLE/INTERRUPTED (that transient is the 2s-cutoff / first-word bug).
     if (state.ttsActive) {
-        if (ps == "PLAYING") state.ttsStarted = true
-        else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
+        String cid = media?.contentId
+        boolean isPreroll = (cid != null && cid == state.ttsPrerollUrl)
+        if (state.ttsPhase == "preroll") {
+            if (ps == "PLAYING" && isPreroll) loadTtsNow()
+        } else if (!isPreroll) {                       // ignore the interrupted silence clip's tail
+            if (ps == "PLAYING") state.ttsStarted = true
+            else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
+        }
     }
 
     // one concise line whenever the now-playing state changes; skips the frequent position-only MEDIA_STATUS updates
@@ -753,7 +883,10 @@ private void handleMediaStatus(Map p) {
 
 private void handleMediaError(Map p) {
     logWarn "media error: ${p.type} ${p}"
-    if (state.ttsActive) finishTts()
+    if (!state.ttsActive) return
+    // a failed silent lead-in must not abort the announcement - play it directly instead
+    if (state.ttsPhase == "preroll") loadTtsNow()
+    else finishTts()
 }
 
 private void handlePeerClose(String src) {
