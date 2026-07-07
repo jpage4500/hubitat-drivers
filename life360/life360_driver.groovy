@@ -27,7 +27,13 @@ import groovy.transform.Field
 @Field static final double EARTH_RADIUS_KM         = 6372.8   // mean Earth radius in km (used in haversine)
 
 metadata {
-    definition(name: "Life360+ Driver", namespace: "jpage4500", author: "Joe Page", importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy") {
+    definition(
+        name: "Life360+ Driver", 
+        namespace: "jpage4500", 
+        author: "Joe Page", 
+        importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_driver.groovy"
+    )
+    {
         capability "Actuator"
         capability "Presence Sensor"
         capability "Sensor"

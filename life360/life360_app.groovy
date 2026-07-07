@@ -48,7 +48,10 @@ definition(
     menu: "Integrations",
     singleInstance: true,
     importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/life360_app.groovy",
-    oauth: [displayName: "Life360+", displayLink: ""]
+    oauth: [
+        displayName: "Life360+"
+        displayLink: ""
+    ]
 )
 
 preferences {
