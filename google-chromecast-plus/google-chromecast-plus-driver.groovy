@@ -334,7 +334,11 @@ private void startAnnounce(Map a) {
     state.ttsTitle = a.title ?: "Announcement"
     state.ttsDur = (a.dur ?: 0)
     state.ttsPrerollUrl = null
-    if (a.volume != null) sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
+    state.ttsVolumeApplied = false
+    if (a.volume != null) {
+        sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
+        state.ttsVolumeApplied = true   // only then does finishTts have a real level to restore - see finishTts
+    }
 
     String preroll = isPreRoll() ? prerollUrl() : null
     if (preroll) {
@@ -442,7 +446,6 @@ private void startMedia(Map a) {
 private void snapshotForRestore() {
     state.ttsRestore = [
         volume       : device.currentValue("volume"),
-        muted        : (device.currentValue("mute") == "muted"),
         appId        : state.appId,
         transportId  : state.transportId,
         sessionId    : state.sessionId,
@@ -469,9 +472,11 @@ private void finishTts() {
     state.ttsRestore = [:]
     if (mode == "none") return
 
-    // restore volume/mute first so restored content isn't loud
-    if (snap.volume != null) sendSetVolume([level: ((snap.volume as Integer) / 100.0d)])
-    if (snap.muted != null)  sendSetVolume([muted: snap.muted])
+    // Restore the pre-announcement volume only if this announcement actually changed it. A no-op SET_VOLUME
+    // still makes Google/Nest devices emit their volume-change confirmation beep, so an announcement that never
+    // set a volume must send nothing here. Mute is never touched during an announcement, so it needs no restore
+    // either - both of these were the source of the end-of-speech chirps users reported.
+    if (state.ttsVolumeApplied && snap.volume != null) sendSetVolume([level: ((snap.volume as Integer) / 100.0d)])
 
     if (snap.appId == APP_DMR && snap.contentId && snap.wasPlaying) {
         // we cast this content ourselves -> we can truly resume it
