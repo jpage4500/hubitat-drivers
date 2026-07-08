@@ -11,12 +11,9 @@
  *   - CHILD  (role=child, one per Chromecast):  owns a socket, full protocol, TTS/media/transport/status.
  *
  * Fixes the built-in integration's headline bugs: the 2-second TTS cutoff (answer heartbeat PINGs
- * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (play a
- * short hub-hosted silent lead-in that wakes the speaker's amp before the announcement loads).
- *
- *  Changes:
- *  1.1.0 - pre-roll silent lead-in so the first word isn't clipped; relaunch DMR when it has auto-exited; log user commands at info level
- *  1.0.0 - initial version
+ * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (play a short
+ * hub-hosted silent lead-in that wakes the speaker's amp / warms the receiver, held briefly - longer on
+ * displays like the Nest Hub - before the announcement loads).
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -38,7 +35,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 // -- pre-roll silence (first-word-clip fix) --
 @Field static final String SILENCE_FILE = "gcplus-silence.wav"  // hub-hosted silent lead-in, written on demand
-@Field static final Integer PREROLL_MS  = 2000                  // lead-in length; only needs to outlast the amp wake-up
+@Field static final Integer PREROLL_MS  = 5000                  // silence WAV length; must exceed the max lead-in delay
+@Field static final Integer LEADIN_VIDEO_MS = 1000              // default lead-in hold for video/display devices (audio speakers need none)
 @Field static boolean silenceEnsured = false                    // JVM-wide latch: silence file already written to the hub
 
 // per-device, cross-callback state (parse/socketStatus/scheduled jobs can run on different threads)
@@ -115,6 +113,14 @@ private boolean isKeepAlive() { return settings.keepAlive != false }
 // pre-roll is a single toggle in the app (broadcast here as state.preRoll); null = never set = on
 private boolean isPreRoll()   { return state.preRoll != false }
 
+// milliseconds the silent lead-in plays before the TTS swaps in. Explicit app override (state.preRollDelayMs)
+// wins; otherwise auto by device type - displays (Nest Hub) truncate the first word without a lead-in, plain
+// speakers are woken by the silence itself and need none. Capped so the silence WAV never ends mid-lead-in.
+private Integer preRollDelayMs() {
+    if (state.preRollDelayMs != null) return Math.min(state.preRollDelayMs as Integer, PREROLL_MS - 1000)
+    return (getDataValue("deviceType") == "video") ? LEADIN_VIDEO_MS : 0
+}
+
 // ============================================================================
 // lifecycle
 // ============================================================================
@@ -178,6 +184,12 @@ def setDebug(flag) { state.debug = (flag as Boolean) }
 
 // pre-roll silence toggle: the parent broadcasts the app setting here (used by startAnnounce via isPreRoll)
 def setPreRoll(flag) { state.preRoll = (flag as Boolean) }
+
+// lead-in delay (app override, seconds; blank/null = auto by device type). See preRollDelayMs().
+def setPreRollDelay(seconds) {
+    if (seconds == null || (seconds instanceof String && seconds.trim().isEmpty())) state.remove("preRollDelayMs")
+    else state.preRollDelayMs = Math.max(0, Math.round((seconds as BigDecimal).doubleValue() * 1000) as Integer)
+}
 
 // ============================================================================
 // PUBLIC COMMANDS (per-device Chromecast control)
@@ -338,9 +350,10 @@ private void startAnnounce(Map a) {
     }
 }
 
-// load the actual announcement audio and arm the end-of-speech restore watchdog
-private void loadTtsNow() {
-    if (!state.ttsActive || state.ttsPhase == "tts") return   // guard the preroll PLAYING-vs-timeout race
+// load the actual announcement audio and arm the end-of-speech restore watchdog. Scheduled via runInMillis
+// after the lead-in, so it must be public (def) and guard against a double-fire.
+def loadTtsNow() {
+    if (!state.ttsActive || state.ttsPhase == "tts") return   // guard the preroll / lead-in vs timeout race
     state.ttsPhase = "tts"
     state.ttsStarted = false
     unschedule("prerollTimeout")
@@ -448,6 +461,7 @@ private void finishTts() {
     state.ttsPhase = "none"
     unschedule("ttsTimeoutRestore")
     unschedule("prerollTimeout")
+    unschedule("loadTtsNow")
     maybeIdleDisconnect()
     String mode = state.ttsMode ?: "none"
     Map snap = state.ttsRestore ?: [:]
@@ -855,16 +869,26 @@ private void handleMediaStatus(Map p) {
     }
 
     // TTS state machine:
-    //   preroll -> a silent clip is playing only to wake the amp; when it reaches PLAYING, swap in the
-    //              real announcement (loadTtsNow) so its first word isn't clipped.
+    //   preroll -> a silent clip is playing only to wake the amp / warm the receiver; once it reaches PLAYING,
+    //   leadin  -> hold it for preRollDelayMs (auto ~1s on displays) so the receiver is fully ready, then
+    //              swap in the real announcement (loadTtsNow) so its first word isn't clipped/truncated.
     //   tts     -> the announcement itself; restore only after it has really PLAYED, and never on a
     //              transient IDLE/INTERRUPTED (that transient is the 2s-cutoff / first-word bug).
     if (state.ttsActive) {
         String cid = media?.contentId
         boolean isPreroll = (cid != null && cid == state.ttsPrerollUrl)
         if (state.ttsPhase == "preroll") {
-            if (ps == "PLAYING" && isPreroll) loadTtsNow()
-        } else if (!isPreroll) {                       // ignore the interrupted silence clip's tail
+            // silence is now really playing (amp awake / receiver live). Hold it for the lead-in delay before
+            // swapping in the TTS - a fast display (Nest Hub) truncates the first word if we swap immediately.
+            if (ps == "PLAYING" && isPreroll) {
+                unschedule("prerollTimeout")
+                Integer d = preRollDelayMs()
+                if (d > 0) { state.ttsPhase = "leadin"; runInMillis(d, "loadTtsNow") }
+                else loadTtsNow()
+            }
+        } else if (state.ttsPhase == "leadin") {
+            // silence is playing out the lead-in; ignore its status until the timer swaps in the TTS
+        } else if (!isPreroll) {                       // "tts": ignore the interrupted silence clip's tail
             if (ps == "PLAYING") state.ttsStarted = true
             else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
         }
