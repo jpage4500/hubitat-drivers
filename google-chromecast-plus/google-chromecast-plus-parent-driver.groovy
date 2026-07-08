@@ -55,6 +55,7 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     if (deviceType) child.updateDataValue("deviceType", deviceType)
     child.setDebug(state.debug == true)
     child.setPreRoll(state.preRoll != false)
+    child.setPreRollDelay(state.preRollDelay)
     child.initialize()
     runIn(3, "recomputeSummary")
     return child
@@ -87,6 +88,12 @@ def setDebug(flag) {
 def setPreRoll(flag) {
     state.preRoll = (flag as Boolean)
     getChildDevices().each { it.setPreRoll(flag) }
+}
+
+// lead-in delay (seconds, or null = auto by device type): the app broadcasts here, we fan out to children
+def setPreRollDelay(seconds) {
+    state.preRollDelay = seconds
+    getChildDevices().each { it.setPreRollDelay(seconds) }
 }
 
 // ============================================================================
