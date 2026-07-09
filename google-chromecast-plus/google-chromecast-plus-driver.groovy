@@ -150,7 +150,7 @@ def uninstalled() {
 }
 
 def initialize() {
-    state.conn = "IDLE"
+    setConn("IDLE", "initialize")
     state.retryCount = 0
     state.pendingActions = []
     rxBuf[device.id as String] = ""
@@ -296,7 +296,7 @@ private void pump() {
             break
         case "APP_CONNECTED":
             if (!state.transportId) {          // stale APP_CONNECTED (DMR exited); relaunch before running actions
-                state.conn = "READY"
+                setConn("READY", "stale APP_CONNECTED, no transport")
                 pump()
                 return
             }
@@ -326,6 +326,7 @@ private void runAction(Map a) {
 // ============================================================================
 private void startAnnounce(Map a) {
     if (a.mode in ["restore", "resume"]) snapshotForRestore()
+    logDebug "TTS: begin (conn=${state.conn}, transport=${state.transportId ? 'set' : 'none'}, mode=${a.mode})"
     state.ttsActive = true
     state.ttsStarted = false
     state.ttsMode = a.mode
@@ -362,6 +363,7 @@ def loadTtsNow() {
     state.ttsStarted = false
     unschedule("prerollTimeout")
     sendMediaLoad(state.ttsUrl, state.ttsTitle ?: "Announcement", null, null)
+    runIn(5, "ttsStartCheck")   // warn if the speaker never reports this audio PLAYING (stale/dropped session)
     if ((state.ttsDur ?: 0) > 0) runIn((Math.ceil((state.ttsDur as BigDecimal).doubleValue()) as Integer) + 3, "ttsTimeoutRestore")
 }
 
@@ -369,6 +371,15 @@ def prerollTimeout() {
     if (state.ttsActive && state.ttsPhase == "preroll") {
         logDebug "preroll: silence never reported PLAYING - loading announcement directly"
         loadTtsNow()
+    }
+}
+
+// diagnostic watchdog: the announcement audio was sent but the speaker never reported it PLAYING. That almost
+// always means the media session went stale (the receiver silently dropped our sender while the socket still
+// looked alive) - i.e. the "won't announce until you hit Initialize" case. Surface it instead of failing silently.
+def ttsStartCheck() {
+    if (state.ttsActive && state.ttsPhase == "tts" && !state.ttsStarted) {
+        logWarn "TTS: audio sent but speaker never started (conn=${state.conn}, transport=${state.transportId ? 'set' : 'none'}) - session likely stale; hit Initialize or turn off Real-time updates for this device"
     }
 }
 
@@ -465,6 +476,7 @@ private void finishTts() {
     unschedule("ttsTimeoutRestore")
     unschedule("prerollTimeout")
     unschedule("loadTtsNow")
+    unschedule("ttsStartCheck")
     maybeIdleDisconnect()
     String mode = state.ttsMode ?: "none"
     Map snap = state.ttsRestore ?: [:]
@@ -541,7 +553,7 @@ def connect() {
     rxBuf[key] = ""
     pending.remove("${device.id}:getStatus")   // fresh socket -> clear stale watchdog bookkeeping
     missedStatus[key] = 0
-    state.conn = "CONNECTING"
+    setConn("CONNECTING", "connect")
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
     sendEventIfChanged("connectionStatus", "connecting")
     try {
@@ -551,10 +563,10 @@ def connect() {
         lastRecvConn[key] = now()     // so the periodic re-CONNECT (heartbeatTick) doesn't fire immediately
         startHeartbeat()
         sendReceiverGetStatus()
-        state.conn = "TP_CONNECTING"
+        setConn("TP_CONNECTING", "socket up, awaiting receiver status")
     } catch (e) {
         String msg = (e.message ?: "").toString()
-        state.conn = "IDLE"
+        setConn("IDLE", "connect failed")
         // an unreachable / powered-off device is expected, not an error -> mark offline, don't tight-loop
         if (msg.toLowerCase() =~ /route|unreachable|timed out|timeout|refused/) {
             markOffline(msg)
@@ -572,7 +584,7 @@ private void closeSocket() {
     rxBuf[device.id as String] = ""
     pending.remove("${device.id}:getStatus")
     missedStatus[device.id as String] = 0
-    state.conn = "IDLE"
+    setConn("IDLE", "closeSocket")
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
 }
 
@@ -589,7 +601,7 @@ private void handleSocketDown(String why) {
     unschedule("heartbeatTick")
     try { interfaces.rawSocket.close() } catch (e) { /* ignore */ }
     rxBuf[device.id as String] = ""
-    state.conn = "IDLE"
+    setConn("IDLE", "socket down")
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
     sendEventIfChanged("playbackStatus", "IDLE")
     if (isKeepAlive() || state.ttsActive) {
@@ -612,7 +624,7 @@ def reconnectAttempt() { if (state.conn == "IDLE") connect() }
 // device unreachable (powered off / off network): mark offline quietly and stop looping
 private void markOffline(String why) {
     logDebug("offline: ${getIp()} (${why})")
-    state.conn = "IDLE"
+    setConn("IDLE", "offline: ${why}")
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
     state.pendingActions = []                // drop queued work; the next scheduled poll retries
     unschedule("heartbeatTick")
@@ -721,11 +733,11 @@ private void sendCastMessage(String srcId, String dstId, String ns, String json)
 private void ensureApp() {
     if (state.appId == APP_DMR && state.transportId) {
         sendConnectionConnect(state.transportId)
-        state.conn = "APP_CONNECTED"
+        setConn("APP_CONNECTED", "DMR already running, transport reconnected")
         pump()
     } else {
         sendLaunch(APP_DMR)
-        state.conn = "APP_LAUNCHING"
+        setConn("APP_LAUNCHING", "launching DMR")
     }
 }
 
@@ -799,7 +811,7 @@ private void handleReceiverStatus(Map p) {
         sendEventIfChanged("status", "stopped")
         clearNowPlaying()
         state.appId = null; state.transportId = null; state.sessionId = null; state.mediaSessionId = null
-        if (state.conn == "APP_CONNECTED") state.conn = "READY"   // DMR auto-exited when idle; a new announce must relaunch it
+        if (state.conn == "APP_CONNECTED") setConn("READY", "DMR exited (receiver idle)")   // a new announce must relaunch it
     } else {
         // prefer the media-capable app: a receiver can list a control/idle app alongside the one actually playing
         def mediaApp = apps.find { a -> (a.namespaces ?: []).any { it?.name == NS_MEDIA } }
@@ -823,7 +835,7 @@ private void handleReceiverStatus(Map p) {
     }
     // state transitions
     if (state.conn == "TP_CONNECTING") {
-        state.conn = "READY"
+        setConn("READY", "receiver status received")
         state.retryCount = 0
         sendEventIfChanged("connectionStatus", "online")
         pump()
@@ -835,7 +847,7 @@ private void handleReceiverStatus(Map p) {
             state.sessionId = ourApp.sessionId
             state.appId = ourApp.appId
             sendConnectionConnect(ourApp.transportId)
-            state.conn = "APP_CONNECTED"
+            setConn("APP_CONNECTED", "DMR launched")
             pump()
         }
     }
@@ -923,7 +935,7 @@ private void handlePeerClose(String src) {
     if (src == state.transportId) {
         // app-level virtual connection dropped
         state.transportId = null; state.mediaSessionId = null
-        if (state.conn == "APP_CONNECTED") state.conn = "READY"
+        if (state.conn == "APP_CONNECTED") setConn("READY", "peer closed transport")
         sendReceiverGetStatus()
     } else if (src == RECV) {
         handleSocketDown("peer-close")
@@ -1060,6 +1072,15 @@ private byte[] concatBytes(List<byte[]> arrays) {
 // util
 // ============================================================================
 private boolean isConnectedState() { return state.conn in ["TP_CONNECTING", "READY", "APP_LAUNCHING", "APP_CONNECTED"] }
+
+// single writer for the connection state machine: logs every transition (debug) so a device wedged in a
+// falsely-"connected" state (e.g. stuck APP_CONNECTED while announcements silently fail) is visible in the
+// logs. The optional reason gives context for the move.
+private void setConn(String newState, String why = null) {
+    String old = state.conn ?: "IDLE"
+    state.conn = newState
+    if (old != newState) logDebug("conn: ${old} -> ${newState}${why ? " (${why})" : ""}")
+}
 
 private String mapPlayerState(String ps) {
     switch (ps) {
