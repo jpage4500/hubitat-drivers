@@ -24,6 +24,7 @@ definition(
     description: 'Discover and control Google Cast / Chromecast devices (status, media, TTS)',
     importUrl: 'https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-app.groovy',
     category: 'Convenience',
+    menu: "Integrations",
     oauth: false,
     iconUrl: '',
     iconX2Url: '',
