@@ -74,7 +74,7 @@ metadata {
         command "stopApp"
 
         // -- now-playing / status (child mode) --
-        attribute "connectionStatus", "string"   // idle / connecting / connected / disconnected
+        attribute "connectionStatus", "string"   // sticky reachability: online / offline (idle until first connect; disconnected = manual)
         attribute "currentApp", "string"          // e.g. "Netflix", "Default Media Receiver"
         attribute "appStatusText", "string"        // free-text now-playing hint from the app
         attribute "playbackStatus", "string"       // raw Cast playerState: PLAYING/PAUSED/BUFFERING/IDLE
@@ -555,7 +555,9 @@ def connect() {
     missedStatus[key] = 0
     setConn("CONNECTING", "connect")
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
-    sendEventIfChanged("connectionStatus", "connecting")
+    // deliberately NOT publishing a transient "connecting" here: every poll/reconnect would flip the attribute
+    // (online -> connecting -> online) and reset "online since". state.conn (=CONNECTING) tracks it internally;
+    // connectionStatus only moves between the sticky outcomes online (receiver status) and offline (unreachable).
     try {
         interfaces.rawSocket.connect(getIp(), getPort(), byteInterface: true, secureSocket: true, ignoreSSLIssues: true)
         lastRx[key] = now()

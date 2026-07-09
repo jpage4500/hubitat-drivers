@@ -61,7 +61,12 @@ def updated() {
         parent.setPreRollDelay(settings.preRollDelay)   // null/blank = auto (by device type)
     }
     // debug logging auto-disables 24h after being enabled so verbose logs are never left on
-    if (settings.debugOutput == true) runIn(86400, 'debugOff')
+    if (settings.debugOutput == true) {
+        runIn(86400, 'debugOff')
+        state.debugDisableMs = now() + 86400000     // when auto-off fires; surfaced on the main page
+    } else {
+        state.remove('debugDisableMs')
+    }
     schedulePolling()
     // give the hub a few seconds to populate its mDNS cache, then keep it fresh
     runIn(6, 'scanMdns')
@@ -82,6 +87,7 @@ def debugOff() {
     logInfo('auto-disabling debug logging (24h elapsed)')
     app.updateSetting('debugOutput', [value: 'false', type: 'bool'])
     getParentDevice()?.setDebug(false)
+    state.remove('debugDisableMs')
 }
 
 // throttled so rapid page re-renders don't spam the hub; force=true always re-registers
@@ -151,6 +157,9 @@ def mainPage() {
             input name: 'debugOutput', type: 'bool', title: 'Enable debug logging (auto-off after 24h)', defaultValue: false, submitOnChange: true
         }
         section {
+            if (settings.debugOutput == true && state.debugDisableMs) {
+                paragraph "<span style='color:red'>Debug logging will be disabled at ${clockTime(new Date(state.debugDisableMs as Long))}</span>"
+            }
             paragraph "<small>Selected/added devices become child devices under the '${DRIVER}' parent device. Click <b>Done</b> to apply.</small>"
         }
     }
@@ -296,6 +305,13 @@ private String deviceRow(Map d, child) {
             if (t) extra += " &middot; ${t}" else if (a && a != 'none') extra += " &middot; ${a}"
         } else {
             extra = cs
+            // "since" only reads well for the sticky states, so append it just for online/offline. the driver
+            // keeps connectionStatus on those two outcomes (no transient "connecting"), so the timestamp of the
+            // current event is a stable "online since 12:42 AM" that doesn't reset on every poll/reconnect
+            if (cs in ['online', 'offline']) {
+                Date since = child.currentState('connectionStatus')?.date
+                if (since) extra += " since ${clockTime(since)}"
+            }
         }
     }
     return s + "<br><span style='font-size:smaller;color:#666'>${extra}</span>"
@@ -344,6 +360,9 @@ private String header(String text) {
 }
 
 private boolean isEmpty(def v) { return v == null || (v instanceof String && v.trim().isEmpty()) }
+
+// short local clock time, e.g. "12:42 AM" (hub-local via the JVM default timezone, as in the other drivers)
+private String clockTime(Date d) { d ? d.format('M/d h:mm a') : '' }
 
 // same "GC+ [App] " prefix as the driver, so the Logs filter "GC+" shows app + all devices together
 private void logDebug(msg) { if (settings.debugOutput) logAppAt('debug', msg) }
