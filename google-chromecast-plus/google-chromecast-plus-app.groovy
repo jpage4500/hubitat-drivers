@@ -305,10 +305,13 @@ private String deviceRow(Map d, child) {
             if (t) extra += " &middot; ${t}" else if (a && a != 'none') extra += " &middot; ${a}"
         } else {
             extra = cs
-            // when did it enter this connection state? sendEventIfChanged only fires on change, so the
-            // current event's timestamp is the "since" time (e.g. "online since 12:42 AM")
-            Date since = child.currentState('connectionStatus')?.date
-            if (since) extra += " since ${clockTime(since)}"
+            // "since" only reads well for the sticky states, so append it just for online/offline. the driver
+            // keeps connectionStatus on those two outcomes (no transient "connecting"), so the timestamp of the
+            // current event is a stable "online since 12:42 AM" that doesn't reset on every poll/reconnect
+            if (cs in ['online', 'offline']) {
+                Date since = child.currentState('connectionStatus')?.date
+                if (since) extra += " since ${clockTime(since)}"
+            }
         }
     }
     return s + "<br><span style='font-size:smaller;color:#666'>${extra}</span>"
@@ -359,7 +362,7 @@ private String header(String text) {
 private boolean isEmpty(def v) { return v == null || (v instanceof String && v.trim().isEmpty()) }
 
 // short local clock time, e.g. "12:42 AM" (hub-local via the JVM default timezone, as in the other drivers)
-private String clockTime(Date d) { d ? d.format('h:mm a') : '' }
+private String clockTime(Date d) { d ? d.format('M/d h:mm a') : '' }
 
 // same "GC+ [App] " prefix as the driver, so the Logs filter "GC+" shows app + all devices together
 private void logDebug(msg) { if (settings.debugOutput) logAppAt('debug', msg) }

@@ -42,13 +42,16 @@ def initialize()  { recomputeSummary() }
 def createChild(String dni, String label, String ip, String port, String uuid = null, String deviceType = null) {
     if (isEmpty(dni)) { logError "createChild: missing dni"; return }
     def child = getChildDevice(dni)
+    boolean isNew = false
     if (!child) {
         child = addChildDevice("jpage4500", CHILD_DRIVER, dni,
             [label: label ?: "Chromecast", isComponent: true, name: CHILD_DRIVER])
+        isNew = true
         logInfo "createChild: created '${label}' (${dni})"
     } else {
         child.setLabel(label ?: child.getLabel())
     }
+    String oldIp = child.getDataValue("ip")
     child.updateDataValue("ip", ip)
     child.updateDataValue("port", port ?: "8009")
     if (uuid) child.updateDataValue("uuid", uuid)
@@ -56,7 +59,11 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     child.setDebug(state.debug == true)
     child.setPreRoll(state.preRoll != false)
     child.setPreRollDelay(state.preRollDelay)
-    child.initialize()
+    // only (re)initialize on first create or when the target IP changed. re-initializing a healthy child tears
+    // down its live connection and resets "online since"; the app calls createChild for every device on each
+    // Done, so the old unconditional init was a major source of connection churn. (reboots re-init via the
+    // Initialize capability, so existing children still recover without this.)
+    if (isNew || (ip && ip != oldIp)) child.initialize()
     runIn(3, "recomputeSummary")
     return child
 }
