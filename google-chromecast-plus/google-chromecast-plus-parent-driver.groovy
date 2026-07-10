@@ -57,8 +57,6 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     if (uuid) child.updateDataValue("uuid", uuid)
     if (deviceType) child.updateDataValue("deviceType", deviceType)
     child.setDebug(state.debug == true)
-    child.setPreRoll(state.preRoll != false)
-    child.setPreRollDelay(state.preRollDelay)
     // only (re)initialize on first create or when the target IP changed. re-initializing a healthy child tears
     // down its live connection and resets "online since"; the app calls createChild for every device on each
     // Done, so the old unconditional init was a major source of connection churn. (reboots re-init via the
@@ -91,17 +89,6 @@ def setDebug(flag) {
     getChildDevices().each { it.setDebug(flag) }
 }
 
-// pre-roll silence toggle: the app broadcasts here, we fan out to children
-def setPreRoll(flag) {
-    state.preRoll = (flag as Boolean)
-    getChildDevices().each { it.setPreRoll(flag) }
-}
-
-// lead-in delay (seconds, or null = auto by device type): the app broadcasts here, we fan out to children
-def setPreRollDelay(seconds) {
-    state.preRollDelay = seconds
-    getChildDevices().each { it.setPreRollDelay(seconds) }
-}
 
 // ============================================================================
 // aggregate status

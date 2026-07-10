@@ -57,8 +57,6 @@ def updated() {
     if (parent) {
         parent.setRefreshInterval((settings.refreshInterval ?: 60) as Integer)
         parent.setDebug(settings.debugOutput == true)   // single toggle -> broadcast to parent + all children
-        parent.setPreRoll(settings.preRoll != false)    // default ON (null = never saved)
-        parent.setPreRollDelay(settings.preRollDelay)   // null/blank = auto (by device type)
     }
     // debug logging auto-disables 24h after being enabled so verbose logs are never left on
     if (settings.debugOutput == true) {
@@ -152,9 +150,8 @@ def mainPage() {
         }
         section(header('Settings')) {
             input name: 'refreshInterval', type: 'number', title: 'Status refresh interval (seconds)', defaultValue: 60, range: '10..3600', submitOnChange: true
-            input name: 'preRoll', type: 'bool', title: 'Pre-roll silence (wake the speaker so the start of announcements is not clipped)', defaultValue: true, submitOnChange: true
-            input name: 'preRollDelay', type: 'decimal', title: 'Lead-in delay in seconds before speaking &mdash; blank = automatic (displays like Nest Hub get ~1s, speakers 0). Increase if the start is still cut off.', required: false, range: '0..4', submitOnChange: true
             input name: 'debugOutput', type: 'bool', title: 'Enable debug logging (auto-off after 24h)', defaultValue: false, submitOnChange: true
+            paragraph "<small>Announcement volume and lead-in delay are set per device &mdash; open a Chromecast device to change them.</small>"
         }
         section {
             if (settings.debugOutput == true && state.debugDisableMs) {
