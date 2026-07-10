@@ -22,6 +22,7 @@ import groovy.json.JsonSlurper
 import groovy.transform.Field
 import hubitat.helper.HexUtils
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 // -- CASTV2 constants --
 @Field static final String NS_CONNECTION = "urn:x-cast:com.google.cast.tp.connection"
@@ -50,6 +51,7 @@ import java.util.concurrent.ConcurrentHashMap
 // Same reason as lastRx: these are touched by both parse() (reset on RECEIVER_STATUS) and scheduled jobs
 // (increment on poll / re-CONNECT on heartbeat), so they can't live in state without racing.
 @Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
+@Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -146,6 +148,7 @@ def uninstalled() {
     missedStatus.remove(key)
     lastRecvConn.remove(key)
     lastMedia.remove(key)
+    reqId.remove(key)
     pending.remove("${device.id}:getStatus")
 }
 
@@ -670,7 +673,13 @@ def heartbeatTick() {
 // ============================================================================
 // protocol send helpers
 // ============================================================================
-private int nextRequestId() { int n = ((state.requestId ?: 0) as Integer) + 1; state.requestId = n; return n }
+// monotonic, thread-safe request id. parse() (socket thread) and the scheduled poll both allocate ids, so the
+// counter must be atomic - a read-modify-write on state.requestId raced and handed two messages the same id.
+private int nextRequestId() {
+    AtomicInteger a = (AtomicInteger) reqId[device.id as String]
+    if (a == null) { reqId.putIfAbsent(device.id as String, new AtomicInteger(0)); a = (AtomicInteger) reqId[device.id as String] }
+    return a.incrementAndGet()
+}
 
 private void sendConnectionConnect(String dst) { sendCastMessage(SRC, dst, NS_CONNECTION, '{"type":"CONNECT"}') }
 private void sendConnectionClose(String dst)   { sendCastMessage(SRC, dst, NS_CONNECTION, '{"type":"CLOSE"}') }
