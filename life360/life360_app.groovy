@@ -1195,8 +1195,10 @@ def handleCirclesPollResponse(response, data) {
 
     // heartbeat — fires on EVERY poll. Shows the count, any count change, and per-member
     // connection status (issues.disconnected) so the log proves polling is alive and healthy.
+    // Use state.members.size() for the display — the /circles API no longer returns memberCount.
+    int displayCount = state.members?.size() ?: 0
     String delta = countChanged ? " (${prevCount} → ${newCount})" : ""
-    log.info("heartbeat - ${circleName}: memberCount:${newCount}${delta} ${memberStatusSummary()}")
+    log.info("heartbeat - ${circleName}: memberCount:${displayCount}${delta} ${memberStatusSummary()}")
 }
 
 /**
