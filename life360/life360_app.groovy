@@ -166,6 +166,8 @@ def mainPage() {
             input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only — don't share resulting logs.")
             input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
             input(name: "logShowMapsLink", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
+            input(name: "logDrivingTransitions", type: "bool", defaultValue: true, submitOnChange: true, title: "Driving Logging")
+            paragraph "<small style='color:#666'>On: Each poll of a member in motion is logged.<br>Off: Only when a member starts or stops moving is logged.</small>"
             input(name: "logUnits", type: "enum", defaultValue: "life360", title: "Units (all members)",
                 description: "Units for speed and distance in logs and device attributes. Overrides each member device's own setting when set to anything other than 'Follow Life360 app'.",
                 options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
@@ -577,6 +579,7 @@ boolean fetchLocations() {
     ctx.showMapsLink = (settings.logShowMapsLink != false)
     ctx.useMiles     = getUnitIsMiles()   // null = not yet known; driver falls back to its local pref
     ctx.logRawPayload = getLogRawPayload()
+    ctx.logDrivingTransitions = getLogDrivingTransitions()
 
     settings.users.each { memberId ->
         fetchMemberLocation(memberId, ctx)
@@ -906,6 +909,10 @@ boolean getLogRawPayload() {
     return settings.logRawPayload == true
 }
 
+boolean getLogDrivingTransitions() {
+    return settings.logDrivingTransitions != false
+}
+
 private String memberDisplayName(String memberId) {
     if (!showNamesInLogs()) return memberId
     return state.members?.find { it.id == memberId }?.firstName ?: memberId
@@ -1065,6 +1072,7 @@ def fastPollMember(data) {
     ctx.showMapsLink = (settings.logShowMapsLink != false)
     ctx.useMiles     = getUnitIsMiles()
     ctx.logRawPayload = getLogRawPayload()
+    ctx.logDrivingTransitions = getLogDrivingTransitions()
     fetchMemberLocation(memberId, ctx)
 }
 
