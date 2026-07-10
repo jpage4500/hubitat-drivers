@@ -94,10 +94,10 @@ metadata {
     }
 
     preferences {
-        input name: "keepAlive", type: "bool", title: "Real-time updates (keep a persistent connection). Turn OFF to poll on-demand (quieter, higher latency).", defaultValue: true
-        input name: "ttsVolume", type: "number", title: "Announcement volume (0-100, blank = leave current)", description: "Sets the volume for TTS announcements. NOTE: this sets the volumne on every TTS request, even a simple Play Test. For more fine-grained control, leave this blank and call the Play Text command with volume argument", required: false, range: "0..100"
-        input name: "leadInDelay", type: "number", title: "Lead-in delay (seconds, 0 = none)", description: "Prepends a silent pause to TTS announcements to prevent clipping on slow-to-wake devices.", defaultValue: 0, range: "0..5"
-        input name: "stopAfterTts", type: "bool", title: "Stop after TTS is complete", description: "When an announcement ends, close the cast session so the device returns to its ambient state (e.g. a Nest Hub goes back to its photo frame instead of the blank cast screen). Skipped when the announcement restores/resumes content that was playing before it, so your music isn't cut off. Off keeps the receiver warm; on relaunches it cold next time, which can bring back the start-up chime and first-word clipping.", defaultValue: false
+        input name: "keepAlive", type: "bool", title: "Real-time updates", description: "Keeps a persistent connection to the device. Turn OFF to poll on-demand (quieter, higher latency)", defaultValue: true
+        input name: "ttsVolume", type: "number", title: "Announcement volume (0-100, blank = leave current)", description: "NOTE: this sets the volumne on every TTS request. For more fine-grained control, leave this blank and call the Play Text with volume argument command instead", required: false, range: "0..100"
+        input name: "leadInDelay", type: "number", title: "Lead-in delay (seconds, 0 = none)", description: "Prepends a silent pause to TTS announcements to prevent clipping on slow-to-wake devices", defaultValue: 0, range: "0..5"
+        input name: "stopAfterTts", type: "bool", title: "Stop after TTS is complete", description: "When an announcement ends, close the cast session so the device returns to its default state", defaultValue: false
         // debug logging is a single toggle in the app (broadcast as state.debug); no per-device switch
     }
 }

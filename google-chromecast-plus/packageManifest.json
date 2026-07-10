@@ -1,11 +1,11 @@
 {
   "packageName": "Google Chromecast+",
   "author": "Joe Page",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2026-07-05",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "- minor app display changes",
+  "releaseNotes": "- refactor how silence is handled - now per-device setting\n- added stop after TTS is complete setting to driver",
   "apps": [
     {
       "id": "8f2ca643-8da9-4001-bea6-e0310ab85f8a",
