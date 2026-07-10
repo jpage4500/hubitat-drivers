@@ -95,8 +95,9 @@ metadata {
 
     preferences {
         input name: "keepAlive", type: "bool", title: "Real-time updates (keep a persistent connection). Turn OFF to poll on-demand (quieter, higher latency).", defaultValue: true
-        input name: "ttsVolume", type: "number", title: "Announcement volume (0-100, blank = leave current)", required: false, range: "0..100"
-        input name: "leadInDelay", type: "number", title: "Lead-in delay (seconds, 0 = none). Prepends silence before speech so a slow-to-wake device (e.g. Nest Hub) doesn't clip the first words. Needs a TTS engine that honors SSML.", defaultValue: 0, range: "0..5"
+        input name: "ttsVolume", type: "number", title: "Announcement volume (0-100, blank = leave current)", description: "Sets the volume for TTS announcements. NOTE: this sets the volumne on every TTS request, even a simple Play Test. For more fine-grained control, leave this blank and call the Play Text command with volume argument", required: false, range: "0..100"
+        input name: "leadInDelay", type: "number", title: "Lead-in delay (seconds, 0 = none)", description: "Prepends a silent pause to TTS announcements to prevent clipping on slow-to-wake devices.", defaultValue: 0, range: "0..5"
+        input name: "stopAfterTts", type: "bool", title: "Stop after TTS is complete", description: "When an announcement ends, close the cast session so the device returns to its ambient state (e.g. a Nest Hub goes back to its photo frame instead of the blank cast screen). Skipped when the announcement restores/resumes content that was playing before it, so your music isn't cut off. Off keeps the receiver warm; on relaunches it cold next time, which can bring back the start-up chime and first-word clipping.", defaultValue: false
         // debug logging is a single toggle in the app (broadcast as state.debug); no per-device switch
     }
 }
@@ -392,26 +393,37 @@ private void finishTts() {
     Map snap = state.ttsRestore ?: [:]
     state.ttsMode = "none"
     state.ttsRestore = [:]
-    if (mode == "none") return
 
-    // Restore the pre-announcement volume only if this announcement actually changed it. A no-op SET_VOLUME
-    // still makes Google/Nest devices emit their volume-change confirmation beep, so an announcement that never
-    // set a volume must send nothing here. Mute is never touched during an announcement, so it needs no restore
-    // either - both of these were the source of the end-of-speech chirps users reported.
-    if (state.ttsVolumeApplied && snap.volume != null) sendSetVolume([level: ((snap.volume as Integer) / 100.0d)])
+    boolean restored = false
+    if (mode != "none") {
+        // Restore the pre-announcement volume only if this announcement actually changed it. A no-op SET_VOLUME
+        // still makes Google/Nest devices emit their volume-change confirmation beep, so an announcement that never
+        // set a volume must send nothing here. Mute is never touched during an announcement, so it needs no restore
+        // either - both of these were the source of the end-of-speech chirps users reported.
+        if (state.ttsVolumeApplied && snap.volume != null) sendSetVolume([level: ((snap.volume as Integer) / 100.0d)])
 
-    if (snap.appId == APP_DMR && snap.contentId && snap.wasPlaying) {
-        // we cast this content ourselves -> we can truly resume it
-        sendMediaLoad(snap.contentId, null, null, null)
-        if (mode == "resume" && (snap.position ?: 0) > 0) {
-            state.resumeSeekTo = snap.position
-            runIn(3, "resumeSeek")
+        if (snap.appId == APP_DMR && snap.contentId && snap.wasPlaying) {
+            // we cast this content ourselves -> we can truly resume it
+            sendMediaLoad(snap.contentId, null, null, null)
+            restored = true
+            if (mode == "resume" && (snap.position ?: 0) > 0) {
+                state.resumeSeekTo = snap.position
+                runIn(3, "resumeSeek")
+            }
+        } else if (snap.appId && snap.appId != APP_DMR) {
+            // third-party app (Spotify/YouTube/etc.): a sender cannot resume its exact content
+            logInfo "finishTts: prior app '${snap.appId}' was third-party; exact resume not supported (relaunching)"
+            sendLaunch(snap.appId)
+            restored = true
         }
-    } else if (snap.appId && snap.appId != APP_DMR) {
-        // third-party app (Spotify/YouTube/etc.): a sender cannot resume its exact content
-        logInfo "finishTts: prior app '${snap.appId}' was third-party; exact resume not supported (relaunching)"
-        sendLaunch(snap.appId)
     }
+
+    // "Stop after TTS is complete" (opt-in, per device): when the announcement didn't resume/relaunch anything
+    // (the device was idle before it), tear down the Default Media Receiver so the device drops back to its
+    // ambient state - e.g. a Nest Hub returns to its photo frame instead of the blank cast screen. Skipped when
+    // we just restored content (stopping would cut it off). Trade-off: the next announcement relaunches the DMR
+    // cold, which can bring back the session-start chime and first-word clipping - hence default off.
+    if (settings.stopAfterTts && !restored && state.sessionId) sendReceiverStop(state.sessionId)
 }
 
 def resumeSeek() {
