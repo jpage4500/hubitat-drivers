@@ -333,9 +333,10 @@ private String cleanId(String s) { return (s ?: '').replaceAll('[^A-Za-z0-9]', '
 private String urlEnc(String s) { return java.net.URLEncoder.encode(s ?: '', 'UTF-8') }
 
 // hide any credentials in a source url before showing it in the UI: rtsp://user:pass@host -> rtsp://***@host
+// greedy up to the LAST @ before the path, so an email-as-username (user@gmail.com:pass@host) is fully masked, password and all
 private String maskUrl(String url) {
     if (!url) return url
-    return url.replaceAll(/(?<=:\/\/)[^@\/]+@/, '***@')
+    return url.replaceAll(/(?<=:\/\/)[^\/]+@/, '***@')
 }
 
 private boolean isEmpty(def v) { return v == null || (v instanceof String && v.trim().isEmpty()) }

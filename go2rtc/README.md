@@ -36,6 +36,8 @@ Install via Hubitat Package Manager (HPM) — search for **go2rtc**. It installs
 If your go2rtc server requires authentication, expand **Advanced** and enter the username / password (also used
 to build the RTSP URL). The RTSP port defaults to `8554` and can be changed there too.
 
+![image|334x500, 50%](app-ui.png)
+
 ----
 
 ## How it works
