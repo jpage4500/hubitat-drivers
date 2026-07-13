@@ -1,0 +1,36 @@
+{
+  "packageName": "go2rtc",
+  "author": "Joe Page",
+  "version": "1.0.0",
+  "minimumHEVersion": "2.3.4",
+  "dateReleased": "2026-07-13",
+  "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
+  "releaseNotes": "Initial release - turn go2rtc camera streams into Hubitat devices (still image + RTSP)",
+  "apps": [
+    {
+      "id": "f0f6fdb2-08fb-4078-9abb-58fa6278df15",
+      "name": "go2rtc",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-app.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": false
+    }
+  ],
+  "drivers": [
+    {
+      "id": "6813cc83-9ec9-49c7-90df-d5c49d3e1fd2",
+      "name": "go2rtc Parent",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-parent-driver.groovy",
+      "required": true
+    },
+    {
+      "id": "d379e742-48a1-44fc-a59d-29377cc25e25",
+      "name": "go2rtc Camera",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-driver.groovy",
+      "required": true
+    }
+  ]
+}

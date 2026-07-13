@@ -2,11 +2,12 @@
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** Google Chromecast+ Parent **
  *
- * Top-level parent device for the Google Chromecast+ app. This is a lean read-only status tile:
+ * Top-level parent device for the Google Chromecast+ app. This is a lean status tile:
  * it aggregates its child Chromecast devices (deviceCount / playingCount / summary) and provides the
  * management hooks the app calls (create/delete children, broadcast the refresh interval + debug flag).
- * It intentionally has NO user-facing capabilities/commands - each Chromecast lives in its own child
- * device (driver "Google Chromecast+").
+ * The one user-facing feature is broadcast/speak: a single announcement fanned out to every child
+ * Chromecast at once. Individual Chromecast control still lives in each child device (driver
+ * "Google Chromecast+").
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -21,10 +22,21 @@ metadata {
         author: "Joe Page",
         importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-parent-driver.groovy"
     ) {
-        // read-only aggregate of the child Chromecast devices - no user commands
+        // "speak to all": lets the parent be picked as a single Speak/Notification target that
+        // fans the announcement out to every child Chromecast at once
+        capability "SpeechSynthesis"
+
+        // read-only aggregate of the child Chromecast devices
         attribute "deviceCount", "number"
         attribute "playingCount", "number"
         attribute "summary", "string"
+
+        // broadcast a single announcement to every child at once (explicit volume vs. the
+        // capability's bare speak(text)); volume blank = each device keeps its own setting
+        command "broadcast", [
+            [name: "Message*", type: "STRING", description: "text to speak on every Chromecast"],
+            [name: "Volume", type: "NUMBER", description: "0-100, blank = leave each device's current volume"]
+        ]
     }
 }
 
@@ -87,6 +99,29 @@ def setRefreshInterval(seconds) {
 def setDebug(flag) {
     state.debug = (flag as Boolean)
     getChildDevices().each { it.setDebug(flag) }
+}
+
+
+// ============================================================================
+// broadcast (fan one announcement out to every child at once)
+// ============================================================================
+// SpeechSynthesis capability - each child's own speak() handles TTS, per-device volume & lead-in,
+// and restores whatever it was playing afterward. speak() returns quickly (the child defers the
+// blocking TLS connect), so looping over children here doesn't stall.
+def speak(text)                { broadcast(text, null) }
+def speak(text, volume)        { broadcast(text, volume) }
+def speak(text, volume, voice) { broadcast(text, volume, voice) }
+
+// custom command: play <text> on every child Chromecast at once
+def broadcast(text, volume = null, voice = null) {
+    if (isEmpty(text)) { logWarn "broadcast: empty message, ignoring"; return }
+    def kids = getChildDevices()
+    logInfo "broadcast: '${text}'${volume != null ? " @${volume}" : ""} -> ${kids.size()} device(s)"
+    kids.each { child ->
+        if (voice != null)       child.speak(text, volume, voice)
+        else if (volume != null) child.speak(text, volume)
+        else                     child.speak(text)
+    }
 }
 
 
