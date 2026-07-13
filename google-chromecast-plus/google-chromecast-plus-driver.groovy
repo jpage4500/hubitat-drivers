@@ -156,8 +156,14 @@ def initialize() {
     setConn("IDLE", "initialize")
     state.retryCount = 0
     state.pendingActions = []
+    state.ttsActive = false                           // clear any TTS flags stuck on from a dropped session
     rxBuf[device.id as String] = ""
     sendEventIfChanged("connectionStatus", "idle")
+    // markOffline leaves playbackStatus=OFFLINE / status=stopped; a manual Initialize is a full reset, so clear the
+    // stale reachability read too - otherwise the device reads connectionStatus=idle but playbackStatus=OFFLINE and
+    // looks like Initialize only half-worked. The next receiver status refreshes these to the device's real values.
+    sendEventIfChanged("playbackStatus", "IDLE")
+    sendEventIfChanged("status", "stopped")
     String dt = getDataValue("deviceType")            // set by the app from mDNS; publish so rules/dashboards see it
     if (dt) sendEventIfChanged("deviceType", dt)
     if (isKeepAlive() && !isEmpty(getIp())) runIn(2, "connect")
@@ -167,7 +173,12 @@ def refresh() {
     if (isConnectedState()) {
         sendReceiverGetStatus()              // the RECEIVER_STATUS response drives the media-status query (handleReceiverStatus)
     } else if (device.currentValue("connectionStatus") != "offline") {
-        connect()                            // (re)connect + GET_STATUS; on-demand devices idle-disconnect after
+        // Defer, don't call connect() inline: a TLS connect to an unreachable-but-not-yet-offline device blocks the
+        // caller for the full OS TCP connect timeout (~130s - a SYN-dropping host; rawSocket has no connect-timeout
+        // option). refresh() runs on the app's single poll thread (pollDevices calls each child serially), so an
+        // inline block stalls the whole poll and every device behind it. Hand it to a scheduler thread instead;
+        // status still arrives asynchronously via parse(), exactly as before.
+        runInMillis(100, "connect")          // (re)connect + GET_STATUS; on-demand devices idle-disconnect after
     }
     // known-offline devices are skipped here; markOffline schedules a slow retry
 }
@@ -282,7 +293,11 @@ private void pump() {
     def acts = state.pendingActions ?: []
     switch (state.conn ?: "IDLE") {
         case "IDLE":
-            if (acts) connect()
+            // defer connect (see refresh): a blocked TLS connect must not hang the command thread that enqueued this
+            // (playText/speak/setVolume ran for ~130s on unreachable devices). The action waits here in pendingActions
+            // and drains when the socket lands - pump() re-runs on the connection transition; markOffline drops the
+            // queue if the device is unreachable. connect()'s own CONNECTING guard de-dupes overlapping schedules.
+            if (acts) runInMillis(100, "connect")
             break
         case "READY":
             def remaining = []
@@ -513,15 +528,32 @@ private void closeSocket() {
 }
 
 def socketStatus(String message) {
-    logDebug("socketStatus: ${message}")
-    String m = message?.toLowerCase() ?: ""
-    if (m.contains("error") || m.contains("closed") || m.contains("failure")) {
-        handleSocketDown("socketStatus:${message}")
+    try {
+        logDebug("socketStatus: ${message}")
+        String m = message?.toLowerCase() ?: ""
+        if (m.contains("error") || m.contains("closed") || m.contains("failure")) {
+            handleSocketDown("socketStatus:${message}")
+        }
+    } catch (e) {
+        // A dying socket makes the platform interrupt the blocked I/O thread; the resulting
+        // RuntimeException(InterruptedException) can surface here as an uncaught ERROR even though the
+        // teardown/reconnect above already ran. It's benign teardown noise - downgrade to debug so it stops
+        // looking like a fault. Anything else is a genuine problem and stays at error.
+        if (isInterrupt(e)) logDebug("socketStatus: interrupted during teardown (expected) - ${e.message}")
+        else logError("socketStatus: ${e.message}")
     }
 }
 
+// true for an InterruptedException or a RuntimeException wrapping one (getClass() is sandbox-blocked, so
+// match via instanceof + cause + message). Used to keep expected socket-teardown interrupts out of ERROR.
+private boolean isInterrupt(e) {
+    if (e instanceof InterruptedException) return true
+    if (e?.cause instanceof InterruptedException) return true
+    return (e?.message ?: "").toLowerCase().contains("interrupt")
+}
+
 private void handleSocketDown(String why) {
-    logWarn "socket down (${why})"
+    logDebug "socket down (${why})"        // routine, self-healing (scheduleReconnect/next poll) -> debug, not warn
     unschedule("heartbeatTick")
     try { interfaces.rawSocket.close() } catch (e) { /* ignore */ }
     rxBuf[device.id as String] = ""
@@ -573,7 +605,7 @@ def heartbeatTick() {
     // dead-connection detection: >2 missed ping cycles
     Long last = lastRx[key] as Long
     if (last && (now() - last) > 35000) {
-        logWarn "heartbeat: no data for >35s - reconnecting"
+        logDebug "heartbeat: no data for >35s - reconnecting"   // watchdog self-heals -> debug, not warn
         handleSocketDown("heartbeat-timeout")
         return
     }
@@ -616,7 +648,7 @@ private void sendReceiverGetStatus() {
         int missed = ((missedStatus[key] ?: 0) as Integer) + 1
         missedStatus[key] = missed
         if (missed >= MAX_MISSED_STATUS) {
-            logWarn "receiver GET_STATUS unanswered x${missed} - status channel stale, forcing reconnect"
+            logDebug "receiver GET_STATUS unanswered x${missed} - status channel stale, forcing reconnect"   // self-heals -> debug
             missedStatus[key] = 0
             pending.remove(pk)
             handleSocketDown("status-timeout")
@@ -655,7 +687,7 @@ private void sendCastMessage(String srcId, String dstId, String ns, String json)
         if (ns != NS_HEARTBEAT) logTrace("TX ${ns} -> ${dstId}: ${json}")
         interfaces.rawSocket.sendMessage(hex)
     } catch (e) {
-        logError "sendCastMessage failed (${ns}): ${e.message}"
+        logDebug "sendCastMessage failed (${ns}): ${e.message}"   // write to a dropped socket; handleSocketDown reconnects -> debug
         handleSocketDown("send-exception")
     }
 }

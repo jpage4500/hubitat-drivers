@@ -69,6 +69,20 @@ the SSML break. The app-level "Pre-roll silence" toggle and "Lead-in delay" sett
   force-sets `state.conn = IDLE` + fresh handshake. The `ttsStartCheck` watchdog now *logs* this case but does
   not recover from it. A real fix: have the heartbeat periodically issue its own GET_STATUS (detect app-level
   death despite live PONGs), and/or reconnect+retry when an announcement LOAD never reaches PLAYING.
+- **Blocking TLS connect on an unreachable device — MITIGATED.** `interfaces.rawSocket.connect(secureSocket:true)`
+  is synchronous with **no connect-timeout option**; a device that drops SYNs (powered but flaky — the user's
+  Nest Hub after a Google update; `ping` also fails) makes it block the calling thread for the full OS TCP
+  timeout (**~130 s**). Symptom in logs: `method connect/refresh/playText … ran for 130,xxx ms` (warn), and —
+  because the app polls children serially on one thread (`pollDevices: kids.each { it.refresh() }`) — a single
+  stuck device stalls the whole poll (`pollDevices … ran for 524,010 ms` = several 130 s connects stacked in one
+  cycle). Fix: the two **foreground** connect call sites now defer via `runInMillis(100,"connect")` instead of
+  calling inline — `refresh()` (poll path) and `pump()`'s IDLE case (command path, e.g. `playText`). The connect
+  still blocks ~130 s, but on a scheduler thread, so the app poll and user commands return immediately; queued
+  TTS/media wait in `state.pendingActions` and drain when the socket lands (`pump()` re-runs on the transition).
+  We **cannot** shorten the 130 s (no timeout knob) or revive a genuinely-unreachable device — the 300 s
+  `markOffline` retry reconnects once it returns. `initialize()` is now a full reset (clears `playbackStatus`/
+  `status`/`ttsActive`, not just `connectionStatus`) so it no longer leaves the confusing "idle but Playback
+  Status still Offline" state the user reported.
 - **Chime before media on cold start** — Google's Cast session-start earcon, played when the Default Media
   Receiver is *launched* fresh (Google tears the idle DMR down after a few minutes). The driver already avoids
   it when the DMR is warm (`ensureApp` reconnects instead of relaunching). Not suppressible via the standard

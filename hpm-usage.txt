@@ -88,6 +88,17 @@ hpm manifest-add-driver packageManifest.json --location=https://raw.githubuserco
 hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/packageManifest.json --name="Google Chromecast+" --category="Integrations" --description="Google Chromecast integration for Hubitat dashboards"
 
 -------------------------------------------------------------------------------
+-- go2rtc --
+-------------------------------------------------------------------------------
+# create package for app and driver(s)
+hpm manifest-create packageManifest.json --name="go2rtc" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2026-07-13
+hpm manifest-add-app packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-app.groovy --required=true --oauth=false
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-parent-driver.groovy --required=true
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-driver.groovy --required=true
+# add package to repository
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/packageManifest.json --name="go2rtc" --category="Integrations" --description="Turn go2rtc camera streams into Hubitat devices (still image + RTSP)"
+
+-------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
 # NOTE: add tags to repository.json from list here: https://raw.githubusercontent.com/HubitatCommunity/hubitat-packagerepositories/master/settings.json

@@ -76,6 +76,18 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/packageManifest.json",
       "description": "Google Chromecast integration for Hubitat dashboards"
+    },
+    {
+      "id": "b1d8f3a2-7c4e-4a9b-8e21-3f6c5d0a9e47",
+      "name": "go2rtc",
+      "category": "Integrations",
+      "tags": [
+        "Security & Safety",
+        "Multimedia",
+        "Dashboards"
+      ],
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/packageManifest.json",
+      "description": "Turn go2rtc camera streams into Hubitat devices (still image + RTSP)"
     }
   ]
 }
