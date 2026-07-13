@@ -1390,26 +1390,35 @@ private String cookieJarSummary() {
 }
 
 void captureCookiesAsync(response) {
-    // AsyncResponse headers are a plain Map — one value per name, no getHeaders() list.
-    // The __cf_bm Cloudflare cookie arrives here; missing it causes 403 within minutes.
+    // AsyncResponse headers.get("Set-Cookie") returns a plain String for a single header
+    // but a ResponseHeaders object when multiple Set-Cookie headers are present (e.g. Cloudflare
+    // sends __cf_bm and _cfuvid separately). Normalise to a list of strings before tokenizing.
     try {
-        def cookie = response.headers?.get("Set-Cookie")
-        if (cookie) {
-            def cookieVal = cookie.tokenize(';')?.getAt(0)
-            // need a well-formed name=value to upsert; otherwise ignore this header
-            if (cookieVal && cookieVal.contains("=")) {
-                String name = cookieVal.substring(0, cookieVal.indexOf("="))
+        def raw = response.headers?.get("Set-Cookie")
+        // Iterating ResponseHeaders yields entry objects with .key/.value (same as find{it.key...}?.value
+        // used elsewhere in this file). Use .value to get the bare cookie string, not .toString() which
+        // would include the header-name prefix ("Set-Cookie: __cf_bm=...").
+        def cookieList = (raw instanceof String) ? [raw] : (raw ? raw.collect { it.value } : [])
+        cookieList.each { cookie ->
+            def cookieVal = cookie?.tokenize(';')?.getAt(0)
+            // indexOf > 0 rejects both missing '=' and empty name (e.g. "=value")
+            int eq = cookieVal ? cookieVal.indexOf('=') : -1
+            if (eq > 0) {
+                String name = cookieVal.substring(0, eq)
                 boolean isNew = mergeCookie(cookieVal)
                 if (logEnable) {
-                    log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'; jar now [${cookieJarSummary()}]")
+                    log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'")
                 }
                 if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}…")
             } else if (logEnable) {
                 log.debug("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
             }
         }
+        if (logEnable && cookieList.any { it?.indexOf('=') > 0 }) {
+            log.debug("captureCookiesAsync: jar now [${cookieJarSummary()}]")
+        }
     } catch (e) {
-        log.error("captureCookiesAsync: ${e.message}")
+        log.error("captureCookiesAsync: ${e.class.simpleName}: ${e.message}")
     }
 }
 
