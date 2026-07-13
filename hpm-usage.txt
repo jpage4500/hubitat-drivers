@@ -91,7 +91,7 @@ hpm repository-add-package repository.json --manifest=https://raw.githubusercont
 -- go2rtc --
 -------------------------------------------------------------------------------
 # create package for app and driver(s)
-hpm manifest-create packageManifest.json --name="go2rtc" --author="Joe Page" --version=1.0.0 --heversion=2.3.4 --datereleased=2026-07-13
+hpm manifest-create packageManifest.json --name="go2rtc" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2026-07-13
 hpm manifest-add-app packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-app.groovy --required=true --oauth=false
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-parent-driver.groovy --required=true
 hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/go2rtc-driver.groovy --required=true

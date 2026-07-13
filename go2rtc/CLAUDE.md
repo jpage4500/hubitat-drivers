@@ -21,17 +21,23 @@ with a single debug toggle broadcast app → parent → children and a central p
 
 ## Capabilities / design decisions
 
-- **ImageCapture**: `take()` fetches the JPEG bytes and stores them in the File Manager via `uploadHubFile()`,
-  then sets `image` = `file:<dni>.jpg` (the proven convention — see tomwpublic's dahua/unifi drivers). The `.jpg`
-  extension matters so the File Manager serves `image/jpeg` and dashboards/HD+ render it. Needs HE **2.3.4.132+**.
+- **ImageCapture**: the `image` attribute is a **URL**, not a downloaded file. `take()` bumps a cache-buster
+  (`state.imageRefreshMs = now()`) and sets `image` = `{server}/api/frame.jpeg?src=NAME[&w=..]&refresh=<epochMs>`.
+  Nothing is fetched/stored on the hub — the dashboard/browser loads the frame straight from go2rtc. The
+  `refresh` value changes **only** on a real refresh (take/refresh/poll), so the frame caches in between and
+  reloads on demand. `publishUrls()` re-emits `image` with the *current* (un-bumped) timestamp, so a plain Done
+  doesn't force a reload. (Earlier versions downloaded via `uploadHubFile` → `file:<dni>.jpg`; removed at the
+  user's request — no File Manager, no HE 2.3.4 floor.)
 - **VideoCapture** is declared only because the user asked for it; Hubitat's def (a `capture(start,end,camera)`
   command + `clip` attribute) is useless for a live camera, so the RTSP URL goes in a custom **`video`** attribute
   and `capture()` is a logged no-op.
 - Server URL / host / RTSP port / creds are pushed app → parent (`setServer`) → child (`configure`). Creds live in
-  the child's `state` (not as prominent device data values); non-secret bits are data values.
-- **Snapshot on poll**: the app's central timer calls `child.refresh()` → `take()`, overwriting the one file per
-  camera. Interval defaults to **0 (off)** to avoid file-write churn across many cameras; a still is still captured
-  on create / Refresh / Take.
+  the child's `state` (not as prominent device data values); non-secret bits are data values. Creds are embedded
+  in the RTSP `video` url but NOT in the `image`/`snapshotUrl` (so those stay shareable; auth'd servers are a
+  known limitation for the image tile).
+- **Poll on interval**: the app's central timer calls `child.refresh()` → `refreshStatus()` (a small
+  `/api/streams?src=NAME` JSON check for online/source, *not* an image download) + `take()` (bump image URL).
+  Interval defaults to **0 (off)**; the image URL still refreshes on create / Refresh / Take.
 - **Orphan cleanup**: children carry a `streamName` data value. On each page render, any child whose `streamName`
   isn't in the current `/api/streams` result is shown disabled at the bottom and deleted on Done (it's simply not
   a "wanted" candidate in `syncChildren`, same reconcile as chromecast).

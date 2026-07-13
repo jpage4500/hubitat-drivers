@@ -26,8 +26,6 @@ Install via Hubitat Package Manager (HPM) — search for **go2rtc**. It installs
 - **go2rtc Parent** (driver)
 - **go2rtc Camera** (driver)
 
-Requires Hubitat firmware **2.3.4+** (the still image uses the File Manager API).
-
 ## Setup
 
 1. **Apps → Add user app → go2rtc**
@@ -46,19 +44,23 @@ Discovery uses go2rtc's REST API: `GET {server}/api/streams` returns every confi
 
 Each camera device exposes:
 
-- **`image`** (Image Capture) — the `take()` command pulls a JPEG from `{server}/api/frame.jpeg?src=NAME`,
-  stores it in Hubitat's **File Manager**, and sets `image` to `file:<device-id>.jpg` so dashboards render it.
+- **`image`** (Image Capture) — points directly at the live still URL `{server}/api/frame.jpeg?src=NAME` with a
+  cache-busting `&refresh=<timestamp>` on the end. Nothing is downloaded to the hub; your dashboard/browser
+  fetches the frame straight from go2rtc. The `refresh` value only changes when a refresh is actually triggered
+  (the **Take** command, device **Refresh**, or the app's poll timer), so the image caches in between and reloads
+  exactly when you want a fresh frame.
 - **`video`** — the camera's RTSP URL, `rtsp://[user:pass@]<host>:<rtspPort>/NAME`. (Hubitat's built-in
   VideoCapture capability has no useful live-stream attribute, so the URL is published here.)
-- **`snapshotUrl`** — the live still-image URL, handy for an HD+ image tile or direct browser use.
-- **`source`** / **`status`** — the producer source (password masked) and whether the last snapshot succeeded.
+- **`snapshotUrl`** — the same still-image URL without the cache-buster, handy for an HD+ image tile or direct use.
+- **`source`** / **`status`** — the producer source (password masked) and whether the stream is present on the server.
 
 The **parent** device is a simple status tile: how many cameras exist and how many are online.
 
 ### Snapshot refresh
 
-By default a still is captured only on demand — the **Take** command, the device **Refresh**, or when the device
-is first created. Set a **Snapshot refresh interval** in the app to have every camera re-capture on a timer.
+The `image` URL's cache-buster changes only on demand — the **Take** command, the device **Refresh**, or when the
+device is first created. Set a **Snapshot refresh interval** in the app to have every camera bump its image URL
+(and re-check status) on a timer, so dashboards auto-refresh the frame every X seconds.
 
 ### Renamed / removed cameras
 

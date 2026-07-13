@@ -3,8 +3,10 @@
  * ** go2rtc Camera **
  *
  * One child device per go2rtc stream, created by the go2rtc app. Exposes:
- *   - ImageCapture: take() pulls a still from {server}/api/frame.jpeg?src=NAME, stores it in Hubitat's File
- *     Manager, and points the "image" attribute at it (file:<dni>) so dashboards render the snapshot.
+ *   - ImageCapture: the "image" attribute points directly at the live still URL
+ *     ({server}/api/frame.jpeg?src=NAME) with a cache-busting &refresh=<epochMs> that only changes when a
+ *     refresh is actually requested (take() / refresh() / the app's poll timer). Nothing is downloaded to the
+ *     hub - the dashboard / browser fetches the frame straight from go2rtc.
  *   - VideoCapture: Hubitat has no useful stream definition here, so the camera's RTSP URL
  *     (rtsp://[user:pass@]host:rtspPort/NAME) is published in the custom "video" attribute.
  *
@@ -24,13 +26,11 @@ metadata {
         capability 'Refresh'
         capability 'Initialize'
 
-        command 'clearImage'
-
         attribute 'video', 'string'        // RTSP stream URL (rtsp://[user:pass@]host:port/NAME)
-        attribute 'snapshotUrl', 'string'  // live still-image URL ({server}/api/frame.jpeg?src=NAME)
+        attribute 'snapshotUrl', 'string'  // live still-image URL, no cache-buster ({server}/api/frame.jpeg?src=NAME)
         attribute 'streamName', 'string'   // go2rtc stream name this device maps to
         attribute 'source', 'string'       // producer source (from go2rtc, password masked)
-        attribute 'status', 'string'       // online (snapshot reachable) / offline
+        attribute 'status', 'string'       // online (stream present on server) / offline
         attribute 'imageTimestamp', 'string'
     }
 
@@ -45,7 +45,6 @@ metadata {
 // ============================================================================
 def installed()   { logDebug('installed'); initialize() }
 def updated()     { logDebug('updated'); refresh() }
-def uninstalled() { deleteImageFile() }
 
 def initialize() {
     logDebug('initialize')
@@ -73,63 +72,49 @@ private String serverBase() { getDataValue('serverBase') }
 private String host()       { getDataValue('host') }
 private Integer rtspPort()  { (getDataValue('rtspPort') ?: '8554') as Integer }
 
-// build + publish the RTSP ("video") and snapshot URLs from the stored server settings
+// (re)publish the RTSP ("video"), snapshot, and image URLs from the stored server settings.
+// Uses the CURRENT cache-buster (state.imageRefreshMs) - it does NOT bump it, so calling this on
+// configure()/Done doesn't force dashboards to reload the image.
 private void publishUrls() {
     String name = streamName()
     if (isEmpty(name)) return
     // RTSP url for the "video" attribute (VideoCapture has no usable stream attribute of its own)
     String creds = isEmpty(state.username) ? '' : "${state.username}:${state.password ?: ''}@"
-    String rtsp = "rtsp://${creds}${host()}:${rtspPort()}/${name}"
-    sendEventIfChanged('video', rtsp)
+    sendEventIfChanged('video', "rtsp://${creds}${host()}:${rtspPort()}/${name}")
     sendEventIfChanged('streamName', name)
-    // live snapshot url (handy for HD+ image tiles / direct browser use; no creds so it stays shareable)
-    if (serverBase()) sendEventIfChanged('snapshotUrl', snapshotUrl())
+    if (serverBase()) {
+        sendEventIfChanged('snapshotUrl', snapshotUrl())
+        sendEventIfChanged('image', imageUrl())
+    }
     String src = getDataValue('source')
     if (src) sendEventIfChanged('source', src)
 }
 
-// {server}/api/frame.jpeg?src=NAME (+ optional width)
+// live snapshot url (no cache-buster): {server}/api/frame.jpeg?src=NAME (+ optional width)
 private String snapshotUrl() {
     String u = "${serverBase()}/api/frame.jpeg?src=${urlEnc(streamName())}"
     if (settings.snapshotWidth) u += "&w=${settings.snapshotWidth as Integer}"
     return u
 }
 
-// ============================================================================
-// ImageCapture
-// ============================================================================
-// pull a still from go2rtc, store it in the File Manager, and point the "image" attribute at it.
-def take() {
-    publishUrls()
-    String name = streamName()
-    if (isEmpty(serverBase()) || isEmpty(name)) { logWarn 'take: server/stream not configured'; return }
-    try {
-        byte[] img = fetchBytes(snapshotUrl())
-        if (img && img.length > 0) {
-            writeImageToFile(img)
-            sendEvent(name: 'image', value: "file:${fileName()}", isStateChange: true)
-            sendEvent(name: 'imageTimestamp', value: nowStr())
-            setStatus('online')
-            logDebug("take: captured ${img.length} bytes -> file:${fileName()}")
-        } else {
-            setStatus('offline')
-            logWarn 'take: no image data returned'
-        }
-    } catch (groovy.lang.MissingMethodException e) {
-        // uploadHubFile was added in 2.3.4.132
-        logError(e.message?.contains('uploadHubFile')
-            ? 'take failed: update Hubitat to at least 2.3.4.132 (File Manager API required)'
-            : "take failed: ${e.message}")
-    } catch (e) {
-        setStatus('offline')
-        logWarn "take failed: ${e.message}"
-    }
+// the "image" attribute url: snapshot url + a cache-buster that only changes on a real refresh, so the
+// browser/dashboard re-fetches the frame exactly when we want it to (and caches it in between).
+private String imageUrl() {
+    String u = snapshotUrl()
+    Long ts = state.imageRefreshMs as Long
+    if (ts) u += "&refresh=${ts}"
+    return u
 }
 
-def clearImage() {
-    deleteImageFile()
-    sendEvent(name: 'image', value: 'n/a')
-    sendEvent(name: 'imageTimestamp', value: 'n/a')
+// ============================================================================
+// ImageCapture - point "image" at a fresh snapshot url (no download)
+// ============================================================================
+def take() {
+    if (isEmpty(serverBase()) || isEmpty(streamName())) { logWarn 'take: server/stream not configured'; return }
+    state.imageRefreshMs = now()                       // bump the cache-buster -> URL changes -> dashboards reload
+    sendEvent(name: 'image', value: imageUrl())
+    sendEvent(name: 'imageTimestamp', value: nowStr())
+    logDebug("take: image -> ${imageUrl()}")
 }
 
 // ============================================================================
@@ -140,47 +125,50 @@ def capture(start, end, camera) {
 }
 
 // ============================================================================
-// Refresh
+// Refresh - re-check status + bump the image cache-buster
 // ============================================================================
 def refresh() {
     publishUrls()
+    refreshStatus()
     take()
     parent?.childStatusChanged()
+}
+
+// light-weight status check: GET {server}/api/streams?src=NAME (small JSON, not the image). If the stream is
+// present the camera is "online"; also refresh the (masked) producer source. Any error -> "offline".
+private void refreshStatus() {
+    if (isEmpty(serverBase()) || isEmpty(streamName())) return
+    try {
+        Map params = [uri: "${serverBase()}/api/streams", query: [src: streamName()], timeout: 10]
+        addAuth(params)
+        httpGet(params) { resp ->
+            def data = resp?.data
+            if (data instanceof Map) {
+                setStatus('online')
+                def prod = data.producers
+                if (prod instanceof List) {
+                    def first = prod.find { it instanceof Map && it.url }
+                    if (first) updateDataValue('source', maskUrl(first.url.toString()))
+                }
+            } else {
+                setStatus('offline')
+            }
+        }
+    } catch (e) {
+        setStatus('offline')
+        logDebug "refreshStatus: ${e.message}"
+    }
 }
 
 // ============================================================================
 // helpers called by the parent
 // ============================================================================
-def setDebug(flag)             { state.debug = (flag as Boolean) }
+def setDebug(flag)              { state.debug = (flag as Boolean) }
 def setRefreshInterval(seconds) { state.refreshInterval = (seconds ?: 0) as Integer }   // informational; the app owns the timer
 
 // ============================================================================
-// http / file
+// util
 // ============================================================================
-// fetch raw bytes (JPEG) - handle whatever shape httpGet hands back (stream / byte[] / string)
-private byte[] fetchBytes(String url) {
-    byte[] out = null
-    Map params = [uri: url, timeout: 20]
-    addAuth(params)
-    httpGet(params) { resp ->
-        def data = resp?.data
-        if (data == null) return
-        if (data instanceof byte[]) {
-            out = data
-        } else if (data instanceof String) {
-            out = data.getBytes('ISO-8859-1')
-        } else {
-            // InputStream
-            ByteArrayOutputStream bos = new ByteArrayOutputStream()
-            byte[] buf = new byte[8192]
-            int n
-            while ((n = data.read(buf)) > 0) bos.write(buf, 0, n)
-            out = bos.toByteArray()
-        }
-    }
-    return out
-}
-
 private void addAuth(Map params) {
     if (!isEmpty(state.username)) {
         String creds = "${state.username}:${state.password ?: ''}"
@@ -188,13 +176,6 @@ private void addAuth(Map params) {
     }
 }
 
-private String fileName() { "${device.getDeviceNetworkId()}.jpg" }
-private void writeImageToFile(byte[] image) { if (image != null) uploadHubFile(fileName(), image) }
-private void deleteImageFile() { try { deleteHubFile(fileName()) } catch (ignored) { } }
-
-// ============================================================================
-// util
-// ============================================================================
 private void setStatus(String s) {
     if (device.currentValue('status') != s) {
         sendEvent(name: 'status', value: s)
@@ -208,6 +189,12 @@ private void sendEventIfChanged(String name, def value, String unit = null) {
         if (unit) sendEvent(name: name, value: value, unit: unit)
         else sendEvent(name: name, value: value)
     }
+}
+
+// hide any credentials in a source url before storing/showing it: rtsp://user:pass@host -> rtsp://***@host
+private String maskUrl(String url) {
+    if (!url) return url
+    return url.replaceAll(/(?<=:\/\/)[^@\/]+@/, '***@')
 }
 
 private String urlEnc(String s) { return java.net.URLEncoder.encode(s ?: '', 'UTF-8') }

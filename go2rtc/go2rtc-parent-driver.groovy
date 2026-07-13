@@ -64,7 +64,8 @@ def createChild(String dni, String streamName, String base, String host, Integer
     }
     child.setDebug(state.debug == true)
     child.configure(base, host, rtspPort, username, password, source, streamName)
-    // only capture a still on first create (configure() updates urls/status every time without re-fetching bytes)
+    // configure() (re)publishes the urls every time; only bump the image cache-buster on first create so a
+    // plain Done doesn't force existing cameras' image URLs to change (initialize() -> refresh() -> take()).
     if (isNew) child.initialize()
     runIn(3, 'recomputeSummary')
     return child

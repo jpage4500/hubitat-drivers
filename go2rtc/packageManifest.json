@@ -2,7 +2,7 @@
   "packageName": "go2rtc",
   "author": "Joe Page",
   "version": "1.0.0",
-  "minimumHEVersion": "2.3.4",
+  "minimumHEVersion": "2.1.9",
   "dateReleased": "2026-07-13",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
   "releaseNotes": "Initial release - turn go2rtc camera streams into Hubitat devices (still image + RTSP)",
