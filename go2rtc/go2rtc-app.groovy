@@ -48,6 +48,7 @@ def updated() {
     unschedule()
     createParentDevice()
     fetchStreams()
+    clearRedundantMapSettings()
     syncChildren()
     def parent = getParentDevice()
     if (parent) {
@@ -161,10 +162,11 @@ def mainPage() {
                     section(hideable: true, hidden: true, header("Stream mapping: ${base}")) {
                         paragraph "<small>Override auto-grouping when stream names don't follow the <code>${base}_sub</code> convention.</small>"
                         ROLE_SUFFIXES.each { role ->
-                            String defaultVal = roleMap[role] ?: 'none'
-                            if (!streamOptions.contains(defaultVal)) defaultVal = 'none'
-                            input name: "map_${cid}_${role}", type: 'enum', title: "${role} stream",
-                                options: streamOptions, defaultValue: defaultVal, submitOnChange: true
+                            String key = "map_${cid}_${role}"
+                            clearImplicitMapSetting(key, role, roleMap)
+                            String displayVal = mapInputValue(key, role, roleMap, streamOptions)
+                            input name: key, type: 'enum', title: "${role} stream",
+                                options: streamOptions, defaultValue: displayVal, submitOnChange: true
                         }
                     }
                 }
@@ -286,6 +288,45 @@ private String firstMappedStream(Map roleMap) {
     return roleMap.values() ? roleMap.values().iterator().next() : null
 }
 
+// ----------------------------------------------------------------------------
+// stream mapping overrides — only persist real manual changes
+//
+// Hubitat enum inputs save a value on first Done even when it matches auto-grouping.
+// That freezes grouping when go2rtc stream names change. We clear redundant map_*
+// settings and only honor saved values that differ from the auto-detected role.
+// ----------------------------------------------------------------------------
+private String mapInputValue(String key, String role, Map autoGroup, List streamOptions) {
+    def saved = settings[key]
+    String autoVal = autoGroup[role]
+    if (!isEmpty(saved) && saved != 'none' && streamOptions.contains(saved.toString())) {
+        if (!autoVal || saved.toString() != autoVal) return saved.toString()
+    }
+    if (autoVal && streamOptions.contains(autoVal)) return autoVal
+    return 'none'
+}
+
+// drop unset/redundant map settings so auto-grouping can evolve and defaultValue shows auto in the UI
+private void clearImplicitMapSetting(String key, String role, Map autoGroup) {
+    def saved = settings[key]
+    String autoVal = autoGroup[role]
+    if (!autoVal) return
+    if (isEmpty(saved) || saved == 'none' || saved.toString() == autoVal) {
+        try {
+            app.removeSetting(key)
+        } catch (ignored) { }
+    }
+}
+
+private void clearRedundantMapSettings() {
+    Map streams = state.streams ?: [:]
+    buildCameraGroups(streams).each { base, autoGroup ->
+        String cid = cleanId(base)
+        ROLE_SUFFIXES.each { role ->
+            clearImplicitMapSetting("map_${cid}_${role}", role, autoGroup)
+        }
+    }
+}
+
 // merge auto-grouping with per-camera UI overrides
 private Map resolveRoleMap(String base, Map autoGroup, Map streams) {
     String cid = cleanId(base)
@@ -294,8 +335,11 @@ private Map resolveRoleMap(String base, Map autoGroup, Map streams) {
         String key = "map_${cid}_${role}"
         def setting = settings[key]
         if (setting && setting != 'none' && streams.containsKey(setting.toString())) {
-            result[role] = setting.toString()
-        } else if (autoGroup[role] && streams.containsKey(autoGroup[role])) {
+            String chosen = setting.toString()
+            // only honor a saved value when it is a real manual override
+            if (!autoGroup[role] || chosen != autoGroup[role]) result[role] = chosen
+        }
+        if (!result[role] && autoGroup[role] && streams.containsKey(autoGroup[role])) {
             result[role] = autoGroup[role]
         }
     }
