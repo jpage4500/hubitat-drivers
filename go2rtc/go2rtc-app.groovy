@@ -5,15 +5,11 @@ import groovy.transform.Field
  * ** go2rtc (App) **
  *
  * Connects Hubitat to a running go2rtc server (https://github.com/AlexxIT/go2rtc) and turns each configured
- * camera / stream into a Hubitat device.
+ * camera into a Hubitat device. Multiple go2rtc streams (main, sub, ext, ...) for the same camera are grouped
+ * into one device when they share a base name (e.g. front_door + front_door_sub) or when mapped in the UI.
  *
  * Discovery is done over go2rtc's REST API: GET {server}/api/streams returns a JSON object keyed by stream
- * name. Each selected stream becomes a child device under a single top-level "go2rtc" parent device. A child
- * device exposes a still image (ImageCapture, pulled from {server}/api/frame.jpeg?src=NAME) and the camera's
- * RTSP URL (rtsp://{host}:{rtspPort}/NAME, in the "video" attribute).
- *
- * Because go2rtc stream names are user-editable, a child whose stream no longer exists on the server is
- * detected on each page render and listed (disabled) at the bottom - it is removed when you hit Done.
+ * name. Each selected camera group becomes a child device under a single top-level "go2rtc" parent device.
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -39,6 +35,7 @@ preferences {
 @Field static final String PARENT_DRIVER = 'go2rtc Parent'
 @Field static final Integer DEFAULT_API_PORT = 1984
 @Field static final Integer DEFAULT_RTSP_PORT = 8554
+@Field static final List ROLE_SUFFIXES = ['main', 'sub', 'ext', 'low', 'high', 'sd', 'hd']
 
 // ----------------------------------------------------------------------------
 // lifecycle
@@ -56,9 +53,8 @@ def updated() {
     if (parent) {
         parent.setServer(serverBase(), serverHost(), rtspPort(), settings.username, settings.password)
         parent.setRefreshInterval((settings.refreshInterval ?: 0) as Integer)
-        parent.setDebug(settings.debugOutput == true)   // single toggle -> broadcast to parent + all children
+        parent.setDebug(settings.debugOutput == true)
     }
-    // debug logging auto-disables 24h after being enabled so verbose logs are never left on
     if (settings.debugOutput == true) {
         runIn(86400, 'debugOff')
         state.debugDisableMs = now() + 86400000
@@ -74,7 +70,6 @@ def uninstalled() {
     getChildDevices().each { deleteChildDevice(it.deviceNetworkId) }
 }
 
-// scheduled by updated() 24h after debug is enabled: clear the app toggle + broadcast off to parent/children
 def debugOff() {
     logInfo('auto-disabling debug logging (24h elapsed)')
     app.updateSetting('debugOutput', [value: 'false', type: 'bool'])
@@ -82,8 +77,6 @@ def debugOff() {
     state.remove('debugDisableMs')
 }
 
-// central polling: ONE timer in the app refreshes every child (each child re-pulls its snapshot + status).
-// 0 = off (a still is still captured once when the child is created / on Refresh).
 private void schedulePolling() {
     unschedule('pollDevices')
     Integer sec = (settings.refreshInterval ?: 0) as Integer
@@ -106,17 +99,19 @@ def mainPage() {
     createParentDevice()
     boolean haveServer = !isEmpty(settings.serverUrl)
     Map streams = haveServer ? fetchStreams() : [:]
+    Map groups = buildCameraGroups(streams)
     dynamicPage(name: 'mainPage', title: '', install: true, uninstall: true) {
         section(header('go2rtc')) {
             paragraph 'Connect to your <a href="https://github.com/AlexxIT/go2rtc" target="_blank">go2rtc</a> server and create a Hubitat device for each camera. ' +
-                'Each device exposes a still image (Image Capture) and the camera\'s RTSP stream URL, so it works on dashboards and in the HD+ app.'
+                'Main and sub streams for the same camera are grouped into one device. Each device exposes still images and RTSP URLs for every configured quality.'
         }
 
         section(header('Server')) {
             input name: 'serverUrl', type: 'text', title: 'go2rtc server URL', description: "e.g. http://192.168.0.160:${DEFAULT_API_PORT}/", required: true, submitOnChange: true
             if (haveServer) {
                 if (state.lastFetchOk) {
-                    paragraph "<span style='color:green'>&#10003; Connected</span> &mdash; found ${streams.size()} stream${streams.size() == 1 ? '' : 's'} at ${serverBase()}"
+                    paragraph "<span style='color:green'>&#10003; Connected</span> &mdash; found ${streams.size()} stream${streams.size() == 1 ? '' : 's'} " +
+                        "in ${groups.size()} camera group${groups.size() == 1 ? '' : 's'} at ${serverBase()}"
                 } else {
                     paragraph "<span style='color:red'>&#10007; Could not reach ${serverBase()}</span>${state.lastError ? " &mdash; ${state.lastError}" : ''}<br>" +
                         '<small>Check the URL (include http:// and the port, default 1984) and that go2rtc is running.</small>'
@@ -134,21 +129,43 @@ def mainPage() {
 
         if (haveServer && state.lastFetchOk) {
             section(header('Cameras')) {
-                Map childByName = (getParentDevice()?.getChildDevices() ?: []).collectEntries { [(it.getDataValue('streamName')): it] }
-                if (streams.isEmpty()) {
+                Map childByBase = (getParentDevice()?.getChildDevices() ?: []).collectEntries {
+                    [(it.getDataValue('cameraBase') ?: it.getDataValue('streamName')): it]
+                }
+                if (groups.isEmpty()) {
                     paragraph 'No streams configured on the server yet. Add cameras to go2rtc, then click <b>Refresh</b>.'
                 } else {
-                    paragraph "<small>Checked cameras are created in Hubitat. Uncheck to remove. Hit <b>Done</b> to apply changes.</small>"
-                    streams.sort { it.key.toLowerCase() }.each { name, d ->
-                        input name: "sel_${cleanId(name)}", type: 'bool', title: deviceRow(name, d, childByName[name]), defaultValue: true, submitOnChange: true
+                    paragraph "<small>Checked cameras are created in Hubitat. Streams named <code>camera_sub</code>, <code>camera_main</code>, etc. are auto-grouped. " +
+                        'Expand a camera below to override stream mapping. Hit <b>Done</b> to apply.</small>'
+                    sortedGroupKeys(groups).each { base ->
+                        String cid = cleanId(base)
+                        Map roleMap = groups[base]
+                        input name: "sel_${cid}", type: 'bool', title: groupRow(base, roleMap, childByBase[base]), defaultValue: true, submitOnChange: true
                     }
                 }
-                // children whose stream no longer exists on the server -> will be removed on Done
-                def orphans = (getParentDevice()?.getChildDevices() ?: []).findAll { !streams.containsKey(it.getDataValue('streamName')) }
+                def orphans = findOrphanChildren(streams, groups)
                 if (orphans) {
                     paragraph "<hr><b>No longer on the server</b><br><small>These cameras were removed or renamed on go2rtc and will be deleted when you hit Done.</small>"
                     orphans.sort { it.getLabel() }.each { child ->
                         paragraph orphanRow(child)
+                    }
+                }
+            }
+
+            // per-camera stream mapping overrides (hideable sections)
+            sortedGroupKeys(groups).each { base ->
+                String cid = cleanId(base)
+                if (settings["sel_${cid}"] != false) {
+                    Map roleMap = groups[base]
+                    List streamOptions = ['none'] + streams.keySet().sort()
+                    section(hideable: true, hidden: true, header("Stream mapping: ${base}")) {
+                        paragraph "<small>Override auto-grouping when stream names don't follow the <code>${base}_sub</code> convention.</small>"
+                        ROLE_SUFFIXES.each { role ->
+                            String defaultVal = roleMap[role] ?: 'none'
+                            if (!streamOptions.contains(defaultVal)) defaultVal = 'none'
+                            input name: "map_${cid}_${role}", type: 'enum', title: "${role} stream",
+                                options: streamOptions, defaultValue: defaultVal, submitOnChange: true
+                        }
                     }
                 }
             }
@@ -163,7 +180,7 @@ def mainPage() {
             if (settings.debugOutput == true && state.debugDisableMs) {
                 paragraph "<span style='color:red'>Debug logging will be disabled at ${clockTime(new Date(state.debugDisableMs as Long))}</span>"
             }
-            paragraph "<small>Selected cameras become child devices under the 'go2rtc' parent device. Click <b>Done</b> to apply.</small>"
+            paragraph '<small>Selected cameras become child devices under the \'go2rtc\' parent device. Click <b>Done</b> to apply.</small>'
         }
     }
 }
@@ -179,8 +196,6 @@ def appButtonHandler(btn) {
 // ----------------------------------------------------------------------------
 // discovery (go2rtc REST API)
 // ----------------------------------------------------------------------------
-// GET {server}/api/streams -> JSON object keyed by stream name; each value has producers[]/consumers[].
-// We keep a light summary (source url masked, producer/consumer counts) per stream in state.streams.
 Map fetchStreams() {
     String base = serverBase()
     Map result = [:]
@@ -209,7 +224,6 @@ Map fetchStreams() {
     return result
 }
 
-// pull a small display summary out of one stream's {producers:[...], consumers:[...]} object
 private Map summarizeStream(info) {
     String source = null
     int producers = 0, consumers = 0
@@ -229,32 +243,113 @@ private Map summarizeStream(info) {
 }
 
 // ----------------------------------------------------------------------------
+// camera grouping — one Hubitat device per camera, multiple go2rtc quality streams
+//
+// go2rtc YAML has no native main/sub grouping. This app groups streams by name suffix
+// (e.g. front_door + front_door_sub) or by per-camera UI overrides (map_<base>_<role>).
+// Each grouped device exposes videoMain, videoSub, etc. plus selectStream(role).
+// ----------------------------------------------------------------------------
+// parse stream name into {base, role}; bare name or _main suffix -> role main
+private Map parseStreamName(String name) {
+    String lower = name.toLowerCase()
+    for (String role in ROLE_SUFFIXES) {
+        String suffix = "_${role}"
+        if (lower.endsWith(suffix) && name.length() > suffix.length()) {
+            return [base: name.substring(0, name.length() - suffix.length()), role: role]
+        }
+    }
+    return [base: name, role: 'main']
+}
+
+// group discovered streams by camera base name
+private Map buildCameraGroups(Map streams) {
+    Map groups = [:]
+    streams.keySet().each { name ->
+        def parsed = parseStreamName(name)
+        String base = parsed.base
+        String role = parsed.role
+        if (!groups[base]) groups[base] = [:]
+        if (role == 'main' && groups[base].main) {
+            // prefer bare name over explicit _main suffix
+            if (name == base) groups[base].main = name
+        } else {
+            groups[base][role] = name
+        }
+    }
+    return groups
+}
+
+private List sortedGroupKeys(Map groups) {
+    return groups.keySet().sort { a, b -> a.toLowerCase() <=> b.toLowerCase() }
+}
+
+private String firstMappedStream(Map roleMap) {
+    for (String role in ROLE_SUFFIXES) {
+        if (roleMap[role]) return roleMap[role]
+    }
+    return roleMap.values() ? roleMap.values().iterator().next() : null
+}
+
+// merge auto-grouping with per-camera UI overrides
+private Map resolveRoleMap(String base, Map autoGroup, Map streams) {
+    String cid = cleanId(base)
+    Map result = [:]
+    ROLE_SUFFIXES.each { role ->
+        String key = "map_${cid}_${role}"
+        def setting = settings[key]
+        if (setting && setting != 'none' && streams.containsKey(setting.toString())) {
+            result[role] = setting.toString()
+        } else if (autoGroup[role] && streams.containsKey(autoGroup[role])) {
+            result[role] = autoGroup[role]
+        }
+    }
+    if (result.isEmpty()) {
+        autoGroup.each { role, name ->
+            if (streams.containsKey(name)) result[role] = name
+        }
+    }
+    return result
+}
+
+// ----------------------------------------------------------------------------
 // UI helpers
 // ----------------------------------------------------------------------------
-// one selectable camera row: name + a live snapshot thumbnail + source / status line
-private String deviceRow(String name, Map d, child) {
-    String base = serverBase()
-    String snap = "${base}/api/frame.jpeg?src=${urlEnc(name)}&w=320"
-    String s = "<b>${name}</b>"
-    String extra = d.source ? "source: ${d.source}" : 'no source configured'
-    if (d.consumers) extra += " &middot; ${d.consumers} viewer${d.consumers == 1 ? '' : 's'}"
+private String groupRow(String base, Map roleMap, child) {
+    String primary = roleMap.main ?: firstMappedStream(roleMap)
+    String baseUrl = serverBase()
+    String snap = primary ? "${baseUrl}/api/frame.jpeg?src=${urlEnc(primary)}&w=320" : ''
+    String roles = roleMap.keySet().sort().collect { role -> "${role}: <code>${roleMap[role]}</code>" }.join(' &middot; ')
+    String s = "<b>${base}</b>"
+    String extra = roles ?: 'no streams'
     if (child) extra += " &middot; <i>added</i>"
-    String thumb = "<div><img src='${snap}' style='max-height:90px;max-width:100%;border-radius:6px;margin-top:6px' onerror=\"this.style.display='none'\"></div>"
+    String thumb = snap ? "<div><img src='${snap}' style='max-height:90px;max-width:100%;border-radius:6px;margin-top:6px' onerror=\"this.style.display='none'\"></div>" : ''
     return s + "<br><span style='font-size:smaller;color:#666'>${extra}</span>${thumb}"
 }
 
-// a disabled row for a child whose stream is gone from the server (removed on Done)
 private String orphanRow(child) {
     String sn = child.getDataValue('streamName') ?: child.getLabel()
     return "<div style='opacity:0.5'>&#128465; <b>${child.getLabel()}</b> <span style='color:#b00'>(will be removed)</span>" +
-        "<br><span style='font-size:smaller'>stream '${sn}' no longer exists on the server</span></div>"
+        "<br><span style='font-size:smaller'>primary stream '${sn}' no longer exists on the server</span></div>"
+}
+
+private List findOrphanChildren(Map streams, Map groups) {
+    Set validPrimaries = [] as Set
+    groups.each { base, autoGroup ->
+        Map roleMap = resolveRoleMap(base, autoGroup, streams)
+        String primary = roleMap.main ?: firstMappedStream(roleMap)
+        if (primary) validPrimaries << primary
+    }
+    return (getParentDevice()?.getChildDevices() ?: []).findAll { child ->
+        String primary = child.getDataValue('streamName')
+        !validPrimaries.contains(primary)
+    }
 }
 
 // ----------------------------------------------------------------------------
 // child / parent devices
 // ----------------------------------------------------------------------------
 private String parentDni() { "go2rtc-parent-${app.id}" }
-String childDni(String name) { "go2rtc-${cleanId(name)}" }
+String childDni(String base) { "go2rtc-${cleanId(base)}" }
 
 private void createParentDevice() {
     def parent = getChildDevice(parentDni())
@@ -272,32 +367,38 @@ private void createParentDevice() {
 
 private getParentDevice() { getChildDevice(parentDni()) }
 
-// reconcile wanted cameras (a checkbox per stream, checked by default) against existing child devices.
-// streams that vanished from the server aren't candidates -> not wanted -> deleted here.
 private void syncChildren() {
     def parent = getParentDevice()
     if (!parent) { logError 'syncChildren: no parent device'; return }
+    Map streams = state.streams ?: [:]
+    Map groups = buildCameraGroups(streams)
     Set wanted = [] as Set
-    (state.streams ?: [:]).each { name, d ->
-        String dni = childDni(name)
-        if (isSelected(dni)) {
-            parent.createChild(dni, name, serverBase(), serverHost(), rtspPort(), settings.username, settings.password, d.source)
-            wanted << dni
+    groups.each { base, autoGroup ->
+        String cid = cleanId(base)
+        if (isGroupSelected(cid)) {
+            Map roleMap = resolveRoleMap(base, autoGroup, streams)
+            String primary = roleMap.main ?: firstMappedStream(roleMap)
+            if (primary) {
+                String dni = childDni(base)
+                def streamData = streams[primary]
+                parent.createChild(dni, base, primary, roleMap, serverBase(), serverHost(), rtspPort(),
+                    settings.username, settings.password, streamData?.source)
+                wanted << dni
+            }
         }
     }
     parent.getChildDevices().each { child ->
         if (!wanted.contains(child.deviceNetworkId)) parent.deleteChild(child.deviceNetworkId)
     }
 }
-private boolean isSelected(String dni) {
-    // dni is "go2rtc-<cleanId>"; the toggle setting is "sel_<cleanId>". checked (true) by default.
-    return settings["sel_${dni.replaceFirst('go2rtc-', '')}"] != false
+
+private boolean isGroupSelected(String cid) {
+    return settings["sel_${cid}"] != false
 }
 
 // ----------------------------------------------------------------------------
 // server url helpers
 // ----------------------------------------------------------------------------
-// normalized base url (adds http://, strips trailing slashes); null if unset
 String serverBase() {
     String u = settings.serverUrl?.trim()
     if (isEmpty(u)) return null
@@ -305,7 +406,6 @@ String serverBase() {
     return u.replaceAll(/\/+$/, '')
 }
 
-// host portion of the server url (for building the RTSP url)
 String serverHost() {
     String u = serverBase()
     if (!u) return null
@@ -332,8 +432,6 @@ private String header(String text) {
 private String cleanId(String s) { return (s ?: '').replaceAll('[^A-Za-z0-9]', '') }
 private String urlEnc(String s) { return java.net.URLEncoder.encode(s ?: '', 'UTF-8') }
 
-// hide any credentials in a source url before showing it in the UI: rtsp://user:pass@host -> rtsp://***@host
-// greedy up to the LAST @ before the path, so an email-as-username (user@gmail.com:pass@host) is fully masked, password and all
 private String maskUrl(String url) {
     if (!url) return url
     return url.replaceAll(/(?<=:\/\/)[^\/]+@/, '***@')

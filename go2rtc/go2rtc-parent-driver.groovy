@@ -46,26 +46,33 @@ def setServer(String base, String host, Integer rtspPort, String username, Strin
     state.username = username
     state.password = password
     // re-push to existing children in case the server url / port / creds changed
-    getChildDevices().each { it.configure(base, host, rtspPort, username, password, it.getDataValue('source'), it.getDataValue('streamName')) }
+    getChildDevices().each { child ->
+        Map streams = parseStreamsJson(child.getDataValue('streamsJson'))
+        child.configure(base, host, rtspPort, username, password,
+            child.getDataValue('source'), child.getDataValue('streamName'), streams.isEmpty() ? null : streams)
+    }
 }
 
 // ============================================================================
 // child management (called by the app)
 // ============================================================================
-def createChild(String dni, String streamName, String base, String host, Integer rtspPort, String username, String password, String source) {
+def createChild(String dni, String label, String primaryStream, Map streams, String base, String host,
+                Integer rtspPort, String username, String password, String source) {
     if (isEmpty(dni)) { logError 'createChild: missing dni'; return }
     def child = getChildDevice(dni)
     boolean isNew = false
     if (!child) {
         child = addChildDevice('jpage4500', CHILD_DRIVER, dni,
-            [label: streamName ?: 'Camera', isComponent: true, name: CHILD_DRIVER])
+            [label: label ?: primaryStream ?: 'Camera', isComponent: true, name: CHILD_DRIVER])
         isNew = true
-        logInfo "createChild: created '${streamName}' (${dni})"
+        logInfo "createChild: created '${label}' (${dni})"
+    } else if (label && child.getLabel() != label) {
+        child.setLabel(label)
     }
+    if (streams != null && !streams.isEmpty()) child.updateDataValue('streamsJson', groovy.json.JsonOutput.toJson(streams))
+    if (label) child.updateDataValue('cameraBase', label)
     child.setDebug(state.debug == true)
-    child.configure(base, host, rtspPort, username, password, source, streamName)
-    // configure() (re)publishes the urls every time; only bump the image cache-buster on first create so a
-    // plain Done doesn't force existing cameras' image URLs to change (initialize() -> refresh() -> take()).
+    child.configure(base, host, rtspPort, username, password, source, primaryStream, streams)
     if (isNew) child.initialize()
     runIn(3, 'recomputeSummary')
     return child
@@ -82,13 +89,11 @@ def deleteChild(String dni) {
 def deleteChildren()    { getChildDevices().each { deleteChildDevice(it.deviceNetworkId) } }
 def removeAllChildren() { deleteChildren() }
 
-// relay the app-configured snapshot poll interval to every child (informational; the app owns the timer)
 def setRefreshInterval(seconds) {
     Integer sec = (seconds ?: 0) as Integer
     getChildDevices().each { it.setRefreshInterval(sec) }
 }
 
-// single debug toggle: the app broadcasts here, we fan out to children (and gate our own logs)
 def setDebug(flag) {
     state.debug = (flag as Boolean)
     getChildDevices().each { it.setDebug(flag) }
@@ -97,13 +102,15 @@ def setDebug(flag) {
 // ============================================================================
 // aggregate status
 // ============================================================================
-// children call this when their status changes
 def childStatusChanged() { runIn(1, 'recomputeSummary') }
 
 def recomputeSummary() {
     def kids = getChildDevices()
     int online = 0
-    kids.each { k -> if (k.currentValue('status') == 'online') online++ }
+    kids.each { k ->
+        String st = k.currentValue('status')
+        if (st == 'online' || st == 'degraded') online++
+    }
     sendEventIfChanged('cameraCount', kids.size())
     sendEventIfChanged('onlineCount', online)
     String summary
@@ -113,9 +120,26 @@ def recomputeSummary() {
 }
 
 // ============================================================================
-// util (same go2rtc prefix as the child driver so the Logs filter shows both together)
+// util
 // ============================================================================
-private void sendEventIfChanged(String name, def value, String unit = null) {
+private Map parseStreamsJson(String json) {
+    if (!json) return [:]
+    try {
+        def parsed = new groovy.json.JsonSlurper().parseText(json)
+        if (parsed instanceof Map) {
+            Map result = [:]
+            parsed.each { k, v -> result[k.toString()] = v.toString() }
+            return result
+        }
+    } catch (ignored) { }
+    return [:]
+}
+
+private void sendEventIfChanged(String name, def value) {
+    sendEventIfChanged(name, value, null)
+}
+
+private void sendEventIfChanged(String name, def value, String unit) {
     if (value == null) return
     if (device.currentValue(name)?.toString() != value.toString()) {
         if (unit) sendEvent(name: name, value: value, unit: unit)
