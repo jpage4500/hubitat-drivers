@@ -1,11 +1,11 @@
 {
   "packageName": "go2rtc",
   "author": "Joe Page",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "minimumHEVersion": "2.1.9",
-  "dateReleased": "2026-07-13",
+  "dateReleased": "2026-07-15",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "Initial release - turn go2rtc camera streams into Hubitat devices (still image + RTSP)",
+  "releaseNotes": "Fix stale per-stream child devices not being removed after camera grouping",
   "apps": [
     {
       "id": "f0f6fdb2-08fb-4078-9abb-58fa6278df15",
