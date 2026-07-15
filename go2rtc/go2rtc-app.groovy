@@ -145,7 +145,7 @@ def mainPage() {
                 }
                 def orphans = findOrphanChildren(streams, groups)
                 if (orphans) {
-                    paragraph "<hr><b>No longer on the server</b><br><small>These cameras were removed or renamed on go2rtc and will be deleted when you hit Done.</small>"
+                    paragraph "<hr><b>Devices to remove</b><br><small>These devices no longer match a selected camera group (for example, old per-stream devices after grouping). They will be removed when you hit <b>Done</b>.</small>"
                     orphans.sort { it.getLabel() }.each { child ->
                         paragraph orphanRow(child)
                     }
@@ -243,11 +243,7 @@ private Map summarizeStream(info) {
 }
 
 // ----------------------------------------------------------------------------
-// camera grouping — one Hubitat device per camera, multiple go2rtc quality streams
-//
-// go2rtc YAML has no native main/sub grouping. This app groups streams by name suffix
-// (e.g. front_door + front_door_sub) or by per-camera UI overrides (map_<base>_<role>).
-// Each grouped device exposes videoMain, videoSub, etc. plus selectStream(role).
+// camera grouping
 // ----------------------------------------------------------------------------
 // parse stream name into {base, role}; bare name or _main suffix -> role main
 private Map parseStreamName(String name) {
@@ -328,20 +324,29 @@ private String groupRow(String base, Map roleMap, child) {
 
 private String orphanRow(child) {
     String sn = child.getDataValue('streamName') ?: child.getLabel()
+    String base = child.getDataValue('cameraBase')
+    String detail = base ? "group '${base}', stream '${sn}'" : "stream '${sn}'"
     return "<div style='opacity:0.5'>&#128465; <b>${child.getLabel()}</b> <span style='color:#b00'>(will be removed)</span>" +
-        "<br><span style='font-size:smaller'>primary stream '${sn}' no longer exists on the server</span></div>"
+        "<br><span style='font-size:smaller'>${detail}</span></div>"
+}
+
+private Set buildWantedDnis(Map streams, Map groups) {
+    Set wanted = [] as Set
+    groups.each { base, autoGroup ->
+        String cid = cleanId(base)
+        if (isGroupSelected(cid)) {
+            Map roleMap = resolveRoleMap(base, autoGroup, streams)
+            String primary = roleMap.main ?: firstMappedStream(roleMap)
+            if (primary) wanted << childDni(base)
+        }
+    }
+    return wanted
 }
 
 private List findOrphanChildren(Map streams, Map groups) {
-    Set validPrimaries = [] as Set
-    groups.each { base, autoGroup ->
-        Map roleMap = resolveRoleMap(base, autoGroup, streams)
-        String primary = roleMap.main ?: firstMappedStream(roleMap)
-        if (primary) validPrimaries << primary
-    }
+    Set wanted = buildWantedDnis(streams, groups)
     return (getParentDevice()?.getChildDevices() ?: []).findAll { child ->
-        String primary = child.getDataValue('streamName')
-        !validPrimaries.contains(primary)
+        !wanted.contains(child.deviceNetworkId)
     }
 }
 
@@ -372,7 +377,7 @@ private void syncChildren() {
     if (!parent) { logError 'syncChildren: no parent device'; return }
     Map streams = state.streams ?: [:]
     Map groups = buildCameraGroups(streams)
-    Set wanted = [] as Set
+    Set wanted = buildWantedDnis(streams, groups)
     groups.each { base, autoGroup ->
         String cid = cleanId(base)
         if (isGroupSelected(cid)) {
@@ -383,13 +388,10 @@ private void syncChildren() {
                 def streamData = streams[primary]
                 parent.createChild(dni, base, primary, roleMap, serverBase(), serverHost(), rtspPort(),
                     settings.username, settings.password, streamData?.source)
-                wanted << dni
             }
         }
     }
-    parent.getChildDevices().each { child ->
-        if (!wanted.contains(child.deviceNetworkId)) parent.deleteChild(child.deviceNetworkId)
-    }
+    parent.reconcileChildren(wanted as List)
 }
 
 private boolean isGroupSelected(String cid) {

@@ -86,6 +86,21 @@ def deleteChild(String dni) {
     runIn(2, 'recomputeSummary')
 }
 
+// remove child devices whose DNI is not in the wanted set (called from the app after sync)
+def reconcileChildren(List wantedDnis) {
+    Set wanted = (wantedDnis ?: []) as Set
+    List removed = []
+    getChildDevices().each { child ->
+        String dni = child.deviceNetworkId
+        if (!wanted.contains(dni)) {
+            deleteChildDevice(dni)
+            removed << dni
+        }
+    }
+    if (removed) logInfo "reconcileChildren: removed ${removed.size()} device(s): ${removed.join(', ')}"
+    runIn(2, 'recomputeSummary')
+}
+
 def deleteChildren()    { getChildDevices().each { deleteChildDevice(it.deviceNetworkId) } }
 def removeAllChildren() { deleteChildren() }
 
