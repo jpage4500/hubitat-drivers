@@ -42,6 +42,10 @@ App setting overrides: `map_<cleanBase>_<role>` enum per group.
   stream. `take()` bumps cache-buster; `publishUrls()` does not.
 - **Multi-quality RTSP**: each role gets a fixed attribute (`videoMain`, `videoSub`, ...). `video` = active quality
   (default `main`). `selectStream(role)` command switches `video`. `streamRoles` JSON attribute for apps/debug.
+  Stream names are **path-encoded** in RTSP urls (`pathEnc`: space → `%20`, not `+`) — a raw space yields an
+  invalid URI that many RTSP clients reject.
+- **`videoWeb`**: go2rtc HTTP player page (`{server}/stream.html?src=NAME`, on the 1984 API port) for the active
+  stream — follows `selectStream` like `video`. For viewers that want the browser player, not raw RTSP.
 - **VideoCapture** is declared only because the user asked for it; Hubitat's def is useless for live cameras.
 - Server URL / host / RTSP port / creds are pushed app → parent (`setServer`) → child (`configure`). Creds in
   child's `state`; embedded in RTSP urls but NOT in `image`/`snapshotUrl`.

@@ -9,7 +9,8 @@
  *     refresh is actually requested (take() / refresh() / the app's poll timer). Nothing is downloaded to the
  *     hub - the dashboard / browser fetches the frame straight from go2rtc.
  *   - VideoCapture: Hubitat has no useful stream definition here, so RTSP URLs are published in custom
- *     attributes: video (active quality), videoMain, videoSub, videoExt, etc.
+ *     attributes: video (active quality), videoMain, videoSub, videoExt, etc. videoWeb holds the go2rtc
+ *     HTTP player URL ({server}/stream.html?src=NAME) for the active quality.
  *   - selectStream(role): switch the active "video" attribute between configured qualities.
  *
  * Server URL / host / RTSP port / credentials are pushed from the app via the parent's configure() call.
@@ -44,6 +45,7 @@ metadata {
         attribute 'videoHigh', 'string'
         attribute 'videoSd', 'string'
         attribute 'videoHd', 'string'
+        attribute 'videoWeb', 'string'        // go2rtc HTTP player URL for active stream ({server}/stream.html?src=NAME)
         attribute 'snapshotUrl', 'string'     // live still-image URL, no cache-buster
         attribute 'streamName', 'string'      // primary (main) go2rtc stream name
         attribute 'streamRoles', 'string'     // JSON map of role -> stream name
@@ -117,7 +119,14 @@ private Map streamRoles() {
 private String rtspUrl(String name) {
     if (isEmpty(name)) return null
     String creds = isEmpty(state.username) ? '' : "${state.username}:${state.password ?: ''}@"
-    return "rtsp://${creds}${host()}:${rtspPort()}/${name}"
+    // name is a URL path segment - encode it (a raw space etc. yields an invalid URI many RTSP clients reject)
+    return "rtsp://${creds}${host()}:${rtspPort()}/${pathEnc(name)}"
+}
+
+// go2rtc HTTP player page for a stream ({server}/stream.html?src=NAME) - opens in a browser / desktop viewer
+private String webUrl(String name) {
+    if (isEmpty(name) || isEmpty(serverBase())) return null
+    return "${serverBase()}/stream.html?src=${urlEnc(name)}"
 }
 
 private String pickDefaultRole(Map roles) {
@@ -150,6 +159,7 @@ private void publishUrls() {
     if (primary) updateDataValue('streamName', primary)
     sendEventIfChanged('streamName', primary)
     sendEventIfChanged('video', rtspUrl(activeName))
+    sendEventIfChanged('videoWeb', webUrl(activeName))
 
     if (serverBase() && primary) {
         sendEventIfChanged('snapshotUrl', snapshotUrl(primary))
@@ -313,6 +323,8 @@ private String maskUrl(String url) {
 }
 
 private String urlEnc(String s) { return java.net.URLEncoder.encode(s ?: '', 'UTF-8') }
+// encode a stream name for use as a URL PATH segment: spaces -> %20 (not '+', which a path treats literally)
+private String pathEnc(String s) { return urlEnc(s).replace('+', '%20') }
 private String nowStr() { new Date().format('yyyy-MM-dd HH:mm:ss') }
 private boolean isEmpty(def v) { return v == null || (v instanceof String && v.trim().isEmpty()) }
 
