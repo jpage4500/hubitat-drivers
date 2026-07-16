@@ -1,11 +1,11 @@
 {
   "packageName": "go2rtc",
   "author": "Joe Page",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2026-07-15",
   "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
-  "releaseNotes": "Stream mapping UI only saves real manual overrides; auto-grouping updates when stream names change",
+  "releaseNotes": "- URL encode video attribute for device names with spaces\n- Add a new videoWeb attribute which exposes the go2rtc HTTP stream URL",
   "apps": [
     {
       "id": "f0f6fdb2-08fb-4078-9abb-58fa6278df15",
