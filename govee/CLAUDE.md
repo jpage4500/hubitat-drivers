@@ -4,7 +4,10 @@ Single standalone driver: `govee-pool.groovy` (driver name **Govee Pool Thermost
 devices. Not registered in the root `repository.json` and has no `packageManifest.json`, so it is
 **not HPM-installable** — it is imported by raw URL.
 
-## Why the sniffed token is mandatory
+Two ways to authenticate: paste a sniffed token (`setAuthToken`), or let the driver log in with the Govee
+account email/password and fetch it itself (`useAutoLogin`, default off). See "Automatic login" below.
+
+## Why the official API is not an option
 
 Govee's **official** developer API (`Govee-API-Key` header, `openapi.api.govee.com`) does **not** expose
 the GoveeLife Smart Pool Thermometer — it isn't in the supported-device list, and Govee has declined
@@ -15,9 +18,8 @@ GET https://app2.govee.com/bff-app/v1/device/list
 headers: clientId, clientType: 0, appVersion, Host, Authorization: Bearer <JWT>
 ```
 
-Both header values are captured from the phone app's HTTPS traffic (HTTP Toolkit on a rooted Android
-device — `img.png` is the original capture). There is no way to obtain them programmatically that is worth
-relying on; see "login endpoint" below.
+Both header values can be captured from the phone app's HTTPS traffic (HTTP Toolkit on a rooted Android
+device — `img.png` is the original capture), or obtained by logging in (see "Automatic login" below).
 
 ## Response shape gotchas
 
@@ -57,13 +59,47 @@ workaround). The two legacy inputs are kept `required: false` for backwards comp
 - `normalizeToken()` trims, strips a leading `Bearer `, strips surrounding quotes and removes **all**
   whitespace; an embedded newline from a wrapped paste is otherwise a silent 401
 
-### The login endpoint — deliberately not used
+### Automatic login (optional, default off)
 
-`POST https://app2.govee.com/account/rest/account/v1/login` with `{email, password, client:<uuid>}` returns
-a fresh token. It was evaluated and **rejected**: there is no refresh endpoint (clients just re-login), it
-has been returning **HTTP 454** for govee2mqtt users since ~March 2026, and it enforces the same minimum
-`appVersion`. Not worth sending an account password to an endpoint that is currently broken. Re-capture by
-hand instead; the expiry attributes make that a scheduled chore rather than a surprise outage.
+Protocol taken from [wez/govee2mqtt PR #656](https://github.com/wez/govee2mqtt/pull/656) — the fix for the
+454 wall that broke every client in March 2026. **The v1 login endpoint is dead**; v2 accepts a verification
+code:
+
+```
+POST /account/rest/account/v2/login        {email, password, client[, code]}
+  -> {status: 200, client: {token, tokenExpireCycle, refreshToken, topic, accountId, A, B, ...}}
+  -> body status 454 = a verification code is required
+  -> body status 455 = the code was wrong or expired
+POST /account/rest/account/v1/verification {type: 8, email}     -> Govee emails the code (~15 min validity)
+```
+
+Headers for both: `appVersion` (**7.4.10** — the v2 endpoint rejects older), `clientId`, `clientType: 1`,
+`iotVersion: 0`, `timestamp` (ms), and a phone-like `User-Agent`
+(`GoveeHome/<ver> (com.ihoment.GoVeeSensor; build:8; iOS 18.4.0) Alamofire/5.10.2`). Note the driver polls
+`device/list` with `appVersion 7.0.30` / `clientType 0` (what the sniffed capture used, known-working) but
+logs in with `7.4.10` / `clientType 1`; the `goveeAppVersion` preference overrides both.
+
+Key invariants:
+
+- **`state.loginClientId` must stay stable.** There is no refresh endpoint — "refreshing" is logging in
+  again, and a *new* client id makes Govee demand a new emailed verification code. It is generated once and
+  never regenerated (not even by `clearAuthToken`).
+- A login-issued token pairs with the login client id; a sniffed token pairs with the sniffed `clientId`.
+  `apiClientId()` keeps each pair together. Whether `bff-app/v1/device/list` actually *requires* the
+  matching client id is unverified — `handleAuthFailure()` self-heals by retrying once with the sniffed
+  clientId (`state.useSniffedClientId`) when a **freshly issued** login token is rejected within 2 minutes.
+- 2FA is expected to be **one-time per client id**, not per login — that assumption is what makes unattended
+  re-login viable. If a later login returns 454 anyway, the driver requests a fresh code, sets
+  `authStatus = codeRequired` and stops retrying until the user runs `submitLoginCode`.
+- Re-login triggers: the daily expiry check, a 401 during a poll, and the manual `login` command. There is
+  deliberately **no** long `runIn` timer — a daily cron survives reboots, a week-long `runIn` doesn't.
+- `reloginThresholdMs()` = 1 day, capped at ¼ of the token's real lifetime (`exp - iat`, or
+  `tokenExpireCycle`). Without that cap a short-lived token would sit permanently inside the re-login
+  window. `doLogin()` also self-rate-limits to once per 5 min, which is what stops
+  `storeToken → parseTokenExpiry → publishTokenStatus → doLogin` from recursing.
+- **454 means "verification code required", not "app version too low."** The poll's version check is keyed
+  on the message text, not on a status code.
+- Never log the password, the verification code, the request body/params, or the full token.
 
 ## Scheduling — the bug that started all this
 

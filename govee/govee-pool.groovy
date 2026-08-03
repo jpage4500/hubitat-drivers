@@ -37,6 +37,17 @@ import groovy.json.JsonSlurper
 @Field static final Long AUTH_RETRY_MS = 1800000L       // pause 30 min between polls with a known-bad token
 @Field static final List POLL_BACKOFF_SEC = [60, 300, 900]
 
+// --- login (optional): fetches/re-fetches the token so it doesn't have to be sniffed by hand ---
+// protocol per wez/govee2mqtt PR #656. the v1 login endpoint is dead (Govee now answers 454 = "2FA
+// verification required"); v2 accepts an emailed verification code in the body
+@Field static final String LOGIN_URL = 'https://app2.govee.com/account/rest/account/v2/login'
+@Field static final String VERIFICATION_URL = 'https://app2.govee.com/account/rest/account/v1/verification'
+@Field static final String LOGIN_APP_VERSION = '7.4.10' // the v2 login endpoint needs a recent version
+@Field static final Integer VERIFICATION_TYPE = 8       // "email me a login verification code"
+@Field static final Long LOGIN_MIN_GAP_MS = 300000L     // never login more than once per 5 min
+@Field static final List LOGIN_BACKOFF_SEC = [900, 3600, 14400, 43200]
+@Field static final Long RELOGIN_BEFORE_MS = 86400000L  // re-login when the token has < 1 day left
+
 // refreshInterval (seconds) -> a VALID quartz cron.
 // the old code built "0 0/${sec/60} * * * ?" which is out of range for anything >= 1 hour (minute step
 // must be 0-59) -- schedule() threw and aborted updated() before it could poll
@@ -68,23 +79,29 @@ metadata {
 
         attribute "lastUpdatedMs", "number"
         attribute "lastUpdated", "string"
-        attribute "authStatus", "enum", ["ok", "missing", "invalid", "expired", "expiring", "error"]
+        attribute "authStatus", "enum", ["ok", "missing", "invalid", "expired", "expiring", "error", "codeRequired", "loginFailed"]
         attribute "lastError", "string"
         attribute "tokenExpires", "string"
         attribute "tokenDaysLeft", "number"
-        attribute "tokenSource", "enum", ["command", "preferences", "none"]
+        attribute "tokenSource", "enum", ["login", "command", "preferences", "none"]
         attribute "sourceDevice", "string"
 
         command "setAuthToken", [[name: "token*", type: "STRING",
             description: "Paste the whole Authorization token from the Govee app (a leading \"Bearer \" is stripped)"]]
         command "clearAuthToken"
         command "listDevices"
+        command "login"
+        command "submitLoginCode", [[name: "code*", type: "STRING",
+            description: "The verification code Govee emailed you (valid ~15 minutes)"]]
+        command "requestLoginCode"
     }
 }
 
 preferences {
+    // not `required: true` any more - with automatic login the driver generates its own client id
     input("clientId", "string", title: "Client ID",
-        description: "the clientId header the Govee app sends", required: true)
+        description: "the clientId header the Govee app sends - needed for a hand-pasted token, ignored when logging in automatically",
+        required: false)
 
     input("goveeDeviceId", "string", title: "Govee device id (optional)",
         description: "only needed if the account has more than one temperature sensor - run the \"List Devices\" command to see the ids",
@@ -100,8 +117,16 @@ preferences {
         required: false, defaultValue: 7, range: "0..90")
 
     input("goveeAppVersion", "string", title: "Govee app version header",
-        description: "default ${DEF_APP_VERSION} - bump it if requests start failing with an \"app version is too low\" message",
+        description: "overrides both endpoints - defaults are ${DEF_APP_VERSION} for polling and ${LOGIN_APP_VERSION} for login. " +
+            "bump it if requests start failing with an \"app version is too low\" message",
         required: false)
+
+    input("useAutoLogin", "bool", title: "Fetch the token automatically (log in to Govee)",
+        description: "logs in with your Govee account instead of sniffing a token by hand, and re-fetches it before it expires. " +
+            "Govee requires a one-time emailed verification code - see the README. leave this off to keep pasting tokens manually",
+        defaultValue: false)
+    input("goveeEmail", "string", title: "Govee account email", required: false)
+    input("goveePassword", "password", title: "Govee account password", required: false)
 
     input("authToken1", "string", title: "Authorization Token (legacy 1/2)",
         description: "prefer the \"Set Auth Token\" command - it takes the whole token in one field. these two are kept for existing installs",
@@ -146,6 +171,9 @@ def updated() {
     state.remove('authRetryAtMs')           // an explicit Save means "try again now"
     state.remove('temperatureHistory')      // dead state from the removed history block
     state.remove('lastError')               // now an attribute
+    // an explicit Save also means "stop sulking about the last login failure and try again"
+    state.loginFailCount = 0
+    state.remove('loginBlockedReason')
 
     // guarded: a scheduling failure must NEVER abort updated() before the immediate poll below.
     // that is exactly what the old invalid-cron bug did - Save appeared to do nothing at all
@@ -157,14 +185,29 @@ def updated() {
 
     String token = activeToken()
     Integer sec = intervalSecs()
+    boolean autoLogin = (settings?.useAutoLogin == true)
     // un-gated so hitting Save always leaves visible evidence of what happened
     logInfo "updated: interval=${sec}s, clientId=${isEmpty(settings?.clientId) ? 'MISSING' : 'set'}, " +
-        "token=${maskToken(token)} (source: ${state.tokenSource ?: 'none'}), expires=${fmt(state.tokenExpiresAt as Long)}"
+        "autoLogin=${autoLogin}, token=${maskToken(token)} (source: ${state.tokenSource ?: 'none'}), " +
+        "expires=${fmt(state.tokenExpiresAt as Long)}"
 
-    if (isEmpty(settings?.clientId) || isEmpty(token)) {
+    // no usable token, but we can go and get one
+    if (isEmpty(token) && autoLogin) {
+        if (doLogin(null, true)) return      // the login callback polls on success
+    }
+
+    if (isEmpty(token)) {
         setAuthStatus('missing')
-        setLastError('Client ID and/or Authorization token not set')
-        logWarn "not polling: set the Client ID, then paste a token with the \"Set Auth Token\" command"
+        setLastError(autoLogin ? 'no token yet - run the "Login" command'
+                               : 'Authorization token not set - use the "Set Auth Token" command')
+        logWarn autoLogin ? 'not polling: set the Govee account email and password, then run "Login"'
+                          : 'not polling: paste a token with the "Set Auth Token" command'
+        return
+    }
+    if (isEmpty(settings?.clientId) && state.tokenSource != 'login') {
+        setAuthStatus('missing')
+        setLastError('Client ID not set')
+        logWarn 'not polling: a hand-pasted token also needs the Client ID from the same capture'
         return
     }
     refreshData()
@@ -197,6 +240,7 @@ private void scheduleJobs() {
     unschedule('refreshData')
     unschedule('checkTokenExpiry')
     unschedule('pollRetry')
+    unschedule('loginRetry')
 
     Integer sec = intervalSecs()
     if (sec > 0) {
@@ -334,6 +378,279 @@ private String maskToken(String t) {
 }
 
 // ----------------------------------------------------------------------------
+// login (optional) - fetch and re-fetch the token instead of sniffing it by hand
+//
+// protocol per wez/govee2mqtt PR #656:
+//   POST /account/rest/account/v2/login  {email, password, client[, code]}
+//     -> {status: 200, client: {token, tokenExpireCycle, refreshToken, topic, accountId, ...}}
+//     -> body status 454 = a verification code is required (Govee emails it, valid ~15 min)
+//     -> body status 455 = the code was wrong or expired
+//   POST /account/rest/account/v1/verification  {type: 8, email}   -> sends the code
+// there is NO refresh endpoint - "refreshing" means logging in again, which is why the client id has
+// to stay stable (a new client id makes Govee ask for a new verification code)
+// ----------------------------------------------------------------------------
+
+private String loginClientId() {
+    if (isEmpty(state.loginClientId)) {
+        state.loginClientId = UUID.randomUUID().toString()
+        logDebug "generated a login client id (${state.loginClientId.take(8)}...)"
+    }
+    return state.loginClientId
+}
+
+private String loginAppVersion() {
+    String v = settings?.goveeAppVersion?.toString()?.trim()
+    return isEmpty(v) ? LOGIN_APP_VERSION : v
+}
+
+private Map loginHeaders() {
+    String v = loginAppVersion()
+    return [
+        appVersion  : v,
+        clientId    : loginClientId(),
+        clientType  : '1',
+        iotVersion  : '0',
+        timestamp   : "${now()}".toString(),
+        'User-Agent': "GoveeHome/${v} (com.ihoment.GoVeeSensor; build:8; iOS 18.4.0) Alamofire/5.10.2".toString(),
+        Host        : API_HOST
+    ]
+}
+
+// manual "log in now"
+def login() {
+    doLogin(null, true)
+}
+
+def submitLoginCode(String code) {
+    String c = code?.toString()?.trim()
+    if (isEmpty(c)) {
+        logError "submitLoginCode: no code given"
+        setLastError('submitLoginCode was called without a code')
+        return
+    }
+    logInfo "submitLoginCode: retrying the login with the verification code"
+    doLogin(c, true)
+}
+
+def requestLoginCode() {
+    String email = settings?.goveeEmail?.toString()?.trim()
+    if (isEmpty(email)) {
+        logError "requestLoginCode: set the Govee account email first"
+        setLastError('Govee account email not set')
+        return
+    }
+    requestVerificationCode(email)
+}
+
+// returns false if the attempt was not even made
+private boolean doLogin(String code, boolean manual = false) {
+    if (!manual && settings?.useAutoLogin != true) return false
+
+    String email = settings?.goveeEmail?.toString()?.trim()
+    String pw = settings?.goveePassword
+    if (isEmpty(email) || isEmpty(pw)) {
+        logWarn "login: set the Govee account email and password first"
+        setLastError('Govee account email/password not set')
+        return false
+    }
+    if (!manual && !isEmpty(state.loginBlockedReason)) {
+        logDebug "login skipped: ${state.loginBlockedReason}"
+        return false
+    }
+    Long last = (state.lastLoginAttemptMs ?: 0) as Long
+    if (!manual && (now() - last) < LOGIN_MIN_GAP_MS) {
+        logDebug "login skipped: last attempt was ${((now() - last) / 1000L) as Integer}s ago"
+        return false
+    }
+
+    Map body = [email: email, password: pw, client: loginClientId()]
+    if (!isEmpty(code)) body.code = code
+
+    state.lastLoginAttemptMs = now()
+    logInfo "login: signing in as ${maskEmail(email)}${isEmpty(code) ? '' : ' with a verification code'}"
+    // NOTE: never log `body` or `params` - they carry the account password in cleartext
+    asynchttpPost('loginCallback', [
+        uri               : LOGIN_URL,
+        headers           : loginHeaders(),
+        body              : body,
+        requestContentType: 'application/json',
+        contentType       : 'application/json',
+        timeout           : HTTP_TIMEOUT
+    ], [withCode: !isEmpty(code)])
+    return true
+}
+
+def loginCallback(resp, data) {
+    boolean withCode = (data?.withCode == true)
+    Map json = responseJson(resp)
+    Integer status = bodyStatus(json, resp)
+    String message = json?.message?.toString()
+
+    // instanceof guard: the response carries `client` as an object on success, but an error body may
+    // omit it or hand back something else entirely (and .token on a String throws)
+    Map client = (json?.client instanceof Map) ? (json.client as Map) : null
+    String token = client?.token
+    if (!isEmpty(token)) {
+        // a login token is bound to the login client id - use that pairing from now on
+        state.remove('useSniffedClientId')
+        state.loginFailCount = 0
+        state.remove('loginBlockedReason')
+        setAuthStatus('ok')
+        setLastError('none')
+        state.pollAttempt = 0
+        storeToken(token, 'login')
+        // the JWT's exp wins if present; tokenExpireCycle (seconds) is the fallback
+        Long cycle = null
+        try { cycle = (client.tokenExpireCycle == null) ? null : (client.tokenExpireCycle as Long) } catch (ignored) { }
+        if (cycle && cycle > 0) {
+            if (!state.tokenLifetimeMs) state.tokenLifetimeMs = cycle * 1000L
+            if (!state.tokenExpiresAt) {
+                state.tokenExpiresAt = now() + (cycle * 1000L)
+                publishTokenStatus()
+            }
+        }
+        if (client.accountId != null) state.accountId = client.accountId.toString()
+        logInfo "login ok: token ${maskToken(token)}, expires ${fmt(state.tokenExpiresAt as Long)}" +
+            (cycle ? " (Govee says the cycle is ${cycle}s)" : '')
+        refreshData()
+        return
+    }
+
+    if (status == 454) {
+        // 2FA: Govee wants an emailed verification code before it will issue a token
+        setAuthStatus('codeRequired')
+        logWarn "login: Govee requires a verification code (454)"
+        requestVerificationCode(settings?.goveeEmail?.toString()?.trim())
+        return
+    }
+    if (status == 455) {
+        setAuthStatus('codeRequired')
+        setLastError('the verification code was wrong or expired - run "Request Login Code" for a new one')
+        logError "login: the verification code was wrong or expired (455) - run \"Request Login Code\", " +
+            "then \"Submit Login Code\" with the new code"
+        return
+    }
+    loginFailed(status, message ?: describeResponse(resp), withCode)
+}
+
+private void requestVerificationCode(String email) {
+    if (isEmpty(email)) {
+        setLastError('Govee account email not set - cannot request a verification code')
+        logError "requestVerificationCode: no email set"
+        return
+    }
+    state.codeRequestedMs = now()
+    logInfo "requesting a verification code for ${maskEmail(email)}"
+    asynchttpPost('verificationCallback', [
+        uri               : VERIFICATION_URL,
+        headers           : loginHeaders(),
+        body              : [type: VERIFICATION_TYPE, email: email],
+        requestContentType: 'application/json',
+        contentType       : 'application/json',
+        timeout           : HTTP_TIMEOUT
+    ])
+}
+
+def verificationCallback(resp, data) {
+    Map json = responseJson(resp)
+    Integer status = bodyStatus(json, resp)
+    if (status == 200 || status == 0) {
+        setAuthStatus('codeRequired')
+        setLastError('verification code emailed - run "Submit Login Code" with it (valid ~15 minutes)')
+        logWarn "a verification code has been emailed to ${maskEmail(settings?.goveeEmail?.toString()?.trim())} - " +
+            "run the \"Submit Login Code\" command with it within ~15 minutes"
+    } else {
+        setAuthStatus('loginFailed')
+        setLastError("could not request a verification code (${status}): ${json?.message ?: describeResponse(resp)}")
+        logError "requestVerificationCode failed (${status}): ${json?.message ?: describeResponse(resp)}"
+    }
+}
+
+private void loginFailed(Integer status, String msg, boolean withCode) {
+    state.loginFailCount = ((state.loginFailCount ?: 0) as Integer) + 1
+    String m = (msg ?: '').toString()
+
+    // an app-version rejection can never succeed on retry - stop until the user changes something
+    if (m.toLowerCase().contains('app version')) {
+        state.loginBlockedReason = "Govee refused the login (${status}): ${m}"
+        setAuthStatus('loginFailed')
+        setLastError("${state.loginBlockedReason} - set the \"Govee app version header\" preference")
+        logError "${state.loginBlockedReason}. automatic login stays off until you Save Preferences again. " +
+            "try a newer value in the \"Govee app version header\" preference (login default ${LOGIN_APP_VERSION})"
+        return
+    }
+
+    Integer idx = Math.min(((state.loginFailCount as Integer) - 1), LOGIN_BACKOFF_SEC.size() - 1)
+    Integer delay = LOGIN_BACKOFF_SEC[idx]
+    setAuthStatus('loginFailed')
+    setLastError("login failed (${status})${isEmpty(m) ? '' : ": ${m}"}")
+    logWarn "login failed (${status}${isEmpty(m) ? '' : ": ${m}"})${withCode ? ' [with a verification code]' : ''} - " +
+        "attempt ${state.loginFailCount}, retrying in ${delay}s"
+    runIn(delay, 'loginRetry', [overwrite: true])
+}
+
+def loginRetry() {
+    // manual=true: the backoff ladder already rate-limits this, and the 5 min gap would skip it
+    doLogin(null, true)
+}
+
+// pulls the JSON body out of an async response whether or not the HTTP status was an error
+// (Govee answers the login endpoint with HTTP 454/455 *and* a status field in the body)
+private Map responseJson(resp) {
+    def json = null
+    try {
+        if (resp?.hasError()) {
+            try { json = resp.getErrorJson() } catch (ignored) { }
+            if (json == null) {
+                String body = null
+                try { body = resp.getErrorData()?.toString() } catch (ignored) { }
+                if (body && body.trim().startsWith('{')) json = new JsonSlurper().parseText(body)
+            }
+        } else {
+            try { json = resp.json } catch (ignored) { }
+            if (json == null) {
+                String body = null
+                try { body = resp.data?.toString() } catch (ignored) { }
+                if (body && body.trim().startsWith('{')) json = new JsonSlurper().parseText(body)
+            }
+        }
+    } catch (e) {
+        logDebug "responseJson: ${e.message}"
+    }
+    return (json instanceof Map) ? json : null
+}
+
+// prefers the body's status field, falls back to the HTTP status
+private Integer bodyStatus(Map json, resp) {
+    try {
+        if (json?.status != null) return (json.status as BigDecimal).intValue()
+    } catch (ignored) { }
+    try {
+        return (resp?.status ?: 0) as Integer
+    } catch (ignored) {
+        return 0
+    }
+}
+
+private String describeResponse(resp) {
+    try {
+        if (resp?.hasError()) {
+            return (resp.getErrorMessage() ?: resp.getErrorData()?.toString()?.take(200) ?: 'request failed')
+        }
+        return (resp?.data?.toString()?.take(200) ?: 'no response body')
+    } catch (e) {
+        return 'request failed'
+    }
+}
+
+private String maskEmail(String e) {
+    if (isEmpty(e)) return '(not set)'
+    if (!e.contains('@')) return '***'
+    def parts = e.split('@')
+    return "${parts[0].take(1)}***@${parts[-1]}".toString()
+}
+
+// ----------------------------------------------------------------------------
 // token expiry (the token is a JWT - read the exp claim instead of waiting for a silent outage)
 // ----------------------------------------------------------------------------
 
@@ -368,7 +685,8 @@ private void parseTokenExpiry(String token) {
     if (exp) {
         state.tokenExpiresAt = exp
         Long iat = epochMs(claims?.iat)
-        // logging the lifetime finally answers "how long do Govee tokens actually last?"
+        // the lifetime answers "how long do Govee tokens actually last?" and sets the re-login window
+        if (iat && exp > iat) state.tokenLifetimeMs = exp - iat
         logDebug "parseTokenExpiry: issued ${fmt(iat)}, expires ${fmt(exp)}" +
             (iat ? " (lifetime ${round1((exp - iat) / 86400000.0d)} days)" : '')
     } else {
@@ -376,6 +694,15 @@ private void parseTokenExpiry(String token) {
         logDebug "parseTokenExpiry: no exp claim in the token - expiry is unknown"
     }
     publishTokenStatus()
+}
+
+// how early to re-login. a whole day for a long-lived token, but never more than a quarter of the
+// token's actual lifetime - otherwise a short-lived token would sit permanently inside the window
+private Long reloginThresholdMs() {
+    Long threshold = RELOGIN_BEFORE_MS
+    Long life = state.tokenLifetimeMs as Long
+    if (life && (life.intdiv(4)) < threshold) threshold = life.intdiv(4)
+    return Math.max(threshold, 300000L)
 }
 
 // daily at 03:05 and after every successful poll
@@ -395,15 +722,25 @@ private void publishTokenStatus() {
     sendEventIfChanged('tokenExpires', fmt(exp))
     sendEventIfChanged('tokenDaysLeft', days)
 
+    // with automatic login on, an expiring token is just a re-login - no human needed.
+    // doLogin() self-rate-limits to once per 5 min, so this can't loop even though storing the new
+    // token calls back into publishTokenStatus()
+    boolean canRelogin = (settings?.useAutoLogin == true && isEmpty(state.loginBlockedReason))
+    if (canRelogin && msLeft < reloginThresholdMs()) {
+        logDebug "token expires ${fmt(exp)} (${days} day(s)) - trying to log in again"
+        if (doLogin(null)) return            // the login callback republishes status and polls
+    }
+
     Integer warn = (settings?.expiryWarnDays == null) ? 7 : (settings.expiryWarnDays as Integer)
+    String fixHint = canRelogin ? 'run the "Login" command' : 'capture a new one and use "Set Auth Token"'
     if (msLeft <= 0) {
         setAuthStatus('expired')
-        setLastError("Authorization token expired ${fmt(exp)} - capture a new one and use \"Set Auth Token\"")
-        logError "auth token EXPIRED ${fmt(exp)} - capture a new token from the Govee app"
+        setLastError("Authorization token expired ${fmt(exp)} - ${fixHint}")
+        logError "auth token EXPIRED ${fmt(exp)} - ${fixHint}"
     } else if (warn > 0 && days <= warn) {
         setAuthStatus('expiring')
         setLastError("Authorization token expires ${fmt(exp)} (${days} day(s))")
-        logWarn "auth token expires in ${days} day(s) (${fmt(exp)}) - capture a new one soon"
+        logWarn "auth token expires in ${days} day(s) (${fmt(exp)}) - ${fixHint}"
     }
 }
 
@@ -416,9 +753,17 @@ private String appVersionHeader() {
     return isEmpty(v) ? DEF_APP_VERSION : v
 }
 
+// a login-issued token is bound to the login client id, a sniffed token to the sniffed client id -
+// keep each pair together. state.useSniffedClientId is the self-healing fallback set by handleAuthFailure
+private String apiClientId() {
+    String sniffed = settings?.clientId?.toString()?.trim()
+    if (state.tokenSource == 'login' && state.useSniffedClientId != true) return loginClientId()
+    return isEmpty(sniffed) ? loginClientId() : sniffed
+}
+
 private Map apiHeaders(String token) {
     return [
-        clientId     : settings?.clientId,
+        clientId     : apiClientId(),
         clientType   : '0',                 // string: asynchttpGet is stricter about header value types
         appVersion   : appVersionHeader(),
         Host         : API_HOST,
@@ -428,9 +773,17 @@ private Map apiHeaders(String token) {
 
 def refreshData() {
     String token = activeToken()
-    if (isEmpty(settings?.clientId) || isEmpty(token)) {
+    if (isEmpty(token)) {
         setAuthStatus('missing')
-        setLastError('Client ID and/or Authorization token not set')
+        setLastError(settings?.useAutoLogin == true
+            ? 'no token yet - run the "Login" command'
+            : 'Authorization token not set - use the "Set Auth Token" command')
+        return
+    }
+    // a sniffed token needs the sniffed client id; a login token brings its own
+    if (isEmpty(settings?.clientId) && state.tokenSource != 'login') {
+        setAuthStatus('missing')
+        setLastError('Client ID not set')
         return
     }
     Long hold = state.authRetryAtMs as Long
@@ -483,12 +836,14 @@ private void httpFailed(Integer status, String msg, String body) {
         handleAuthFailure(status, detail)
         return
     }
-    // Govee enforces a minimum app version; retrying with the same header can never work
-    if (status == 454 || detail?.toLowerCase()?.contains('app version')) {
+    // Govee enforces a minimum app version; retrying with the same header can never work.
+    // NOTE: keyed on the message, not on a status code - 454 means "verification code required" on the
+    // login endpoint, which is a different thing entirely (see loginCallback)
+    if (detail?.toLowerCase()?.contains('app version')) {
         setAuthStatus('error')
         setLastError("Govee rejected the request (${status}): app version too low - bump the \"Govee app version header\" preference")
         logError "Govee rejected the request (${status}: ${detail}) - set the \"Govee app version header\" preference " +
-            "to match a current Govee app release (default ${DEF_APP_VERSION})"
+            "to match a current Govee app release (polling default ${DEF_APP_VERSION})"
         state.authRetryAtMs = now() + AUTH_RETRY_MS
         return
     }
@@ -514,11 +869,30 @@ def pollRetry() {
 private void handleAuthFailure(Integer status, String msg) {
     Long exp = state.tokenExpiresAt as Long
     boolean expired = exp && now() > exp
-    setAuthStatus(expired ? 'expired' : 'invalid')
-    setLastError("Authorization token rejected (${status})${expired ? " - expired ${fmt(exp)}" : ''} - capture a new token")
     logError "auth failed (${status}): ${msg} | token=${maskToken(activeToken())} " +
         "source=${state.tokenSource ?: 'preferences'} expires=${fmt(exp)} " +
         "clientId=${isEmpty(settings?.clientId) ? 'MISSING' : 'set'}"
+
+    // a freshly issued login token being rejected points at the clientId pairing rather than the token.
+    // try the sniffed clientId once before writing the token off
+    Long stored = (state.tokenStoredMs ?: 0) as Long
+    if (state.tokenSource == 'login' && state.useSniffedClientId != true
+        && !isEmpty(settings?.clientId) && (now() - stored) < 120000L) {
+        state.useSniffedClientId = true
+        logWarn "the login token was rejected with the login client id - retrying once with the Client ID from preferences"
+        runIn(2, 'pollRetry', [overwrite: true])
+        return
+    }
+
+    // with automatic login on, a rejected token is recoverable without a human
+    if (settings?.useAutoLogin == true && isEmpty(state.loginBlockedReason) && doLogin(null)) {
+        setLastError("Authorization token rejected (${status}) - logging in again")
+        return
+    }
+
+    setAuthStatus(expired ? 'expired' : 'invalid')
+    setLastError("Authorization token rejected (${status})${expired ? " - expired ${fmt(exp)}" : ''} - " +
+        (settings?.useAutoLogin == true ? 'run the "Login" command' : 'capture a new token'))
     // do NOT unschedule (that used to stop polling forever). keep the cron and just stop hammering a
     // token we know is dead - one error per 30 min instead of one per interval
     state.authRetryAtMs = now() + AUTH_RETRY_MS
