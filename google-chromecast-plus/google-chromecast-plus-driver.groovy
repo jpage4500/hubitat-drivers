@@ -821,6 +821,7 @@ private void handleMediaStatus(Map p) {
     if (arr.isEmpty()) return
     def s = arr[0]
     if (s.mediaSessionId != null) state.mediaSessionId = s.mediaSessionId
+    boolean wasTts = state.ttsActive     // capture before the TTS block below can flip it off (finishTts)
 
     String ps = s.playerState ?: "UNKNOWN"
     sendEventIfChanged("playbackStatus", ps)
@@ -854,6 +855,14 @@ private void handleMediaStatus(Map p) {
         if (ps == "PLAYING") state.ttsStarted = true
         else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
     }
+
+    // Once playback has genuinely stopped, blank the now-playing fields so the device page doesn't keep showing the
+    // last track (or a finished announcement) until the receiver happens to report zero apps. That RECEIVER_STATUS
+    // path (clearNowPlaying in handleReceiverStatus) is the only other clear, and it lags the actual stop by a
+    // poll/reconnect - and never fires at all when an app stays "open" but idle. Skip while a TTS announcement is in
+    // flight (it rides through a transient IDLE before restoring prior content, handled just above) and on the
+    // INTERRUPTED transient (the old 2s-cutoff artifact).
+    if (!wasTts && ps == "IDLE" && s.idleReason != "INTERRUPTED") clearNowPlaying()
 
     // one concise line whenever the now-playing state changes; skips the frequent position-only MEDIA_STATUS updates
     String summary = [ps, [title, artist].findAll { it }.join(" - ")].findAll { it }.join(" | ")
@@ -890,6 +899,9 @@ private void clearNowPlaying() {
     ["mediaTitle", "mediaArtist", "mediaAlbum", "mediaSeries", "mediaEpisode", "albumArtUrl", "mediaContentId", "trackDescription"].each {
         sendEventIfChanged(it, "")
     }
+    sendEventIfChanged("trackData", "{}")   // JSON attribute: reset to an empty object ("" wouldn't parse for consumers)
+    sendEventIfChanged("mediaDuration", 0)
+    sendEventIfChanged("mediaPosition", 0)
 }
 
 // on-demand mode: if not keeping alive and nothing pending, drop the socket shortly after a read

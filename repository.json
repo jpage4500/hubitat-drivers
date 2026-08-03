@@ -88,6 +88,18 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/go2rtc/packageManifest.json",
       "description": "Turn go2rtc camera streams into Hubitat devices (still image + RTSP)"
+    },
+    {
+      "id": "72c56cd5-3783-4d7e-989b-6261a828709e",
+      "name": "Govee Pool Thermostat",
+      "category": "Integrations",
+      "tags": [
+        "Pools & Spas",
+        "Temperature & Humidity",
+        "Cloud"
+      ],
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/govee/packageManifest.json",
+      "description": "Temperature from a GoveeLife Smart Pool Thermometer (unsupported by Govee's official API)"
     }
   ]
 }
