@@ -51,6 +51,38 @@ hub-served Speak clips on the Hub was never pinned down; the isolation tests to 
 Hub: (a) Play Track the hub's own `http://<hubIP>/tts/<hash>.mp3` URL — clean vs clipped separates file/serving
 from the Speak path; (b) Speak with the announcement volume blank — tests the pre-load `SET_VOLUME`.
 
+### playTextAndResume / -Restore didn't restore anything — FIXED (needs on-hub confirmation)
+Reported 2026-08-08: Spotify was playing on a Nest device, `playTextAndResume` spoke, Spotify never came back.
+Logs showed the announcement finish, then a `LOAD` of `spotify:track:2noGBukdFPCt7m5ZXnDKor` → **LOAD_FAILED**,
+then a `SEEK` → **INVALID_MEDIA_SESSION_ID**.
+
+Cause: `snapshotForRestore()` ran inside `startAnnounce()` — i.e. *after* `ensureApp()` had already launched the
+DMR. Launching the DMR **evicts** the app that was playing and `handleReceiverStatus` overwrites
+`state.appId`/`transportId` with the DMR's. So the snapshot always read `appId == CC1AD845` and finishTts took
+the "we cast this ourselves" branch, LOADing the *third-party* app's private contentId into the DMR. The
+third-party branch (`snap.appId != APP_DMR`) was unreachable whenever a launch was needed — which is exactly the
+third-party case. The stray `SEEK` came from `resumeSeek`, firing 3 s later with the announcement's already-dead
+`mediaSessionId`.
+
+Fix: `ensureApp()` calls `capturePriorApp()` (`@Field priorApp` map, cross-thread) right before the DMR launch;
+the action that caused the launch consumes it (`takePriorApp()` in `startAnnounce`/`startMedia`) and it wins over
+live state in `snapshotForRestore(prior)`. Also: only an `http(s)` contentId is ever re-LOADed (`isPlayableUrl`),
+the resume position rides in the LOAD's `currentTime` instead of a follow-up SEEK (`resumeSeek` deleted), a
+second announcement started on top of a running one keeps the original snapshot instead of "restoring" the
+previous clip, and `pump()`'s APP_CONNECTED case now also requires `state.appId == APP_DMR` (after a third-party
+relaunch the transport belongs to *that* app, so the next announcement must relaunch the DMR).
+
+**Limitation, not a bug:** a Cast *sender* still cannot resume third-party content. The announcement kills the
+Spotify/YouTube session, and their contentIds are app-private handles. Best effort is `sendLaunch(prior appId)` —
+the app comes back on screen and the phone can re-attach, but playback does **not** restart by itself. Only
+content this driver cast itself (an http URL through the DMR) truly resumes. Google's own Assistant broadcasts
+duck-and-resume via a privileged firmware path that isn't in the Cast protocol.
+
+### playTrackAndRestore / playTrackAndResume — mode is ignored (open)
+`playMedia()` passes `mode` through to `startMedia()`, which never snapshots and never restores — both behave
+exactly like plain `playTrack`. Same fix shape as the TTS path (snapshot + finish on the IDLE transition), not
+implemented.
+
 ### Old pre-roll silence — REMOVED
 Previously: generate an 8 kHz silent WAV, host it on the hub (`/local/`), LOAD it, then swap in the TTS on
 PLAYING (with a lead-in hold for displays). Removed entirely — the swap (and the WAV→MP3 codec/sample-rate

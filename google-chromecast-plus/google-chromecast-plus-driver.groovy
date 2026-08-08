@@ -47,6 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger
 // (increment on poll / re-CONNECT on heartbeat), so they can't live in state without racing.
 @Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
 @Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
+@Field static final Map priorApp = new ConcurrentHashMap() // device.id -> what was playing right before we launched the DMR over it (see capturePriorApp); written by the command thread, read by parse() -> can't live in state
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -149,6 +150,7 @@ def uninstalled() {
     lastRecvConn.remove(key)
     lastMedia.remove(key)
     reqId.remove(key)
+    priorApp.remove(key)
     pending.remove("${device.id}:getStatus")
 }
 
@@ -306,8 +308,11 @@ private void pump() {
             if (remaining.any { it.stage == "app" }) ensureApp()
             break
         case "APP_CONNECTED":
-            if (!state.transportId) {          // stale APP_CONNECTED (DMR exited); relaunch before running actions
-                setConn("READY", "stale APP_CONNECTED, no transport")
+            // stale APP_CONNECTED: the DMR exited, or some other app now owns the device - including the third-party
+            // app finishTts relaunches after an announcement. Loading media into that app's transport would fail, so
+            // drop back to READY and relaunch the DMR before running the actions.
+            if (!state.transportId || state.appId != APP_DMR) {
+                setConn("READY", "stale APP_CONNECTED (app=${state.appId ?: 'none'})")
                 pump()
                 return
             }
@@ -336,7 +341,8 @@ private void runAction(Map a) {
 // TTS-with-restore + media LOAD
 // ============================================================================
 private void startAnnounce(Map a) {
-    if (a.mode in ["restore", "resume"]) snapshotForRestore()
+    Map prior = takePriorApp()          // always consume it: it describes the app THIS action evicted, nothing later
+    if (a.mode in ["restore", "resume"]) snapshotForRestore(prior)
     logDebug "TTS: begin (conn=${state.conn}, transport=${state.transportId ? 'set' : 'none'}, mode=${a.mode})"
     state.ttsActive = true
     state.ttsStarted = false
@@ -376,24 +382,47 @@ def ttsStartCheck() {
 
 
 private void startMedia(Map a) {
+    takePriorApp()      // this load owns the device now; don't let the evicted app leak into a later announcement's restore
     state.ttsActive = false
     state.ttsMode = "none"
     if (a.volume != null) sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
     sendMediaLoad(a.url, a.title, a.subtitle, null)
 }
 
-private void snapshotForRestore() {
+// What was on the device before the announcement, so finishTts can put it back.
+//
+// `prior` is the pre-launch capture from ensureApp and wins whenever it exists: launching the Default Media Receiver
+// EVICTS the app that was playing and rewrites state.appId/transportId, so by the time an announcement starts the live
+// state describes our own just-launched DMR - exactly wrong for the case that matters. That misread made finishTts
+// treat a third-party app's private handle ("spotify:track:...") as our own cast URL and LOAD it back into the DMR
+// (-> LOAD_FAILED, nothing resumed), instead of taking the third-party path below.
+private void snapshotForRestore(Map prior) {
+    // an announcement fired on top of one still playing: never re-snapshot. What's "playing" now is the previous
+    // announcement, so a fresh snapshot would make finishTts replay that clip. Any snapshot the first announcement
+    // took still holds the real pre-TTS content; if it took none (mode "none"), restoring nothing is the right answer.
+    if (state.ttsActive) return
+    boolean evicted = prior && !prior.isEmpty()
     state.ttsRestore = [
-        volume       : device.currentValue("volume"),
-        appId        : state.appId,
-        transportId  : state.transportId,
-        sessionId    : state.sessionId,
-        mediaSessionId: state.mediaSessionId,
-        contentId    : device.currentValue("mediaContentId"),
-        position     : device.currentValue("mediaPosition"),
-        wasPlaying   : (device.currentValue("playbackStatus") == "PLAYING")
+        volume    : device.currentValue("volume"),
+        appId     : evicted ? prior.appId     : state.appId,
+        contentId : evicted ? prior.contentId : device.currentValue("mediaContentId"),
+        position  : evicted ? prior.position  : device.currentValue("mediaPosition"),
+        wasPlaying: evicted ? prior.wasPlaying : (device.currentValue("playbackStatus") == "PLAYING")
     ]
 }
+
+// record the app we're about to push off the device (called just before the DMR launch, while the status still
+// describes that app), and hand it to the action that caused the launch
+private void capturePriorApp() {
+    priorApp[device.id as String] = [
+        appId     : state.appId,
+        contentId : device.currentValue("mediaContentId"),
+        position  : device.currentValue("mediaPosition"),
+        wasPlaying: (device.currentValue("playbackStatus") == "PLAYING")
+    ]
+}
+
+private Map takePriorApp() { return (Map) (priorApp.remove(device.id as String) ?: [:]) }
 
 def ttsTimeoutRestore() { finishTts() }
 
@@ -417,17 +446,17 @@ private void finishTts() {
         // either - both of these were the source of the end-of-speech chirps users reported.
         if (state.ttsVolumeApplied && snap.volume != null) sendSetVolume([level: ((snap.volume as Integer) / 100.0d)])
 
-        if (snap.appId == APP_DMR && snap.contentId && snap.wasPlaying) {
-            // we cast this content ourselves -> we can truly resume it
-            sendMediaLoad(snap.contentId, null, null, null)
+        if (snap.appId == APP_DMR && isPlayableUrl(snap.contentId as String) && snap.wasPlaying) {
+            // we cast this content ourselves -> we can truly resume it. "resume" picks up where it left off; the
+            // position rides along in the LOAD rather than a follow-up SEEK, which had to guess a mediaSessionId -
+            // it used the announcement's, which the receiver had already torn down (-> INVALID_MEDIA_SESSION_ID).
+            sendMediaLoad(snap.contentId as String, null, null, null, (mode == "resume" ? ((snap.position ?: 0) as Integer) : 0))
             restored = true
-            if (mode == "resume" && (snap.position ?: 0) > 0) {
-                state.resumeSeekTo = snap.position
-                runIn(3, "resumeSeek")
-            }
         } else if (snap.appId && snap.appId != APP_DMR) {
-            // third-party app (Spotify/YouTube/etc.): a sender cannot resume its exact content
-            logInfo "finishTts: prior app '${snap.appId}' was third-party; exact resume not supported (relaunching)"
+            // third-party app (Spotify/YouTube/etc.): launching the DMR for the announcement ended its session, and a
+            // sender can't restart someone else's content - its contentId is an app-private handle ("spotify:track:..."),
+            // not a URL the DMR can play. Best effort: put the app back so the phone/Spotify Connect can re-attach.
+            logInfo "finishTts: '${snap.appId}' was playing before the announcement - a third-party Cast app can't be resumed by a sender; relaunching it (playback won't restart on its own)"
             sendLaunch(snap.appId)
             restored = true
         }
@@ -441,11 +470,14 @@ private void finishTts() {
     if (settings.stopAfterTts && !restored && state.sessionId) sendReceiverStop(state.sessionId)
 }
 
-def resumeSeek() {
-    if (state.resumeSeekTo != null) { sendMediaCommand("SEEK", [currentTime: (state.resumeSeekTo as BigDecimal)]); state.remove("resumeSeekTo") }
+// only an http(s) URL can be handed back to the Default Media Receiver. A third-party receiver reports an app-private
+// contentId ("spotify:track:2noG...", a YouTube video id, ...) which the DMR answers with LOAD_FAILED.
+private boolean isPlayableUrl(String s) {
+    String u = (s ?: "").toLowerCase()
+    return u.startsWith("http://") || u.startsWith("https://")
 }
 
-private void sendMediaLoad(String url, String title, String subtitle, String art) {
+private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0) {
     if (!state.transportId) { logWarn "sendMediaLoad: no transportId"; return }
     Map media = [
         contentId  : url,
@@ -454,7 +486,7 @@ private void sendMediaLoad(String url, String title, String subtitle, String art
         metadata   : [metadataType: 0, title: (title ?: ""), subtitle: (subtitle ?: "")]
     ]
     if (art) media.metadata.images = [[url: art]]
-    Map load = [type: "LOAD", requestId: nextRequestId(), autoplay: true, currentTime: 0, media: media]
+    Map load = [type: "LOAD", requestId: nextRequestId(), autoplay: true, currentTime: (startTime ?: 0), media: media]
     sendCastMessage(SRC, state.transportId, NS_MEDIA, JsonOutput.toJson(load))
 }
 
@@ -698,6 +730,9 @@ private void ensureApp() {
         setConn("APP_CONNECTED", "DMR already running, transport reconnected")
         pump()
     } else {
+        // the launch evicts whatever app is on the device and rewrites state.appId/transportId - capture the outgoing
+        // one first so an announcement's restore/resume can still tell our own cast content from a third-party app
+        capturePriorApp()
         sendLaunch(APP_DMR)
         setConn("APP_LAUNCHING", "launching DMR")
     }
