@@ -155,6 +155,7 @@ def mainPage() {
             input name: 'refreshInterval', type: 'number', title: 'Status refresh interval (seconds)', defaultValue: 60, range: '10..3600', submitOnChange: true
             input name: 'debugOutput', type: 'bool', title: 'Enable debug logging (auto-off after 24h)', defaultValue: false, submitOnChange: true
             paragraph "<small>Announcement volume and lead-in delay are set per device &mdash; open a Chromecast device to change them.</small>"
+            paragraph '<small>Rule Machine strips &lt; and &gt; out of its text fields, so SSML typed in a rule never reaches the device. Write it with braces instead &mdash; <b>Hello {break time="2s"/} World</b> &mdash; and the driver converts it back.</small>'
         }
         section {
             if (settings.debugOutput == true && state.debugDisableMs) {

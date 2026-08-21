@@ -50,6 +50,32 @@ afterward (mode `restore`/`resume`). `playTrack()` / `playMedia()` play a URL di
   skipped when the delay is 0 or the text already contains `<break`/`<speak>`.
 - There is **no separate silence clip and no swap** anymore — the announcement is one media item.
 
+### SSML in TTS text (brace alias)
+
+TTS text may contain SSML (`<break>`, `<prosody>`, …) and it works from the device page's **Play Text**. It
+does **not** work from Rule Machine: RM sanitizes its text fields and strips everything between `<` and `>`
+(HTML entities and `&#60;`/`&#62;` are stripped along with it), so the markup never reaches the driver.
+
+Fix (reported 2026-08-21): `unescapeSsml()` in the driver, called from `announce()` **before** `withLeadIn()`,
+accepts two bracket-free spellings and converts them back —
+
+- `Hello {break time="2s"/} World` (brace alias, the one that survives RM)
+- `Hello &lt;break time="2s"/&gt; World` (also `&#60;`/`&#62;`, for callers that only encode)
+
+Design points, all deliberate:
+
+- **Only real SSML tag names** convert (`SSML_ALIAS_RX` whitelist: break, speak, prosody, emphasis, say-as,
+  sub, phoneme, voice, audio, lang, mark, p, s, w). A blanket `{`→`<` swap — the original user hack — means a
+  `%variable%` expanding to text with braces turns into garbage markup.
+- **Case-sensitive.** SSML is XML: `<BREAK/>` is rejected by the engine and the whole announcement is lost
+  (`textToSpeech` returns no uri), whereas leaving `{BREAK/}` as literal text makes the typo audible.
+- **Void tags get closed** (`SSML_VOID_RX`): `{break time="2s"}` / `<break time="2s">` → `<break time="2s"/>`,
+  since an unclosed void tag also loses the announcement.
+- Runs **before** `withLeadIn()` so its "caller already supplied SSML" check sees the converted `<break` and
+  doesn't prepend a second pause. The original hack lived *inside* `withLeadIn` — it happened to work only
+  because it was the first line, ahead of that function's `sec < 1` early return.
+- The parent driver's group `speak()` forwards raw text to each child's `speak()`, so groups are covered too.
+
 ## TTS issues & status
 
 ### Chirps around announcements — FIXED

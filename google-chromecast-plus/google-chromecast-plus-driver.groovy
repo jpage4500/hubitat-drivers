@@ -11,9 +11,12 @@
  *   - CHILD  (role=child, one per Chromecast):  owns a socket, full protocol, TTS/media/transport/status.
  *
  * Fixes the built-in integration's headline bugs: the 2-second TTS cutoff (answer heartbeat PINGs
- * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (play a short
- * hub-hosted silent lead-in that wakes the speaker's amp / warms the receiver, held briefly - longer on
- * displays like the Nest Hub - before the announcement loads).
+ * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (bake the
+ * lead-in pause into the TTS clip itself as an SSML <break> - per-device "Lead-in delay" preference - so the
+ * announcement is one media item with no hub-hosted pre-roll to swap in).
+ *
+ * TTS text may contain SSML. Callers that sanitize HTML (Rule Machine) strip everything between < and >, so
+ * a brace spelling is accepted too:  Hello {break time="2s"/} World  ==  Hello <break time="2s"/> World.
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -33,6 +36,16 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final String RECV    = "receiver-0"
 @Field static final String APP_DMR = "CC1AD845"          // Default Media Receiver
 @Field static final Integer CAST_PORT = 8009
+
+// -- TTS text (see unescapeSsml) --
+// {tag ...} spelling of an SSML tag, for callers that strip angle brackets. Only real SSML tag names are
+// converted, so ordinary braces (or a Hubitat %variable% that expands to some) are spoken as typed.
+// Case-sensitive on purpose: SSML is XML, so <BREAK/> would be rejected by the TTS engine and lose the whole
+// announcement - leaving "{BREAK/}" as literal text instead makes the typo audible rather than silent.
+@Field static final String SSML_ALIAS_RX = '\\{(/?(?:break|speak|prosody|emphasis|say-as|sub|phoneme|voice|audio|lang|mark|p|s|w)\\b[^{}]*)\\}'
+// a void tag written without its closing slash - <break time="2s"> - is invalid SSML and can fail the whole
+// announcement, so close it rather than pass it through
+@Field static final String SSML_VOID_RX = '<(break|mark)([^<>/]*)>'
 
 
 // per-device, cross-callback state (parse/socketStatus/scheduled jobs can run on different threads)
@@ -112,6 +125,21 @@ private Integer getPort()  { return (getDataValue("port") ?: "${CAST_PORT}") as 
 private boolean isKeepAlive() { return settings.keepAlive != false }
 // lead-in delay (seconds, 0 = none): per-device preference driving an SSML pause prepended to the TTS text.
 private Integer leadInSec() { return Math.max(0, Math.min(5, (settings.leadInDelay ?: 0) as Integer)) }
+
+// Rule Machine (and anything else that sanitizes HTML in a text field) strips everything between < and >,
+// so SSML typed into a rule action never reaches the driver - the same text works from the device page.
+// Accept two bracket-free spellings and turn them back into real markup:
+//   Hello {break time="2s"/} World      (brace alias)
+//   Hello &lt;break time="2s"/&gt; World   (HTML entities, also &#60;/&#62;)
+// Runs before withLeadIn so its "caller already supplied SSML" check sees the converted tags, and before
+// textToSpeech so the engine gets valid SSML. Text with no braces/entities/tags is returned untouched.
+private String unescapeSsml(String text) {
+    if (!text || !(text.contains('{') || text.contains('&') || text.contains('<'))) return text
+    String out = text.replaceAll('&(?:lt|#0*60);', '<').replaceAll('&(?:gt|#0*62);', '>')
+    out = out.replaceAll(SSML_ALIAS_RX, '<$1>').replaceAll(SSML_VOID_RX, '<$1$2/>')
+    if (out != text) logDebug("SSML: \"${text}\" -> \"${out}\"")
+    return out
+}
 
 // Prepend an SSML pause so the TTS clip itself opens with silence - a slow-to-wake device (Nest Hub) clips
 // into that silence instead of the first words, and it plays as one media item (no separate pre-roll to swap).
@@ -254,7 +282,7 @@ def disconnect()     { logInfo "disconnect"; state.pendingActions = []; closeSoc
 private void announce(String text, volume, String mode, String voice = null) {
     if (isEmpty(text)) return
     logInfo "TTS: \"${text}\" (mode=${mode}${volume != null ? ", volume=${volume}" : ""}${voice ? ", voice=${voice}" : ""})"
-    String ttsText = withLeadIn(text)
+    String ttsText = withLeadIn(unescapeSsml(text))
     Map tts = voice ? textToSpeech(ttsText, voice) : textToSpeech(ttsText)
     if (!tts?.uri) { logError "announce: textToSpeech returned no uri for '${text}'"; return }
     enqueue([type: "announce", stage: "app", url: tts.uri, dur: (tts.duration ?: 0),
