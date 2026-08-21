@@ -9,6 +9,35 @@ Three files that must be deployed **together** (they call each other's methods; 
 missing method during `createChild`): `google-chromecast-plus-app.groovy`,
 `google-chromecast-plus-parent-driver.groovy`, `google-chromecast-plus-driver.groovy`.
 
+## Discovery & the device list (app)
+
+`scanMdns()` **merges** into `state.discovered` and nothing auto-prunes it, by design: a device that's merely
+powered off also drops out of the hub's mDNS cache, and `syncChildren()` deletes any child whose candidate is
+gone — so auto-expiry would delete real devices. The checkbox is the only remover, and it is **checked by
+default** (`isSelected` returns true unless the setting is explicitly `false`), so anything still in
+`state.discovered` gets its child re-created on every Done.
+
+That's what produced the reported "ghost devices keep coming back" (2026-08-20): the DNI is derived from
+`uuid ?: mac ?: ip`, and a factory reset, or editing/deleting a speaker or display **group** in Google Home,
+mints a new `deviceId` → a new DNI, leaving the old entry listed and re-created forever.
+
+Fix: `scanMdns()` stamps `lastSeenMs` on every entry it sees; `isStale()` flags an mDNS candidate missing for
+`STALE_MS` (15 min ≈ 3 missed scans) and `deviceRow()` replaces its status line with *"not seen in mDNS since
+… — uncheck to remove"*. Unchecking such a row makes `syncChildren()` drop it from `state.discovered` (plus
+its `sel_` setting and the `state.candidates` cache) so the row is gone for good. Rules that fall out of it:
+
+- A device **still visible in mDNS** but unchecked stays listed (unchecked) — that's how you keep a real
+  Chromecast out of Hubitat without it reappearing.
+- A **manual** entry never goes stale (`source == 'manual'`), but unchecking one now also removes it from
+  `state.manual` — otherwise it stayed a candidate and the child came back on the next Done.
+- Entries saved before `lastSeenMs` existed read as stale; harmless, since `mainPage` scans before rendering
+  and anything live is re-stamped.
+
+A [user PR](https://raw.githubusercontent.com/tweas/HubitatPublic/refs/heads/master/Chromecast%2BRemoveStaleDevices)
+proposed a separate "Potentially Stale Devices" section with its own `remove_*` checkboxes. Not merged: it put
+two opposite-polarity checkboxes on the same device (stale entries stay in `candidates`, so they appeared in
+both lists) and duplicated the whole mDNS read + DNI derivation in a second `getCurrentMdnsDevices()`.
+
 ## How TTS works (current)
 
 `speak()` / `playText()` → `announce()` → Hubitat `textToSpeech()` (Amazon Polly here; returns an **MP3**,
@@ -20,6 +49,53 @@ afterward (mode `restore`/`resume`). `playTrack()` / `playMedia()` play a URL di
   returned MP3 *opens with silence*. This is the current fix for first-word/sentence clipping (below). It's
   skipped when the delay is 0 or the text already contains `<break`/`<speak>`.
 - There is **no separate silence clip and no swap** anymore — the announcement is one media item.
+
+### SSML in TTS text (brace alias)
+
+TTS text may contain SSML (`<break>`, `<prosody>`, …) and it works from the device page's **Play Text**. It
+does **not** work from Rule Machine: RM sanitizes its text fields and strips everything between `<` and `>`
+(HTML entities and `&#60;`/`&#62;` are stripped along with it), so the markup never reaches the driver.
+
+Fix (reported 2026-08-21): `unescapeSsml()` in the driver, called from `announce()` **before** `withLeadIn()`,
+accepts two bracket-free spellings and converts them back —
+
+- `Hello {break time="2s"/} World` (brace alias, the one that survives RM)
+- `Hello &lt;break time="2s"/&gt; World` (also `&#60;`/`&#62;`, for callers that only encode)
+
+Design points, all deliberate:
+
+- **Only real SSML tag names** convert (`SSML_ALIAS_RX` whitelist: break, speak, prosody, emphasis, say-as,
+  sub, phoneme, voice, audio, lang, mark, p, s, w). A blanket `{`→`<` swap — the original user hack — means a
+  `%variable%` expanding to text with braces turns into garbage markup.
+- **Case-sensitive.** SSML is XML: `<BREAK/>` is rejected by the engine and the whole announcement is lost
+  (`textToSpeech` returns no uri), whereas leaving `{BREAK/}` as literal text makes the typo audible.
+- **Void tags get closed** (`SSML_VOID_RX`): `{break time="2s"}` / `<break time="2s">` → `<break time="2s"/>`,
+  since an unclosed void tag also loses the announcement.
+- Runs **before** `withLeadIn()` so its "caller already supplied SSML" check sees the converted `<break` and
+  doesn't prepend a second pause. The original hack lived *inside* `withLeadIn` — it happened to work only
+  because it was the first line, ahead of that function's `sec < 1` early return.
+- The parent driver's group `speak()` forwards raw text to each child's `speak()`, so groups are covered too.
+
+## Parent-device broadcast
+
+`broadcast(text, volume)` fans one announcement out to every child (and the `SpeechSynthesis` `speak()`
+overloads route here, so the parent can be picked as a single Speak/Notification target).
+
+`broadcastIdle(text, volume)` (added 2026-08-21, from a user request) is the same fan-out filtered by
+`isIdleChild()` — announce only where nothing is playing, so a broadcast doesn't talk over someone's music.
+Two things the naive `status == "stopped"` filter gets wrong, both handled:
+
+- **`markOffline()` and `initialize()` also set `status` to `stopped`**, so an unreachable device reads as
+  idle and the announcement gets queued on a device that can't play it. `isIdleChild()` also requires
+  `connectionStatus` to be outside `[offline, disconnected]` (`idle` = never connected yet, still allowed).
+- Log the filtered count as `N of M device(s)` — otherwise a broadcast that reached nobody looks identical to
+  one that reached everybody.
+
+Known caveat, not worth machinery: `status` only flips to `playing` when the child's LOAD actually reaches
+PLAYING, so a device asked to speak a second ago still reads idle and back-to-back broadcasts can double up
+on it. The real "speaking now" flag is `state.ttsActive` in the child, which the parent can't read without a
+new child method — deliberately avoided (a parent-only update would then break every `broadcastIdle` call
+with a missing-method error; attributes are always readable regardless of version skew).
 
 ## TTS issues & status
 
