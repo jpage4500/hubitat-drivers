@@ -951,4 +951,15 @@ private logDebug(msg) { if (settings?.isLogging) logAt('debug', msg) }
 private logInfo(msg) { logAt('info', msg) }
 private logWarn(msg) { logAt('warn', msg) }
 private logError(msg) { logAt('error', msg) }
-private logAt(String level, msg) { log."${level}"("Govee [${device.displayName}] ${msg}") }
+// The Hubitat sandbox rejects a computed method name: log."${level}"(...) fails to compile with
+// "Expression [MethodCallExpression] is not allowed" (SecurityException) on current firmware, which takes
+// the whole app/driver down at install. Dispatch by hand instead.
+private logAt(String level, msg) {
+    String out = "Govee [${device.displayName}] ${msg}"
+    switch (level) {
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}
