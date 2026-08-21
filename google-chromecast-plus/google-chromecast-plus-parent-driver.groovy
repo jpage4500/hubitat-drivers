@@ -196,4 +196,13 @@ private void logDebug(msg) { if (state.debug == true) logAt('debug', msg) }
 private void logInfo(msg)  { logAt('info',  msg) }
 private void logWarn(msg)  { logAt('warn',  msg) }
 private void logError(msg) { logAt('error', msg) }
-private void logAt(String level, msg) { log."${level}"("GC+ [${device.displayName}] ${msg}") }
+// see the app's logAppAt: a computed method name (log."${level}") is blocked by the Hubitat sandbox
+private void logAt(String level, msg) {
+    String out = "GC+ [${device.displayName}] ${msg}"
+    switch (level) {
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}

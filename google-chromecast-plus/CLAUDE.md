@@ -209,6 +209,10 @@ the SSML break. The app-level "Pre-roll silence" toggle and "Lead-in delay" sett
   `@Field static` maps keyed by `device.id`, never in `state` — `state` writes race. See `rxBuf` / `lastRx` /
   `reqId` / etc.
 - `getClass()` is blocked in the Hubitat sandbox — use `instanceof`.
+- A **computed method name** is blocked too: `log."${level}"(msg)` in `logAt`/`logAppAt` compiled for years but
+  fails on current firmware with `Expression [MethodCallExpression] is not allowed` — and since that's a
+  compile-time SecurityException, the *whole* app fails to load (reported at install, 2026-08-21). Now a
+  `switch`; its levels must stay in sync with the `logTrace`/`logDebug`/… wrappers that call it.
 - Hubitat `textToSpeech()` here is Amazon Polly (e.g. voice Salli) → MP3, ~22 kHz mono. SSML `<break>` is
   honored on this setup but is **not** guaranteed on every hub/TTS engine — hence lead-in defaults to off and
   is opt-in per device.

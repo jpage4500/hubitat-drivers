@@ -25,6 +25,10 @@ follow that pattern when adding a new package.
 
 ## Conventions
 
+- **No computed method names.** `log."${level}"(msg)` — and any `obj."${name}"()` — is rejected by the hub's
+  Groovy sandbox at compile time (`Expression [MethodCallExpression] is not allowed`), which takes the whole
+  app/driver down at install. Dispatch with a `switch` instead. Fixed in `google-chromecast-plus` (2026-08-21);
+  the same `logAt` idiom is still present in `go2rtc/` (3 files) and `govee/govee-pool.groovy`.
 - Drivers/apps only run on a Hubitat hub — they can't be compiled or run locally. Local verification is limited
   to brace/paren balance, JSON validity, and reading the diff; behavior must be confirmed on a hub.
 - Namespace is `jpage4500`; author "Joe Page".

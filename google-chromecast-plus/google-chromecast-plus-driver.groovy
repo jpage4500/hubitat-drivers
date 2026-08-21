@@ -1127,4 +1127,14 @@ private void logWarn(msg)  { logAt('warn',  msg) }
 private void logError(msg) { logAt('error', msg) }
 // every line is prefixed "GC+ [<device name>] " so the Hubitat Logs text-filter "GC+" shows the whole
 // integration (app + all children) in one view, each line self-identifying its device.
-private void logAt(String level, msg) { log."${level}"("GC+ [${device.displayName}] ${msg}") }
+// see the app's logAppAt: a computed method name (log."${level}") is blocked by the Hubitat sandbox
+private void logAt(String level, msg) {
+    String out = "GC+ [${device.displayName}] ${msg}"
+    switch (level) {
+        case 'trace': log.trace(out); break
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}
