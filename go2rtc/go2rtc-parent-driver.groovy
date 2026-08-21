@@ -168,4 +168,15 @@ private void logDebug(msg) { if (state.debug == true) logAt('debug', msg) }
 private void logInfo(msg)  { logAt('info',  msg) }
 private void logWarn(msg)  { logAt('warn',  msg) }
 private void logError(msg) { logAt('error', msg) }
-private void logAt(String level, msg) { log."${level}"("go2rtc [${device.displayName}] ${msg}") }
+// The Hubitat sandbox rejects a computed method name: log."${level}"(...) fails to compile with
+// "Expression [MethodCallExpression] is not allowed" (SecurityException) on current firmware, which takes
+// the whole app/driver down at install. Dispatch by hand instead.
+private void logAt(String level, msg) {
+    String out = "go2rtc [${device.displayName}] ${msg}"
+    switch (level) {
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}

@@ -23,15 +23,28 @@ mints a new `deviceId` → a new DNI, leaving the old entry listed and re-create
 
 Fix: `scanMdns()` stamps `lastSeenMs` on every entry it sees; `isStale()` flags an mDNS candidate missing for
 `STALE_MS` (15 min ≈ 3 missed scans) and `deviceRow()` replaces its status line with *"not seen in mDNS since
-… — uncheck to remove"*. Unchecking such a row makes `syncChildren()` drop it from `state.discovered` (plus
-its `sel_` setting and the `state.candidates` cache) so the row is gone for good. Rules that fall out of it:
+…"*. Removing them is the **Forget** button (`forgetStale()`), never automatic.
 
-- A device **still visible in mDNS** but unchecked stays listed (unchecked) — that's how you keep a real
-  Chromecast out of Hubitat without it reappearing.
-- A **manual** entry never goes stale (`source == 'manual'`), but unchecking one now also removes it from
-  `state.manual` — otherwise it stayed a candidate and the child came back on the next Done.
-- Entries saved before `lastSeenMs` existed read as stale; harmless, since `mainPage` scans before rendering
-  and anything live is re-stamped.
+**Regression fixed 2026-08-21 — read this before touching `isStale`.** The first version treated a *missing*
+`lastSeenMs` as stale and had `syncChildren()` silently drop unchecked stale entries on Done. On a hub whose
+mDNS read came back **empty** (routine: listener not registered yet, cache not filled, firmware without the
+API, post-reboot), every pre-upgrade entry was unstamped → everything showed "not seen in mDNS" with no
+timestamp → one Done wiped a user's whole 15-device list, keeping only the checked one. Two guards now, both
+required before anything is called stale:
+
+1. the entry has a real `lastSeenMs` — a missing stamp means *unknown*, never *gone* (and `scanMdns` backfills
+   unstamped entries on the first scan that returns something, so they get the full grace period); and
+2. `state.lastScanFound > 0` — an empty read is no evidence about any single device.
+
+Rules that fall out of it:
+
+- **`syncChildren()` never drops a discovered entry**, checked or not. Unchecking deletes the child device (as
+  it always did) and the row stays listed, so a powered-off device can be re-checked later.
+- `state.discovered` is the *only* record of these devices, which is why pruning it is a deliberate button
+  press: `forgetStale()` drops the flagged entries + their `sel_` settings, and their children go on the next
+  Done when `syncChildren` finds them missing from the candidates.
+- A **manual** entry never goes stale (`source == 'manual'`), but unchecking one does forget it — nothing
+  re-discovers a manual entry, so otherwise the child came back on the next Done.
 
 A [user PR](https://raw.githubusercontent.com/tweas/HubitatPublic/refs/heads/master/Chromecast%2BRemoveStaleDevices)
 proposed a separate "Potentially Stale Devices" section with its own `remove_*` checkboxes. Not merged: it put
