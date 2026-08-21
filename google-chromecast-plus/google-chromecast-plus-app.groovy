@@ -143,6 +143,11 @@ def mainPage() {
                 }
             }
             input name: 'rescan', type: 'button', title: 'Refresh Devices'
+            int staleCount = candidates.findAll { dni, d -> isStale(d) }.size()
+            if (staleCount > 0) {
+                paragraph "<small>${staleCount} device(s) above haven't answered mDNS for a while. <b>Forget</b> drops them from this list, and their Hubitat devices are removed when you click Done. A device that's only powered off comes back on its own &mdash; leave it alone unless it's really gone.</small>"
+                input name: 'forgetStale', type: 'button', title: "Forget ${staleCount} device(s) not seen in mDNS"
+            }
         }
         section(hideable: true, hidden: true, 'Add a device by IP') {
             paragraph 'For a device not auto-discovered (or on another subnet). It is added and connects immediately.'
@@ -193,6 +198,9 @@ def appButtonHandler(btn) {
         case 'clearManual':
             state.manual = []
             break
+        case 'forgetStale':
+            forgetStale()
+            break
     }
 }
 
@@ -209,10 +217,12 @@ def scanMdns() {
         Map entries = hubitat.helper.NetworkUtils.getRawMDNSEndpointsByMACForServiceType('_googlecast._tcp.local.')
         logDebug("scanMdns: ${entries?.size() ?: 0} entries")
         def disc = state.discovered ?: [:]
+        int found = 0
         entries?.each { mac, v ->
             try {
                 String ip = v.ip4Address
                 if (ip) {
+                    found++
                     String uuid = v.deviceId
                     String name = v.friendlyName ?: v.name ?: ip
                     Integer port = (v.port ?: DEFAULT_PORT) as Integer
@@ -224,15 +234,23 @@ def scanMdns() {
                     String dni = "GoogleChromecastPlus-${cleanId((uuid ?: mac ?: ip).toString())}"
                     disc[dni] = [ip: ip, port: port, name: name, uuid: uuid, mac: mac?.toString(), model: model,
                                  deviceType: deviceType, statusText: txt.rs, castVersion: txt.ve,
-                                 lastSeenMs: now()]     // drives isStale() - entries are never auto-pruned
+                                 lastSeenMs: now()]     // drives isStale(); entries are only pruned on request
                 }
             } catch (ex) {
                 logWarn "scanMdns: skipping ${mac}: ${ex.message}"
             }
         }
+        // "not seen in mDNS" only means something if this read actually returned devices. An empty result is
+        // routine (listener not registered yet, cache not filled, firmware without the API, a hub that just
+        // rebooted) and must NOT make every known device look stale - that wiped a user's whole device list.
+        state.lastScanFound = found
+        // entries saved before lastSeenMs existed start their clock at the first scan that worked, so they get
+        // the full STALE_MS grace period instead of being flagged the moment the app is upgraded
+        if (found > 0) disc.each { dni, d -> if (!d.lastSeenMs) d.lastSeenMs = now() }
         state.discovered = disc
     } catch (e) {
         logWarn "scanMdns: NetworkUtils mDNS lookup failed (${e.message})"
+        state.lastScanFound = 0      // no evidence -> nothing is stale (see isStale)
     }
 }
 
@@ -246,6 +264,21 @@ Map discoverDevices() {
     }
     state.candidates = candidates
     return candidates
+}
+
+// Explicit prune (the 'Forget' button): drop every candidate currently flagged stale, plus its checkbox
+// setting. Deliberately NOT something Done does on its own - discovery is the only record of these devices,
+// and an empty or partial mDNS read would otherwise silently wipe the list. Their child devices go on the
+// next Done, when syncChildren finds them missing from the candidates.
+private void forgetStale() {
+    Map cand = state.candidates ?: [:]
+    List gone = cand.findAll { dni, d -> isStale(d) }.keySet().toList()
+    if (gone.isEmpty()) { logInfo 'forgetStale: nothing flagged as stale'; return }
+    Map disc = state.discovered ?: [:]
+    gone.each { dni -> disc.remove(dni); app.removeSetting("sel_${cleanId(dni)}") }
+    state.discovered = disc
+    state.candidates = cand.findAll { !gone.contains(it.key) }
+    logInfo "forgetStale: forgot ${gone.size()} device(s) not seen in mDNS: ${gone.join(', ')}"
 }
 
 private String cleanId(String s) { return (s ?: '').replaceAll('[^A-Za-z0-9]', '') }
@@ -293,12 +326,16 @@ private String castDeviceType(caValue) {
 // state.discovered, so a device that was factory-reset or renamed (new deviceId -> new DNI), or a
 // speaker/display group edited or deleted in Google Home (groups get a fresh deviceId), leaves its old
 // entry behind forever - and since the checkbox defaults to checked, syncChildren keeps re-creating the
-// child. Stale rows are only *flagged* here, never auto-removed: a device that is merely powered off also
-// falls out of mDNS, and dropping it from the candidates would delete its child device. Entries saved
-// before lastSeenMs existed read as stale, which is safe - anything live is re-stamped by the scan
-// mainPage runs before rendering.
+// child. Flagging those is what this is for; removing them is the 'Forget' button, never automatic.
+//
+// Staleness needs POSITIVE evidence, both parts required:
+//   - the entry has a real lastSeenMs (a missing stamp means "unknown", never "gone"), and
+//   - the last scan actually returned devices (an empty read says nothing about any single device).
+// Without those two guards, a hub whose mDNS cache came back empty flagged every device as stale.
 private boolean isStale(Map d) {
-    return d?.source == 'mdns' && (!d.lastSeenMs || (now() - (d.lastSeenMs as Long)) > STALE_MS)
+    if (d?.source != 'mdns' || !d.lastSeenMs) return false
+    if (((state.lastScanFound ?: 0) as Integer) < 1) return false
+    return (now() - (d.lastSeenMs as Long)) > STALE_MS
 }
 
 // one selectable row: name/ip/model + a live-status line pulled from the created child (if any)
@@ -328,11 +365,8 @@ private String deviceRow(Map d, child) {
             }
         }
     }
-    // a row that's gone from mDNS is the one worth unchecking, so say that instead of "offline"
-    if (isStale(d)) {
-        String seen = d.lastSeenMs ? " since ${clockTime(new Date(d.lastSeenMs as Long))}" : ''
-        extra = "not seen in mDNS${seen} &mdash; uncheck to remove"
-    }
+    // flag a row the hub has not seen for a while; isStale guarantees lastSeenMs is set
+    if (isStale(d)) extra = "not seen in mDNS since ${clockTime(new Date(d.lastSeenMs as Long))}"
     return s + "<br><span style='font-size:smaller;color:#666'>${extra}</span>"
 }
 
@@ -362,8 +396,7 @@ private void syncChildren() {
     def parent = getParentDevice()
     if (!parent) { logError 'syncChildren: no parent device'; return }
     Set wanted = [] as Set
-    Set gone = [] as Set        // unchecked AND not re-discoverable -> forget the entry, not just the child
-    Map disc = state.discovered ?: [:]
+    Set gone = [] as Set        // unchecked manual entry -> forget the entry, not just the child
     List manual = state.manual ?: []
     (state.candidates ?: [:]).each { dni, d ->
         if (isSelected(dni)) {
@@ -373,15 +406,11 @@ private void syncChildren() {
             // it stays a candidate and (with the checkbox defaulting to checked) comes back on the next Done
             manual = manual.findAll { manualDni(it.ip) != dni }
             gone << dni
-        } else if (isStale(d)) {
-            // unchecked and gone from mDNS -> forget it so the row disappears for good. a device still
-            // visible in mDNS stays listed (unchecked), as it always has - that's how you keep a real
-            // Chromecast out of Hubitat without it reappearing.
-            disc.remove(dni)
-            gone << dni
         }
+        // a discovered (mDNS) entry is NEVER dropped here, checked or not: unchecking already deletes the
+        // child device, and the row stays listed so a powered-off device can be re-checked later. Pruning
+        // the list is the explicit 'Forget devices not seen in mDNS' button (forgetStale).
     }
-    state.discovered = disc
     state.manual = manual
     if (gone) {
         // prune the render-time candidate cache too, and don't leave orphan checkbox settings behind
