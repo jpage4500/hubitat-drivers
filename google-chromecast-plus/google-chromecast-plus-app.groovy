@@ -39,6 +39,9 @@ preferences {
 @Field static final String PARENT_DRIVER = 'Google Chromecast+ Parent'
 @Field static final String MDNS_SERVICE = '_googlecast._tcp'
 @Field static final Integer DEFAULT_PORT = 8009
+// how long a device can be missing from the hub's mDNS cache before its row is flagged as stale
+// (scanMdns runs every 5 min, so this is ~3 missed scans)
+@Field static final Long STALE_MS = 15 * 60 * 1000
 
 // ----------------------------------------------------------------------------
 // lifecycle
@@ -219,7 +222,8 @@ def scanMdns() {
                     String deviceType = castDeviceType(txt.ca)
                     String dni = "GoogleChromecastPlus-${cleanId((uuid ?: mac ?: ip).toString())}"
                     disc[dni] = [ip: ip, port: port, name: name, uuid: uuid, mac: mac?.toString(), model: model,
-                                 deviceType: deviceType, statusText: txt.rs, castVersion: txt.ve]
+                                 deviceType: deviceType, statusText: txt.rs, castVersion: txt.ve,
+                                 lastSeenMs: now()]     // drives isStale() - entries are never auto-pruned
                 }
             } catch (ex) {
                 logWarn "scanMdns: skipping ${mac}: ${ex.message}"
@@ -235,7 +239,7 @@ def scanMdns() {
 Map discoverDevices() {
     scanMdns()
     Map candidates = [:]
-    (state.discovered ?: [:]).each { dni, d -> candidates[dni] = [ip: d.ip, port: d.port, name: d.name, uuid: d.uuid, model: d.model, deviceType: d.deviceType, statusText: d.statusText, source: 'mdns'] }
+    (state.discovered ?: [:]).each { dni, d -> candidates[dni] = [ip: d.ip, port: d.port, name: d.name, uuid: d.uuid, model: d.model, deviceType: d.deviceType, statusText: d.statusText, lastSeenMs: d.lastSeenMs, source: 'mdns'] }
     (state.manual ?: []).each { m ->
         candidates[manualDni(m.ip)] = [ip: m.ip, port: (m.port ?: DEFAULT_PORT), name: (m.name ?: m.ip), uuid: null, source: 'manual']
     }
@@ -284,6 +288,18 @@ private String castDeviceType(caValue) {
     return 'unknown'
 }
 
+// A candidate that has dropped out of the hub's mDNS cache. Discovery only ever merges into
+// state.discovered, so a device that was factory-reset or renamed (new deviceId -> new DNI), or a
+// speaker/display group edited or deleted in Google Home (groups get a fresh deviceId), leaves its old
+// entry behind forever - and since the checkbox defaults to checked, syncChildren keeps re-creating the
+// child. Stale rows are only *flagged* here, never auto-removed: a device that is merely powered off also
+// falls out of mDNS, and dropping it from the candidates would delete its child device. Entries saved
+// before lastSeenMs existed read as stale, which is safe - anything live is re-stamped by the scan
+// mainPage runs before rendering.
+private boolean isStale(Map d) {
+    return d?.source == 'mdns' && (!d.lastSeenMs || (now() - (d.lastSeenMs as Long)) > STALE_MS)
+}
+
 // one selectable row: name/ip/model + a live-status line pulled from the created child (if any)
 private String deviceRow(Map d, child) {
     String s = "<b>${d.name}</b> &mdash; ${d.ip}"
@@ -310,6 +326,11 @@ private String deviceRow(Map d, child) {
                 if (since) extra += " since ${clockTime(since)}"
             }
         }
+    }
+    // a row that's gone from mDNS is the one worth unchecking, so say that instead of "offline"
+    if (isStale(d)) {
+        String seen = d.lastSeenMs ? " since ${clockTime(new Date(d.lastSeenMs as Long))}" : ''
+        extra = "not seen in mDNS${seen} &mdash; uncheck to remove"
     }
     return s + "<br><span style='font-size:smaller;color:#666'>${extra}</span>"
 }
@@ -340,8 +361,32 @@ private void syncChildren() {
     def parent = getParentDevice()
     if (!parent) { logError 'syncChildren: no parent device'; return }
     Set wanted = [] as Set
+    Set gone = [] as Set        // unchecked AND not re-discoverable -> forget the entry, not just the child
+    Map disc = state.discovered ?: [:]
+    List manual = state.manual ?: []
     (state.candidates ?: [:]).each { dni, d ->
-        if (isSelected(dni)) { parent.createChild(dni, d.name, d.ip, "${d.port}", d.uuid, d.deviceType); wanted << dni }
+        if (isSelected(dni)) {
+            parent.createChild(dni, d.name, d.ip, "${d.port}", d.uuid, d.deviceType); wanted << dni
+        } else if (d.source == 'manual') {
+            // nothing re-discovers a manual entry, so unchecking has to drop the entry itself - otherwise
+            // it stays a candidate and (with the checkbox defaulting to checked) comes back on the next Done
+            manual = manual.findAll { manualDni(it.ip) != dni }
+            gone << dni
+        } else if (isStale(d)) {
+            // unchecked and gone from mDNS -> forget it so the row disappears for good. a device still
+            // visible in mDNS stays listed (unchecked), as it always has - that's how you keep a real
+            // Chromecast out of Hubitat without it reappearing.
+            disc.remove(dni)
+            gone << dni
+        }
+    }
+    state.discovered = disc
+    state.manual = manual
+    if (gone) {
+        // prune the render-time candidate cache too, and don't leave orphan checkbox settings behind
+        state.candidates = (state.candidates ?: [:]).findAll { !gone.contains(it.key) }
+        gone.each { app.removeSetting("sel_${cleanId(it)}") }
+        logInfo "syncChildren: forgot ${gone.size()} device(s): ${gone.join(', ')}"
     }
     parent.getChildDevices().each { child ->
         if (!wanted.contains(child.deviceNetworkId)) parent.deleteChild(child.deviceNetworkId)

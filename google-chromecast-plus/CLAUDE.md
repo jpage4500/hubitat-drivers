@@ -9,6 +9,35 @@ Three files that must be deployed **together** (they call each other's methods; 
 missing method during `createChild`): `google-chromecast-plus-app.groovy`,
 `google-chromecast-plus-parent-driver.groovy`, `google-chromecast-plus-driver.groovy`.
 
+## Discovery & the device list (app)
+
+`scanMdns()` **merges** into `state.discovered` and nothing auto-prunes it, by design: a device that's merely
+powered off also drops out of the hub's mDNS cache, and `syncChildren()` deletes any child whose candidate is
+gone — so auto-expiry would delete real devices. The checkbox is the only remover, and it is **checked by
+default** (`isSelected` returns true unless the setting is explicitly `false`), so anything still in
+`state.discovered` gets its child re-created on every Done.
+
+That's what produced the reported "ghost devices keep coming back" (2026-08-20): the DNI is derived from
+`uuid ?: mac ?: ip`, and a factory reset, or editing/deleting a speaker or display **group** in Google Home,
+mints a new `deviceId` → a new DNI, leaving the old entry listed and re-created forever.
+
+Fix: `scanMdns()` stamps `lastSeenMs` on every entry it sees; `isStale()` flags an mDNS candidate missing for
+`STALE_MS` (15 min ≈ 3 missed scans) and `deviceRow()` replaces its status line with *"not seen in mDNS since
+… — uncheck to remove"*. Unchecking such a row makes `syncChildren()` drop it from `state.discovered` (plus
+its `sel_` setting and the `state.candidates` cache) so the row is gone for good. Rules that fall out of it:
+
+- A device **still visible in mDNS** but unchecked stays listed (unchecked) — that's how you keep a real
+  Chromecast out of Hubitat without it reappearing.
+- A **manual** entry never goes stale (`source == 'manual'`), but unchecking one now also removes it from
+  `state.manual` — otherwise it stayed a candidate and the child came back on the next Done.
+- Entries saved before `lastSeenMs` existed read as stale; harmless, since `mainPage` scans before rendering
+  and anything live is re-stamped.
+
+A [user PR](https://raw.githubusercontent.com/tweas/HubitatPublic/refs/heads/master/Chromecast%2BRemoveStaleDevices)
+proposed a separate "Potentially Stale Devices" section with its own `remove_*` checkboxes. Not merged: it put
+two opposite-polarity checkboxes on the same device (stale entries stay in `candidates`, so they appeared in
+both lists) and duplicated the whole mDNS read + DNI derivation in a second `getCurrentMdnsDevices()`.
+
 ## How TTS works (current)
 
 `speak()` / `playText()` → `announce()` → Hubitat `textToSpeech()` (Amazon Polly here; returns an **MP3**,
