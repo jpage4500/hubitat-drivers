@@ -412,4 +412,15 @@ private void logDebug(msg) { if (settings.debugOutput) logAppAt('debug', msg) }
 private void logInfo(msg)  { logAppAt('info',  msg) }
 private void logWarn(msg)  { logAppAt('warn',  msg) }
 private void logError(msg) { logAppAt('error', msg) }
-private void logAppAt(String level, msg) { log."${level}"("GC+ [App] ${msg}") }
+// The Hubitat sandbox rejects a computed method name: log."${level}"(...) fails to compile with
+// "Expression [MethodCallExpression] is not allowed" (SecurityException) on current firmware, which takes
+// the whole app down at install. Dispatch by hand instead.
+private void logAppAt(String level, msg) {
+    String out = "GC+ [App] ${msg}"
+    switch (level) {
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}
