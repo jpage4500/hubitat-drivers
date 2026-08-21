@@ -76,6 +76,27 @@ Design points, all deliberate:
   because it was the first line, ahead of that function's `sec < 1` early return.
 - The parent driver's group `speak()` forwards raw text to each child's `speak()`, so groups are covered too.
 
+## Parent-device broadcast
+
+`broadcast(text, volume)` fans one announcement out to every child (and the `SpeechSynthesis` `speak()`
+overloads route here, so the parent can be picked as a single Speak/Notification target).
+
+`broadcastIdle(text, volume)` (added 2026-08-21, from a user request) is the same fan-out filtered by
+`isIdleChild()` — announce only where nothing is playing, so a broadcast doesn't talk over someone's music.
+Two things the naive `status == "stopped"` filter gets wrong, both handled:
+
+- **`markOffline()` and `initialize()` also set `status` to `stopped`**, so an unreachable device reads as
+  idle and the announcement gets queued on a device that can't play it. `isIdleChild()` also requires
+  `connectionStatus` to be outside `[offline, disconnected]` (`idle` = never connected yet, still allowed).
+- Log the filtered count as `N of M device(s)` — otherwise a broadcast that reached nobody looks identical to
+  one that reached everybody.
+
+Known caveat, not worth machinery: `status` only flips to `playing` when the child's LOAD actually reaches
+PLAYING, so a device asked to speak a second ago still reads idle and back-to-back broadcasts can double up
+on it. The real "speaking now" flag is `state.ttsActive` in the child, which the parent can't read without a
+new child method — deliberately avoided (a parent-only update would then break every `broadcastIdle` call
+with a missing-method error; attributes are always readable regardless of version skew).
+
 ## TTS issues & status
 
 ### Chirps around announcements — FIXED
