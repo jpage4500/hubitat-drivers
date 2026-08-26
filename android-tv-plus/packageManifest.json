@@ -1,0 +1,36 @@
+{
+  "packageName": "Android TV+",
+  "author": "Joe Page",
+  "version": "2.0.0",
+  "minimumHEVersion": "2.1.9",
+  "dateReleased": "2026-08-25",
+  "communityLink": "https://community.hubitat.com/t/release-hd-android-dashboard/41674",
+  "releaseNotes": "- Initial release\n- App + parent + child ADB architecture\n- Auto-discovery plus manual IP device add\n- Improved command queue, watchdogs, and reconnect backoff",
+  "apps": [
+    {
+      "id": "54121d67-fd7d-4587-a700-8b53812c7a13",
+      "name": "Android TV+",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/android-tv-plus-app.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": false
+    }
+  ],
+  "drivers": [
+    {
+      "id": "4be601fa-5600-4f23-9da9-ffe64be6ec56",
+      "name": "Android TV+ Parent",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/android-tv-plus-parent-driver.groovy",
+      "required": true
+    },
+    {
+      "id": "6f3a6003-50bc-4607-b01d-0673d9b02ef7",
+      "name": "Android TV+ Driver",
+      "namespace": "jpage4500",
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/android-tv-plus-driver.groovy",
+      "required": true
+    }
+  ]
+}

@@ -12,9 +12,34 @@
         On Fire TV → Settings → My Fire TV → Developer Options → Revoke ADB Authorizations
         Then load the new driver on Hubitat and click any command
         On the Fire TV screen, the dialog box "Authorize ADB?" will appear → select "Always Allow"
-    *  21.5.2026 - Versão 1.4 
-        - Fixed AppleTV launch command and added HBOMax launch command. 
-        - Preserves TCP connection when updating preferences. 
+    *  21.5.2026 - Versão 1.4
+        - Fixed AppleTV launch command and added HBOMax launch command.
+        - Preserves TCP connection when updating preferences.
+    *  11.7.2026 - Versão 1.5
+        - Diagnostic: logs a short fingerprint of the RSA public key on key generation,
+          on every connection attempt, and on auth accept/reject. No change to connection logic.
+        - Fix: added capability "Initialize" so Hubitat calls initialize() automatically on hub
+          boot. Root cause found via the fingerprint logs: state.connState survives a hub reboot
+          as "CONNECTED", but the underlying TCP rawSocket does not — so sendShell() skipped
+          connectToDevice() entirely and commands were sent into a dead socket after every hub
+          restart. initialize() now resets connState to IDLE on boot, forcing a real reconnect
+          on the next command. The RSA key itself was never lost; no change to key/auth logic.
+    *  11.7.2026 - Versão 1.6
+        - Fix: signWithPrivateKey() was hashing the ADB AUTH_TOKEN with SHA-1 before signing it.
+          The token IS already the 20-byte digest to sign (same contract as OpenSSL's
+          RSA_sign(NID_sha1, token, ...), used by the original adb client) — hashing it again
+          produces a signature the TV always rejects. This bug was hidden as long as the TCP
+          session stayed open after the original manual pairing; the v1.5 Initialize fix forced
+          a real reconnect after hub reboot, which exposed it as "asks to authorize again".
+          Fixed by signing the token directly instead of re-hashing it.
+    *  11.7.2026 - Versão 1.7
+        - Fix: getCurrentApp() sometimes reported "dev" as the current app instead of the real
+          one (e.g. YouTube). Cause: the shell echoes the command line back before the real
+          dumpsys output arrives, and that echo ("...2>/dev/null | grep -E 'mCurrentFocus|...'")
+          already contains the trigger keywords AND matches the old package/activity regex as
+          "dev/null". The parser locked onto that false match and ignored the real output.
+          Fixed by requiring the package group to contain a dot (all Android package names do,
+          e.g. com.amazon.firetv.youtube), which "dev" never does.
     *
     *  INITIAL SETUP:
     * 1. Firestick → Settings → My Fire TV → Developer Options → ADB Debugging: ON
@@ -80,6 +105,7 @@
         ) {
             capability "Switch"
             capability "Refresh"
+            capability "Initialize"
 
             command "home"
             command "back"
@@ -245,10 +271,18 @@
             state.adbKeyD      = d.toString(16)
             state.adbPublicKey = buildAdbPublicKey(n, 65537)
 
-            log.info "[FireTV] Key generated. In your 1st connection please authorize in your TV Screen."
+            log.info "[FireTV] Key generated. Fingerprint: ${keyFingerprint()}. In your 1st connection please authorize in your TV Screen."
         } catch (Exception ex) {
             log.error "[FireTV] Failed to generate the key: ${ex.message}"
         }
+    }
+
+    // Fingerprint curto (SHA-256, 8 chars) da chave pública atual — para diagnosticar
+    // se a chave sobrevive a um reboot do hub ou se está sendo regenerada.
+    private String keyFingerprint() {
+        if (!state.adbPublicKey) return "sem-chave"
+        byte[] hash = java.security.MessageDigest.getInstance("SHA-256").digest(state.adbPublicKey.toString().bytes)
+        return hash.encodeHex().toString().take(8)
     }
 
     def generateNewKey() {
@@ -315,8 +349,10 @@
             BigInteger d = new BigInteger(state.adbKeyD as String, 16)
             BigInteger n = new BigInteger(state.adbKeyN as String, 16)
 
-            // SHA-1 do token de desafio
-            byte[] sha1 = java.security.MessageDigest.getInstance("SHA-1").digest(token)
+            // O AUTH_TOKEN do ADB já É o digest de 20 bytes a assinar — NÃO hashear de novo
+            // (RSA_sign(NID_sha1, token, ...) do OpenSSL, usado pelo adb original, trata o
+            // input como digest pronto; hashear aqui produz uma assinatura que a TV rejeita).
+            byte[] sha1 = token
 
             // PKCS#1 v1.5 DigestInfo header para SHA-1
             byte[] digestInfo = [0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
@@ -371,8 +407,7 @@
             }
         }
 
-        log.warn "[FireTV] BUILD-DEBUG-5 (features banner + named-args fix)"
-        logD "Connecting to ${settings.ipAddress}:${settings.adbPort}"
+        log.info "[FireTV] Connecting to ${settings.ipAddress}:${settings.adbPort} — using key fingerprint: ${keyFingerprint()}"
         state.connState  = "CONNECTING"
         state.remoteId   = 0
         rxBuf[device.id] = ""
@@ -382,7 +417,7 @@
                 settings.ipAddress,
                 settings.adbPort as Integer,
                 byteInterface: true,
-                readDelay: 50
+                timeout: 5000
             )
             sendEvent(name: "adbStatus", value: "connecting")
             pauseExecution(200)
@@ -440,11 +475,8 @@
     // ═══════════════════════════════════════════════════════════════════════════════
 
     private void sendAdbConnect() {
-        // Some ADB daemons (including some Fire TV firmware) silently drop a CNXN
-        // with an empty banner. Match what the `adb` CLI sends — a features list.
-        String banner = "host::features=shell_v2,cmd,stat_v2,ls_v2,fixed_push_mkdir,apex,abb,fixed_push_symlink_timestamp,abb_exec,remount_shell,track_app,sendrecv_v2,sendrecv_v2_brotli,sendrecv_v2_lz4,sendrecv_v2_zstd,sendrecv_v2_dry_run_send,openscreen_mdns\0"
-        sendAdbMsg(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, banner.bytes)
-        logD "→ CNXN (banner=${banner.length()} bytes)"
+        sendAdbMsg(CMD_CNXN, ADB_VERSION, MAX_PAYLOAD, "host::\0".bytes)
+        logD "→ CNXN"
     }
 
     private void sendAdbMsg(int cmd, int arg0, int arg1, byte[] data) {
@@ -459,21 +491,19 @@
         sendRawHex(msg.encodeHex().toString().toUpperCase())
     }
 
-    // ADB's "data_crc32" field is misleadingly named — the wire protocol expects
-    // a simple sum of payload bytes (mod 2^32), not CRC32. A real CRC32 here makes
-    // the device silently drop CNXN, so no AUTH challenge is sent and the
-    // authorization dialog never appears on screen.
     private long calcCRC32(byte[] data) {
         if (!data || data.length == 0) return 0L
-        long sum = 0L
+        long crc = 0xFFFFFFFFL
         for (byte b : data) {
-            sum = (sum + (b & 0xFFL)) & 0xFFFFFFFFL
+            crc ^= (b & 0xFFL)
+            for (int i = 0; i < 8; i++) {
+                crc = (crc & 1L) ? ((crc >>> 1) ^ 0xEDB88320L) : (crc >>> 1)
+            }
         }
-        return sum
+        return (crc ^ 0xFFFFFFFFL) & 0xFFFFFFFFL
     }
 
     private void sendRawHex(String hexStr) {
-        log.debug "[FireTV] TX hex (${hexStr.length()} chars): ${hexStr}"
         try {
             interfaces.rawSocket.sendMessage(hexStr)
         } catch (Exception e) {
@@ -487,7 +517,6 @@
     // ═══════════════════════════════════════════════════════════════════════════════
 
     def parse(String message) {
-        log.debug "[FireTV] parse RAW (${message?.length() ?: 0} hex chars): ${message?.take(96)}"
         String key = device.id as String
         rxBuf[key] = (rxBuf[key] ?: "") + message.toUpperCase()
 
@@ -521,7 +550,7 @@
         switch (cmd) {
 
             case CMD_CNXN:
-                logD "← CNXN: authenticated"
+                log.info "[FireTV] ← CNXN: authenticated (key fingerprint: ${keyFingerprint()})"
                 unschedule("authPubkeyTimeout")
                 unschedule("retryAfterAuthTimeout")
                 state.waitingForUserAuth = false
@@ -561,7 +590,7 @@
                         state.waitingForUserAuth = true
                         state.pendingShellCmd = null
                         sendEvent(name: "adbStatus", value: "aguardando_autorizacao")
-                        log.warn "[FireTV] Chave RSA não reconhecida pela TV. Selecione 'SEMPRE PERMITIR' na tela!"
+                        log.warn "[FireTV] Chave RSA (fingerprint: ${keyFingerprint()}) não reconhecida pela TV. Selecione 'SEMPRE PERMITIR' na tela!"
                         sendAdbMsg(CMD_AUTH, AUTH_RSAPUBLICKEY, 0, state.adbPublicKey.bytes)
                         logD "→ AUTH RSAPUBLICKEY"
                         runIn(90, "authPubkeyTimeout")
@@ -598,7 +627,9 @@
                                 resp.contains("topResumedActivity")
                             )) {
 
-                            def m = (resp =~ /([a-zA-Z0-9_.]+)\/([a-zA-Z0-9_.$]+)/)
+                            // Exige ao menos um "." no package (ex: com.amazon.firetv.youtube) para não
+                            // casar falsos positivos do eco do próprio comando shell (ex: "2>/dev/null" → "dev").
+                            def m = (resp =~ /([a-zA-Z0-9_]+\.[a-zA-Z0-9_.]+)\/([a-zA-Z0-9_.$]+)/)
 
                             if (m) {
                                 state.awaitCurrentApp = false
