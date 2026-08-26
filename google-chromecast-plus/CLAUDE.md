@@ -51,6 +51,31 @@ proposed a separate "Potentially Stale Devices" section with its own `remove_*` 
 two opposite-polarity checkboxes on the same device (stale entries stay in `candidates`, so they appeared in
 both lists) and duplicated the whole mDNS read + DNI derivation in a second `getCurrentMdnsDevices()`.
 
+### Background scanning is time-bounded (2026-08-26)
+
+Discovery used to be `runEvery5Minutes('scanMdns')` — forever, for the life of the install. It's a setup-time
+activity, so it now runs in a **30-minute window** (`DISCOVERY_WINDOW_MIN`), the same shape as
+`android-tv-plus`: `armDiscovery()` stamps `state.discoveryUntilMs` and — only when the window was off —
+schedules `discoveryTick`, which unschedules *itself* once the deadline passes. Re-armed by `mainPage()`,
+`updated()` (which clears `discoveryUntilMs` first, because its `unschedule()` already killed the tick),
+`bootHandler` (the hub's mDNS cache is empty after a reboot), and the Refresh Devices button.
+
+This does **not** weaken `isStale`: `scanMdns()` reads the hub's cache **synchronously** and `mainPage()` →
+`discoverDevices()` → `scanMdns()` runs on every page render, so every device that's actually present is
+re-stamped immediately before the rows are built. Rows can only read "not seen in mDNS" for devices that were
+genuinely absent from the read you're looking at. `discoveryStatus()` prints the window state under the
+Refresh button so "my new device never showed up" is diagnosable.
+
+### Child device names survive a rename (2026-08-26)
+
+`createChild` used to do `child.setLabel(label ?: child.getLabel())` on every call, so renaming a device in
+the hub UI was undone on the next Done — the app calls `createChild` for every selected device each time.
+It now records the name it assigned in a `discoveredName` **data value** and calls `setLabel` only when the
+incoming mDNS friendly name differs from that record, so a rename in Google Home still propagates but a
+rename in Hubitat sticks. A child created before this data value existed has no record, so the first call
+seeds it *without* renaming — that's what keeps a label the user had already set from being clobbered on
+upgrade. Same logic in `android-tv-plus`'s parent driver; keep the two in sync.
+
 ## How TTS works (current)
 
 `speak()` / `playText()` → `announce()` → Hubitat `textToSpeech()` (Amazon Polly here; returns an **MP3**,

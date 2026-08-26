@@ -63,12 +63,24 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     def child = getChildDevice(dni)
     boolean isNew = false
     if (!child) {
+        String initialName = label ?: "Chromecast"
         child = addChildDevice("jpage4500", CHILD_DRIVER, dni,
-            [label: label ?: "Chromecast", isComponent: true, name: CHILD_DRIVER])
+            [label: initialName, isComponent: true, name: CHILD_DRIVER])
+        child.updateDataValue("discoveredName", initialName)
         isNew = true
-        logInfo "createChild: created '${label}' (${dni})"
-    } else {
-        child.setLabel(label ?: child.getLabel())
+        logInfo "createChild: created '${initialName}' (${dni})"
+    } else if (label) {
+        // Push the mDNS friendly name onto the label only when that name itself changed - otherwise a device
+        // the user renamed in the hub UI would get renamed back on every Done. A child created before this
+        // data value existed has no record of its discovered name, so seed it and leave the label alone.
+        String lastName = child.getDataValue("discoveredName")
+        if (lastName == null) {
+            child.updateDataValue("discoveredName", label)
+        } else if (lastName != label) {
+            logInfo "createChild: discovered name changed '${lastName}' -> '${label}', renaming (${dni})"
+            child.setLabel(label)
+            child.updateDataValue("discoveredName", label)
+        }
     }
     String oldIp = child.getDataValue("ip")
     child.updateDataValue("ip", ip)

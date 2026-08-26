@@ -108,6 +108,17 @@ hpm manifest-add-driver packageManifest.json --location=https://raw.githubuserco
 hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/govee/packageManifest.json --name="Govee Pool Thermostat" --category="Integrations" --description="Temperature from a GoveeLife Smart Pool Thermometer (unsupported by Govee's official API)"
 
 -------------------------------------------------------------------------------
+-- Android TV Plus --
+-------------------------------------------------------------------------------
+# create package for app and driver(s)
+hpm manifest-create packageManifest.json --name="Android TV+" --author="Joe Page" --version=1.0.0 --heversion=2.1.9 --datereleased=2026-08-25
+hpm manifest-add-app packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/android-tv-plus-app.groovy --required=true --oauth=false
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/android-tv-plus-parent-driver.groovy --required=true
+hpm manifest-add-driver packageManifest.json --location=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/android-tv-plus-driver.groovy --required=true
+# add package to repository
+hpm repository-add-package repository.json --manifest=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/packageManifest.json --name="Android TV+" --category="Integrations" --description="ADB control for Fire TV and Android TV devices with app-based device management"
+
+-------------------------------------------------------------------------------
 -------------------------------------------------------------------------------
 
 # NOTE: add tags to repository.json from list here: https://raw.githubusercontent.com/HubitatCommunity/hubitat-packagerepositories/master/settings.json
