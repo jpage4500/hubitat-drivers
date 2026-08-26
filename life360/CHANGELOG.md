@@ -21,6 +21,8 @@ Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integratio
 
 **Auto-recovery from token-expired state.** Three consecutive 401/403 errors still flag the token as likely expired and slow polling to 5-minute ticks — but the app now probes `/users/me` on each of those ticks. The moment Life360 responds normally (service healed, transient blip cleared), polling resumes at the normal rate automatically. Previously the integration was permanently dead until you manually re-pasted a token.
 
+**Any 5xx is now treated as a transient error.** Retryable statuses were an explicit allow-list that omitted 500 — which Life360 routinely returns for a single member while the rest of the circle succeeds. A 500 therefore fell through to the generic error path: red `unexpected response:500` in the log, no per-member backoff, retried at full poll rate. The check is now "any 5xx except the permanently-fatal 501/505", so unanticipated codes (Cloudflare has a dozen in the 520s) get backoff instead of log spam.
+
 **Polling survives hub reboots cleanly.** Previously, a hub reboot while a location fetch was in-flight would permanently block polling for those members until the app was re-saved. Fixed.
 
 **Token-expiry notifications stay armed.** Changing the poll frequency while the token is expired no longer silently kills the repeat-notification schedule.

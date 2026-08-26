@@ -23,6 +23,11 @@ import groovy.transform.Field
 @Field static final List<String> MEMBER_STATE_PREFIXES_SESSION  = ["etag-", "inflight-", "transientCount-", "transientUntilMs-"]
 @Field static final List<String> MEMBER_STATE_PREFIXES_IDENTITY = ["inTransit-", "fastChain-"]
 
+// 5xx statuses that are a permanent server-side "no" rather than a blip worth retrying. Every
+// other 5xx — Life360 origin 500/502/503/504 and the Cloudflare edge codes 520-530 — heals on
+// its own. See isTransientStatus().
+@Field static final List<Integer> PERMANENT_5XX = [501, 505]
+
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** LIFE360+ Hubitat App **
@@ -692,7 +697,7 @@ def handleMemberLocationResponse(response, Map data) {
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
         state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
 
-    } else if (status in [502, 503, 504, 520, 522, 525]) {
+    } else if (isTransientStatus(status)) {
         long delaySecs = applyTransientBackoff(memberId)
         int count = state["transientCount-${memberId}"] as int
         log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
@@ -706,6 +711,16 @@ def handleMemberLocationResponse(response, Map data) {
 
 private static int clamp(int val, int lo, int hi) {
     return Math.min(Math.max(val, lo), hi)
+}
+
+/**
+ * True if the status is a server-side failure worth retrying with backoff rather than surfacing
+ * as an actionable error. Deliberately a range, not an allow-list: an allow-list has to be
+ * extended every time Life360 or Cloudflare returns a code nobody anticipated, and until it is,
+ * that code falls through to the generic error path with no backoff at all.
+ */
+private static boolean isTransientStatus(Integer status) {
+    return status != null && status >= 500 && !(status in PERMANENT_5XX)
 }
 
 private long applyTransientBackoff(String memberId) {
@@ -773,7 +788,7 @@ String handleException(String tag, Exception e) {
         state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
         return "RATE_LIMIT"
     }
-    if (status != null && (status == 502 || status == 503 || status == 504 || status == 520)) {
+    if (isTransientStatus(status)) {
         log.warn("${tag}: TRANSIENT (${status}); will retry next tick")
         state.message = "Transient error (${status}) — will retry automatically"
         return "TRANSIENT"
