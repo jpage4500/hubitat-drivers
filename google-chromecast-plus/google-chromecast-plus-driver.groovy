@@ -11,9 +11,12 @@
  *   - CHILD  (role=child, one per Chromecast):  owns a socket, full protocol, TTS/media/transport/status.
  *
  * Fixes the built-in integration's headline bugs: the 2-second TTS cutoff (answer heartbeat PINGs
- * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (play a short
- * hub-hosted silent lead-in that wakes the speaker's amp / warms the receiver, held briefly - longer on
- * displays like the Nest Hub - before the announcement loads).
+ * synchronously; gate the restore on real MEDIA_STATUS transitions) and first-word clipping (bake the
+ * lead-in pause into the TTS clip itself as an SSML <break> - per-device "Lead-in delay" preference - so the
+ * announcement is one media item with no hub-hosted pre-roll to swap in).
+ *
+ * TTS text may contain SSML. Callers that sanitize HTML (Rule Machine) strip everything between < and >, so
+ * a brace spelling is accepted too:  Hello {break time="2s"/} World  ==  Hello <break time="2s"/> World.
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -34,6 +37,16 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final String APP_DMR = "CC1AD845"          // Default Media Receiver
 @Field static final Integer CAST_PORT = 8009
 
+// -- TTS text (see unescapeSsml) --
+// {tag ...} spelling of an SSML tag, for callers that strip angle brackets. Only real SSML tag names are
+// converted, so ordinary braces (or a Hubitat %variable% that expands to some) are spoken as typed.
+// Case-sensitive on purpose: SSML is XML, so <BREAK/> would be rejected by the TTS engine and lose the whole
+// announcement - leaving "{BREAK/}" as literal text instead makes the typo audible rather than silent.
+@Field static final String SSML_ALIAS_RX = '\\{(/?(?:break|speak|prosody|emphasis|say-as|sub|phoneme|voice|audio|lang|mark|p|s|w)\\b[^{}]*)\\}'
+// a void tag written without its closing slash - <break time="2s"> - is invalid SSML and can fail the whole
+// announcement, so close it rather than pass it through
+@Field static final String SSML_VOID_RX = '<(break|mark)([^<>/]*)>'
+
 
 // per-device, cross-callback state (parse/socketStatus/scheduled jobs can run on different threads)
 @Field static final Map rxBuf   = new ConcurrentHashMap()   // device.id -> hex String (rx accumulator)
@@ -47,6 +60,7 @@ import java.util.concurrent.atomic.AtomicInteger
 // (increment on poll / re-CONNECT on heartbeat), so they can't live in state without racing.
 @Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
 @Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
+@Field static final Map priorApp = new ConcurrentHashMap() // device.id -> what was playing right before we launched the DMR over it (see capturePriorApp); written by the command thread, read by parse() -> can't live in state
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -112,6 +126,21 @@ private boolean isKeepAlive() { return settings.keepAlive != false }
 // lead-in delay (seconds, 0 = none): per-device preference driving an SSML pause prepended to the TTS text.
 private Integer leadInSec() { return Math.max(0, Math.min(5, (settings.leadInDelay ?: 0) as Integer)) }
 
+// Rule Machine (and anything else that sanitizes HTML in a text field) strips everything between < and >,
+// so SSML typed into a rule action never reaches the driver - the same text works from the device page.
+// Accept two bracket-free spellings and turn them back into real markup:
+//   Hello {break time="2s"/} World      (brace alias)
+//   Hello &lt;break time="2s"/&gt; World   (HTML entities, also &#60;/&#62;)
+// Runs before withLeadIn so its "caller already supplied SSML" check sees the converted tags, and before
+// textToSpeech so the engine gets valid SSML. Text with no braces/entities/tags is returned untouched.
+private String unescapeSsml(String text) {
+    if (!text || !(text.contains('{') || text.contains('&') || text.contains('<'))) return text
+    String out = text.replaceAll('&(?:lt|#0*60);', '<').replaceAll('&(?:gt|#0*62);', '>')
+    out = out.replaceAll(SSML_ALIAS_RX, '<$1>').replaceAll(SSML_VOID_RX, '<$1$2/>')
+    if (out != text) logDebug("SSML: \"${text}\" -> \"${out}\"")
+    return out
+}
+
 // Prepend an SSML pause so the TTS clip itself opens with silence - a slow-to-wake device (Nest Hub) clips
 // into that silence instead of the first words, and it plays as one media item (no separate pre-roll to swap).
 // Skipped when the delay is 0 or the caller already supplied SSML. Needs a TTS engine that honors <break>.
@@ -149,6 +178,7 @@ def uninstalled() {
     lastRecvConn.remove(key)
     lastMedia.remove(key)
     reqId.remove(key)
+    priorApp.remove(key)
     pending.remove("${device.id}:getStatus")
 }
 
@@ -156,8 +186,14 @@ def initialize() {
     setConn("IDLE", "initialize")
     state.retryCount = 0
     state.pendingActions = []
+    state.ttsActive = false                           // clear any TTS flags stuck on from a dropped session
     rxBuf[device.id as String] = ""
     sendEventIfChanged("connectionStatus", "idle")
+    // markOffline leaves playbackStatus=OFFLINE / status=stopped; a manual Initialize is a full reset, so clear the
+    // stale reachability read too - otherwise the device reads connectionStatus=idle but playbackStatus=OFFLINE and
+    // looks like Initialize only half-worked. The next receiver status refreshes these to the device's real values.
+    sendEventIfChanged("playbackStatus", "IDLE")
+    sendEventIfChanged("status", "stopped")
     String dt = getDataValue("deviceType")            // set by the app from mDNS; publish so rules/dashboards see it
     if (dt) sendEventIfChanged("deviceType", dt)
     if (isKeepAlive() && !isEmpty(getIp())) runIn(2, "connect")
@@ -167,7 +203,12 @@ def refresh() {
     if (isConnectedState()) {
         sendReceiverGetStatus()              // the RECEIVER_STATUS response drives the media-status query (handleReceiverStatus)
     } else if (device.currentValue("connectionStatus") != "offline") {
-        connect()                            // (re)connect + GET_STATUS; on-demand devices idle-disconnect after
+        // Defer, don't call connect() inline: a TLS connect to an unreachable-but-not-yet-offline device blocks the
+        // caller for the full OS TCP connect timeout (~130s - a SYN-dropping host; rawSocket has no connect-timeout
+        // option). refresh() runs on the app's single poll thread (pollDevices calls each child serially), so an
+        // inline block stalls the whole poll and every device behind it. Hand it to a scheduler thread instead;
+        // status still arrives asynchronously via parse(), exactly as before.
+        runInMillis(100, "connect")          // (re)connect + GET_STATUS; on-demand devices idle-disconnect after
     }
     // known-offline devices are skipped here; markOffline schedules a slow retry
 }
@@ -241,7 +282,7 @@ def disconnect()     { logInfo "disconnect"; state.pendingActions = []; closeSoc
 private void announce(String text, volume, String mode, String voice = null) {
     if (isEmpty(text)) return
     logInfo "TTS: \"${text}\" (mode=${mode}${volume != null ? ", volume=${volume}" : ""}${voice ? ", voice=${voice}" : ""})"
-    String ttsText = withLeadIn(text)
+    String ttsText = withLeadIn(unescapeSsml(text))
     Map tts = voice ? textToSpeech(ttsText, voice) : textToSpeech(ttsText)
     if (!tts?.uri) { logError "announce: textToSpeech returned no uri for '${text}'"; return }
     enqueue([type: "announce", stage: "app", url: tts.uri, dur: (tts.duration ?: 0),
@@ -282,7 +323,11 @@ private void pump() {
     def acts = state.pendingActions ?: []
     switch (state.conn ?: "IDLE") {
         case "IDLE":
-            if (acts) connect()
+            // defer connect (see refresh): a blocked TLS connect must not hang the command thread that enqueued this
+            // (playText/speak/setVolume ran for ~130s on unreachable devices). The action waits here in pendingActions
+            // and drains when the socket lands - pump() re-runs on the connection transition; markOffline drops the
+            // queue if the device is unreachable. connect()'s own CONNECTING guard de-dupes overlapping schedules.
+            if (acts) runInMillis(100, "connect")
             break
         case "READY":
             def remaining = []
@@ -291,8 +336,11 @@ private void pump() {
             if (remaining.any { it.stage == "app" }) ensureApp()
             break
         case "APP_CONNECTED":
-            if (!state.transportId) {          // stale APP_CONNECTED (DMR exited); relaunch before running actions
-                setConn("READY", "stale APP_CONNECTED, no transport")
+            // stale APP_CONNECTED: the DMR exited, or some other app now owns the device - including the third-party
+            // app finishTts relaunches after an announcement. Loading media into that app's transport would fail, so
+            // drop back to READY and relaunch the DMR before running the actions.
+            if (!state.transportId || state.appId != APP_DMR) {
+                setConn("READY", "stale APP_CONNECTED (app=${state.appId ?: 'none'})")
                 pump()
                 return
             }
@@ -321,7 +369,8 @@ private void runAction(Map a) {
 // TTS-with-restore + media LOAD
 // ============================================================================
 private void startAnnounce(Map a) {
-    if (a.mode in ["restore", "resume"]) snapshotForRestore()
+    Map prior = takePriorApp()          // always consume it: it describes the app THIS action evicted, nothing later
+    if (a.mode in ["restore", "resume"]) snapshotForRestore(prior)
     logDebug "TTS: begin (conn=${state.conn}, transport=${state.transportId ? 'set' : 'none'}, mode=${a.mode})"
     state.ttsActive = true
     state.ttsStarted = false
@@ -361,24 +410,47 @@ def ttsStartCheck() {
 
 
 private void startMedia(Map a) {
+    takePriorApp()      // this load owns the device now; don't let the evicted app leak into a later announcement's restore
     state.ttsActive = false
     state.ttsMode = "none"
     if (a.volume != null) sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
     sendMediaLoad(a.url, a.title, a.subtitle, null)
 }
 
-private void snapshotForRestore() {
+// What was on the device before the announcement, so finishTts can put it back.
+//
+// `prior` is the pre-launch capture from ensureApp and wins whenever it exists: launching the Default Media Receiver
+// EVICTS the app that was playing and rewrites state.appId/transportId, so by the time an announcement starts the live
+// state describes our own just-launched DMR - exactly wrong for the case that matters. That misread made finishTts
+// treat a third-party app's private handle ("spotify:track:...") as our own cast URL and LOAD it back into the DMR
+// (-> LOAD_FAILED, nothing resumed), instead of taking the third-party path below.
+private void snapshotForRestore(Map prior) {
+    // an announcement fired on top of one still playing: never re-snapshot. What's "playing" now is the previous
+    // announcement, so a fresh snapshot would make finishTts replay that clip. Any snapshot the first announcement
+    // took still holds the real pre-TTS content; if it took none (mode "none"), restoring nothing is the right answer.
+    if (state.ttsActive) return
+    boolean evicted = prior && !prior.isEmpty()
     state.ttsRestore = [
-        volume       : device.currentValue("volume"),
-        appId        : state.appId,
-        transportId  : state.transportId,
-        sessionId    : state.sessionId,
-        mediaSessionId: state.mediaSessionId,
-        contentId    : device.currentValue("mediaContentId"),
-        position     : device.currentValue("mediaPosition"),
-        wasPlaying   : (device.currentValue("playbackStatus") == "PLAYING")
+        volume    : device.currentValue("volume"),
+        appId     : evicted ? prior.appId     : state.appId,
+        contentId : evicted ? prior.contentId : device.currentValue("mediaContentId"),
+        position  : evicted ? prior.position  : device.currentValue("mediaPosition"),
+        wasPlaying: evicted ? prior.wasPlaying : (device.currentValue("playbackStatus") == "PLAYING")
     ]
 }
+
+// record the app we're about to push off the device (called just before the DMR launch, while the status still
+// describes that app), and hand it to the action that caused the launch
+private void capturePriorApp() {
+    priorApp[device.id as String] = [
+        appId     : state.appId,
+        contentId : device.currentValue("mediaContentId"),
+        position  : device.currentValue("mediaPosition"),
+        wasPlaying: (device.currentValue("playbackStatus") == "PLAYING")
+    ]
+}
+
+private Map takePriorApp() { return (Map) (priorApp.remove(device.id as String) ?: [:]) }
 
 def ttsTimeoutRestore() { finishTts() }
 
@@ -402,17 +474,17 @@ private void finishTts() {
         // either - both of these were the source of the end-of-speech chirps users reported.
         if (state.ttsVolumeApplied && snap.volume != null) sendSetVolume([level: ((snap.volume as Integer) / 100.0d)])
 
-        if (snap.appId == APP_DMR && snap.contentId && snap.wasPlaying) {
-            // we cast this content ourselves -> we can truly resume it
-            sendMediaLoad(snap.contentId, null, null, null)
+        if (snap.appId == APP_DMR && isPlayableUrl(snap.contentId as String) && snap.wasPlaying) {
+            // we cast this content ourselves -> we can truly resume it. "resume" picks up where it left off; the
+            // position rides along in the LOAD rather than a follow-up SEEK, which had to guess a mediaSessionId -
+            // it used the announcement's, which the receiver had already torn down (-> INVALID_MEDIA_SESSION_ID).
+            sendMediaLoad(snap.contentId as String, null, null, null, (mode == "resume" ? ((snap.position ?: 0) as Integer) : 0))
             restored = true
-            if (mode == "resume" && (snap.position ?: 0) > 0) {
-                state.resumeSeekTo = snap.position
-                runIn(3, "resumeSeek")
-            }
         } else if (snap.appId && snap.appId != APP_DMR) {
-            // third-party app (Spotify/YouTube/etc.): a sender cannot resume its exact content
-            logInfo "finishTts: prior app '${snap.appId}' was third-party; exact resume not supported (relaunching)"
+            // third-party app (Spotify/YouTube/etc.): launching the DMR for the announcement ended its session, and a
+            // sender can't restart someone else's content - its contentId is an app-private handle ("spotify:track:..."),
+            // not a URL the DMR can play. Best effort: put the app back so the phone/Spotify Connect can re-attach.
+            logInfo "finishTts: '${snap.appId}' was playing before the announcement - a third-party Cast app can't be resumed by a sender; relaunching it (playback won't restart on its own)"
             sendLaunch(snap.appId)
             restored = true
         }
@@ -426,11 +498,14 @@ private void finishTts() {
     if (settings.stopAfterTts && !restored && state.sessionId) sendReceiverStop(state.sessionId)
 }
 
-def resumeSeek() {
-    if (state.resumeSeekTo != null) { sendMediaCommand("SEEK", [currentTime: (state.resumeSeekTo as BigDecimal)]); state.remove("resumeSeekTo") }
+// only an http(s) URL can be handed back to the Default Media Receiver. A third-party receiver reports an app-private
+// contentId ("spotify:track:2noG...", a YouTube video id, ...) which the DMR answers with LOAD_FAILED.
+private boolean isPlayableUrl(String s) {
+    String u = (s ?: "").toLowerCase()
+    return u.startsWith("http://") || u.startsWith("https://")
 }
 
-private void sendMediaLoad(String url, String title, String subtitle, String art) {
+private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0) {
     if (!state.transportId) { logWarn "sendMediaLoad: no transportId"; return }
     Map media = [
         contentId  : url,
@@ -439,7 +514,7 @@ private void sendMediaLoad(String url, String title, String subtitle, String art
         metadata   : [metadataType: 0, title: (title ?: ""), subtitle: (subtitle ?: "")]
     ]
     if (art) media.metadata.images = [[url: art]]
-    Map load = [type: "LOAD", requestId: nextRequestId(), autoplay: true, currentTime: 0, media: media]
+    Map load = [type: "LOAD", requestId: nextRequestId(), autoplay: true, currentTime: (startTime ?: 0), media: media]
     sendCastMessage(SRC, state.transportId, NS_MEDIA, JsonOutput.toJson(load))
 }
 
@@ -513,15 +588,32 @@ private void closeSocket() {
 }
 
 def socketStatus(String message) {
-    logDebug("socketStatus: ${message}")
-    String m = message?.toLowerCase() ?: ""
-    if (m.contains("error") || m.contains("closed") || m.contains("failure")) {
-        handleSocketDown("socketStatus:${message}")
+    try {
+        logDebug("socketStatus: ${message}")
+        String m = message?.toLowerCase() ?: ""
+        if (m.contains("error") || m.contains("closed") || m.contains("failure")) {
+            handleSocketDown("socketStatus:${message}")
+        }
+    } catch (e) {
+        // A dying socket makes the platform interrupt the blocked I/O thread; the resulting
+        // RuntimeException(InterruptedException) can surface here as an uncaught ERROR even though the
+        // teardown/reconnect above already ran. It's benign teardown noise - downgrade to debug so it stops
+        // looking like a fault. Anything else is a genuine problem and stays at error.
+        if (isInterrupt(e)) logDebug("socketStatus: interrupted during teardown (expected) - ${e.message}")
+        else logError("socketStatus: ${e.message}")
     }
 }
 
+// true for an InterruptedException or a RuntimeException wrapping one (getClass() is sandbox-blocked, so
+// match via instanceof + cause + message). Used to keep expected socket-teardown interrupts out of ERROR.
+private boolean isInterrupt(e) {
+    if (e instanceof InterruptedException) return true
+    if (e?.cause instanceof InterruptedException) return true
+    return (e?.message ?: "").toLowerCase().contains("interrupt")
+}
+
 private void handleSocketDown(String why) {
-    logWarn "socket down (${why})"
+    logDebug "socket down (${why})"        // routine, self-healing (scheduleReconnect/next poll) -> debug, not warn
     unschedule("heartbeatTick")
     try { interfaces.rawSocket.close() } catch (e) { /* ignore */ }
     rxBuf[device.id as String] = ""
@@ -573,7 +665,7 @@ def heartbeatTick() {
     // dead-connection detection: >2 missed ping cycles
     Long last = lastRx[key] as Long
     if (last && (now() - last) > 35000) {
-        logWarn "heartbeat: no data for >35s - reconnecting"
+        logDebug "heartbeat: no data for >35s - reconnecting"   // watchdog self-heals -> debug, not warn
         handleSocketDown("heartbeat-timeout")
         return
     }
@@ -616,7 +708,7 @@ private void sendReceiverGetStatus() {
         int missed = ((missedStatus[key] ?: 0) as Integer) + 1
         missedStatus[key] = missed
         if (missed >= MAX_MISSED_STATUS) {
-            logWarn "receiver GET_STATUS unanswered x${missed} - status channel stale, forcing reconnect"
+            logDebug "receiver GET_STATUS unanswered x${missed} - status channel stale, forcing reconnect"   // self-heals -> debug
             missedStatus[key] = 0
             pending.remove(pk)
             handleSocketDown("status-timeout")
@@ -655,7 +747,7 @@ private void sendCastMessage(String srcId, String dstId, String ns, String json)
         if (ns != NS_HEARTBEAT) logTrace("TX ${ns} -> ${dstId}: ${json}")
         interfaces.rawSocket.sendMessage(hex)
     } catch (e) {
-        logError "sendCastMessage failed (${ns}): ${e.message}"
+        logDebug "sendCastMessage failed (${ns}): ${e.message}"   // write to a dropped socket; handleSocketDown reconnects -> debug
         handleSocketDown("send-exception")
     }
 }
@@ -666,6 +758,9 @@ private void ensureApp() {
         setConn("APP_CONNECTED", "DMR already running, transport reconnected")
         pump()
     } else {
+        // the launch evicts whatever app is on the device and rewrites state.appId/transportId - capture the outgoing
+        // one first so an announcement's restore/resume can still tell our own cast content from a third-party app
+        capturePriorApp()
         sendLaunch(APP_DMR)
         setConn("APP_LAUNCHING", "launching DMR")
     }
@@ -789,6 +884,7 @@ private void handleMediaStatus(Map p) {
     if (arr.isEmpty()) return
     def s = arr[0]
     if (s.mediaSessionId != null) state.mediaSessionId = s.mediaSessionId
+    boolean wasTts = state.ttsActive     // capture before the TTS block below can flip it off (finishTts)
 
     String ps = s.playerState ?: "UNKNOWN"
     sendEventIfChanged("playbackStatus", ps)
@@ -822,6 +918,14 @@ private void handleMediaStatus(Map p) {
         if (ps == "PLAYING") state.ttsStarted = true
         else if (state.ttsStarted && ps == "IDLE" && s.idleReason != "INTERRUPTED") finishTts()
     }
+
+    // Once playback has genuinely stopped, blank the now-playing fields so the device page doesn't keep showing the
+    // last track (or a finished announcement) until the receiver happens to report zero apps. That RECEIVER_STATUS
+    // path (clearNowPlaying in handleReceiverStatus) is the only other clear, and it lags the actual stop by a
+    // poll/reconnect - and never fires at all when an app stays "open" but idle. Skip while a TTS announcement is in
+    // flight (it rides through a transient IDLE before restoring prior content, handled just above) and on the
+    // INTERRUPTED transient (the old 2s-cutoff artifact).
+    if (!wasTts && ps == "IDLE" && s.idleReason != "INTERRUPTED") clearNowPlaying()
 
     // one concise line whenever the now-playing state changes; skips the frequent position-only MEDIA_STATUS updates
     String summary = [ps, [title, artist].findAll { it }.join(" - ")].findAll { it }.join(" | ")
@@ -858,6 +962,9 @@ private void clearNowPlaying() {
     ["mediaTitle", "mediaArtist", "mediaAlbum", "mediaSeries", "mediaEpisode", "albumArtUrl", "mediaContentId", "trackDescription"].each {
         sendEventIfChanged(it, "")
     }
+    sendEventIfChanged("trackData", "{}")   // JSON attribute: reset to an empty object ("" wouldn't parse for consumers)
+    sendEventIfChanged("mediaDuration", 0)
+    sendEventIfChanged("mediaPosition", 0)
 }
 
 // on-demand mode: if not keeping alive and nothing pending, drop the socket shortly after a read
@@ -1020,4 +1127,14 @@ private void logWarn(msg)  { logAt('warn',  msg) }
 private void logError(msg) { logAt('error', msg) }
 // every line is prefixed "GC+ [<device name>] " so the Hubitat Logs text-filter "GC+" shows the whole
 // integration (app + all children) in one view, each line self-identifying its device.
-private void logAt(String level, msg) { log."${level}"("GC+ [${device.displayName}] ${msg}") }
+// see the app's logAppAt: a computed method name (log."${level}") is blocked by the Hubitat sandbox
+private void logAt(String level, msg) {
+    String out = "GC+ [${device.displayName}] ${msg}"
+    switch (level) {
+        case 'trace': log.trace(out); break
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}

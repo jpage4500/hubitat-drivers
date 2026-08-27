@@ -2,11 +2,13 @@
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** Google Chromecast+ Parent **
  *
- * Top-level parent device for the Google Chromecast+ app. This is a lean read-only status tile:
+ * Top-level parent device for the Google Chromecast+ app. This is a lean status tile:
  * it aggregates its child Chromecast devices (deviceCount / playingCount / summary) and provides the
  * management hooks the app calls (create/delete children, broadcast the refresh interval + debug flag).
- * It intentionally has NO user-facing capabilities/commands - each Chromecast lives in its own child
- * device (driver "Google Chromecast+").
+ * The one user-facing feature is broadcast/speak: a single announcement fanned out to every child
+ * Chromecast at once - or only to the idle ones (broadcastIdle), so a broadcast doesn't talk over whatever
+ * is already playing. Individual Chromecast control still lives in each child device (driver
+ * "Google Chromecast+").
  * ------------------------------------------------------------------------------------------------------------------------------
  **/
 
@@ -21,10 +23,27 @@ metadata {
         author: "Joe Page",
         importUrl: "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/google-chromecast-plus/google-chromecast-plus-parent-driver.groovy"
     ) {
-        // read-only aggregate of the child Chromecast devices - no user commands
+        // "speak to all": lets the parent be picked as a single Speak/Notification target that
+        // fans the announcement out to every child Chromecast at once
+        capability "SpeechSynthesis"
+
+        // read-only aggregate of the child Chromecast devices
         attribute "deviceCount", "number"
         attribute "playingCount", "number"
         attribute "summary", "string"
+
+        // broadcast a single announcement to every child at once (explicit volume vs. the
+        // capability's bare speak(text)); volume blank = each device keeps its own setting
+        command "broadcast", [
+            [name: "Message*", type: "STRING", description: "text to speak on every Chromecast"],
+            [name: "Volume", type: "NUMBER", description: "0-100, blank = leave each device's current volume"]
+        ]
+
+        // same fan-out, but skips any Chromecast that's currently playing something (or unreachable)
+        command "broadcastIdle", [
+            [name: "Message*", type: "STRING", description: "text to speak on every idle (not playing) Chromecast"],
+            [name: "Volume", type: "NUMBER", description: "0-100, blank = leave each device's current volume"]
+        ]
     }
 }
 
@@ -44,12 +63,24 @@ def createChild(String dni, String label, String ip, String port, String uuid = 
     def child = getChildDevice(dni)
     boolean isNew = false
     if (!child) {
+        String initialName = label ?: "Chromecast"
         child = addChildDevice("jpage4500", CHILD_DRIVER, dni,
-            [label: label ?: "Chromecast", isComponent: true, name: CHILD_DRIVER])
+            [label: initialName, isComponent: true, name: CHILD_DRIVER])
+        child.updateDataValue("discoveredName", initialName)
         isNew = true
-        logInfo "createChild: created '${label}' (${dni})"
-    } else {
-        child.setLabel(label ?: child.getLabel())
+        logInfo "createChild: created '${initialName}' (${dni})"
+    } else if (label) {
+        // Push the mDNS friendly name onto the label only when that name itself changed - otherwise a device
+        // the user renamed in the hub UI would get renamed back on every Done. A child created before this
+        // data value existed has no record of its discovered name, so seed it and leave the label alone.
+        String lastName = child.getDataValue("discoveredName")
+        if (lastName == null) {
+            child.updateDataValue("discoveredName", label)
+        } else if (lastName != label) {
+            logInfo "createChild: discovered name changed '${lastName}' -> '${label}', renaming (${dni})"
+            child.setLabel(label)
+            child.updateDataValue("discoveredName", label)
+        }
     }
     String oldIp = child.getDataValue("ip")
     child.updateDataValue("ip", ip)
@@ -87,6 +118,52 @@ def setRefreshInterval(seconds) {
 def setDebug(flag) {
     state.debug = (flag as Boolean)
     getChildDevices().each { it.setDebug(flag) }
+}
+
+
+// ============================================================================
+// broadcast (fan one announcement out to every child, or only to the idle ones)
+// ============================================================================
+// SpeechSynthesis capability - each child's own speak() handles TTS, per-device volume & lead-in,
+// and restores whatever it was playing afterward.
+def speak(text)                { broadcast(text, null) }
+def speak(text, volume)        { broadcast(text, volume) }
+def speak(text, volume, voice) { broadcast(text, volume, voice) }
+
+// custom command: play <text> on every child Chromecast at once
+def broadcast(text, volume = null, voice = null) {
+    if (isEmpty(text)) { logWarn "broadcast: empty message, ignoring"; return }
+    speakTo(getChildDevices(), text, volume, voice, "broadcast")
+}
+
+// custom command: same, but skip whatever is busy - announce only where nothing is playing, so a broadcast
+// doesn't talk over someone's music or podcast (those devices simply don't get this announcement).
+def broadcastIdle(text, volume = null, voice = null) {
+    if (isEmpty(text)) { logWarn "broadcastIdle: empty message, ignoring"; return }
+    def kids = getChildDevices()
+    speakTo(kids.findAll { isIdleChild(it) }, text, volume, voice, "broadcastIdle", kids.size())
+}
+
+// "idle" = nothing playing AND reachable. status is the child's mapped Cast playerState
+// (playing/paused/buffering/stopped), but markOffline and initialize also park it at "stopped" - so without
+// the connectionStatus check an unreachable device counts as idle and the announcement is queued on a device
+// that can't play it. Caveat: a child asked to speak a moment ago still reads "stopped" until its LOAD
+// actually reaches PLAYING, so two broadcasts fired back-to-back can still double up on the same device.
+private boolean isIdleChild(child) {
+    return child.currentValue("status") == "stopped" &&
+           !(child.currentValue("connectionStatus") in ["offline", "disconnected"])
+}
+
+// shared fan-out for broadcast/broadcastIdle. Each child's speak() returns quickly (it defers the blocking
+// TLS connect), so looping here doesn't stall even with an unreachable device in the list.
+private void speakTo(kids, text, volume, voice, String what, Integer total = null) {
+    String scope = (total != null && total != kids.size()) ? "${kids.size()} of ${total}" : "${kids.size()}"
+    logInfo "${what}: '${text}'${volume != null ? " @${volume}" : ""} -> ${scope} device(s)"
+    kids.each { child ->
+        if (voice != null)       child.speak(text, volume, voice)
+        else if (volume != null) child.speak(text, volume)
+        else                     child.speak(text)
+    }
 }
 
 
@@ -131,4 +208,13 @@ private void logDebug(msg) { if (state.debug == true) logAt('debug', msg) }
 private void logInfo(msg)  { logAt('info',  msg) }
 private void logWarn(msg)  { logAt('warn',  msg) }
 private void logError(msg) { logAt('error', msg) }
-private void logAt(String level, msg) { log."${level}"("GC+ [${device.displayName}] ${msg}") }
+// see the app's logAppAt: a computed method name (log."${level}") is blocked by the Hubitat sandbox
+private void logAt(String level, msg) {
+    String out = "GC+ [${device.displayName}] ${msg}"
+    switch (level) {
+        case 'debug': log.debug(out); break
+        case 'warn':  log.warn(out);  break
+        case 'error': log.error(out); break
+        default:      log.info(out)
+    }
+}

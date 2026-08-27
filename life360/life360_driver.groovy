@@ -189,6 +189,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     boolean showNames = (ctx?.showNames != null) ? ctx.showNames : { try { parent?.getShowNamesInLogs() != false } catch (ignored) { true } }()
     boolean showMapsLink = (ctx?.showMapsLink != null) ? ctx.showMapsLink : { try { parent?.getShowMapsLink() != false } catch (ignored) { true } }()
     boolean logRawPayload = (ctx?.logRawPayload != null) ? ctx.logRawPayload : { try { parent?.getLogRawPayload() == true } catch (ignored) { false } }()
+    boolean logEachPoll = (ctx?.logDrivingTransitions != null) ? ctx.logDrivingTransitions : { try { parent?.getLogDrivingTransitions() != false } catch (ignored) { true } }()
 
     // -- location --
     // round to 5 decimal places (~1m precision) — matches history storage and avoids spurious sub-meter jitter
@@ -227,6 +228,8 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // -- previous values (used for address history and location history) --
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
+    Boolean prevIsDriving = device.currentValue('isDriving') == 'true'
+    Boolean prevInTransit = device.currentValue('inTransit') == 'true'
 
     if (logRawPayload) log.trace("generatePresenceEvent: location payload: ${location}")
 
@@ -328,12 +331,23 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
         isDriving = (speedUnits >= drivingThresholdD)
     }
 
-    if (inTransit || isDriving) {
-        String suffix = showMapsLink ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
-        log.info("${displayMember(memberFirstName, showNames)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
+    String suffix = showMapsLink ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
+    boolean moving = inTransit || isDriving
+    boolean prevMoving = prevInTransit || prevIsDriving
+    if (logEachPoll) {
+        // default on: log every poll when moving
+        if (moving) {
+            log.info("${displayMember(memberFirstName, showNames)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
+        }
+    } else {
+        // quiet mode: only log start/stop of any motion (driving or transit)
+        if (moving && !prevMoving) {
+            log.info("${displayMember(memberFirstName, showNames)}: started moving${suffix}")
+        } else if (!moving && prevMoving) {
+            log.info("${displayMember(memberFirstName, showNames)}: stopped moving${suffix}")
+        }
     }
-    // Only worth logging when a threshold override is in play — otherwise this just restates
-    // the RAW L360 flags (and the "moving @" line already shows the speed). §5.4 trust-the-payload.
+    // extra debug detail only when debug logging is on
     if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName, showNames)}: " +
         "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} (threshold override)")
 
