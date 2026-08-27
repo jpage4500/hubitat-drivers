@@ -273,7 +273,9 @@ def scanMdns() {
             logDebug("scanMdns: ${svc} lookup unavailable: ${ex.message}")
             return
         }
-        logDebug("scanMdns: ${svc} returned ${entries?.size() ?: 0} entry(ies)")
+        if (entries?.size() > 0) {
+            logDebug("scanMdns: ${svc} returned ${entries?.size() ?: 0} entry(ies)")
+        }
         entries?.each { mac, endpoint ->
             try {
                 // The value is a typed bean, not a Map, so reading a property it does not declare throws --
@@ -293,7 +295,7 @@ def scanMdns() {
                 if (svc == CAST_SERVICE) {
                     String castType = castDeviceType(txt.ca)
                     if (castType == 'audio' || castType == 'group') {
-                        logDebug("scanMdns: ignoring cast ${castType} '${name}'")
+                        //logDebug("scanMdns: ignoring cast ${castType} '${name}'")
                         return
                     }
                     autoSelect = looksLikeAndroidTv(model) || looksLikeAndroidTv(name)
