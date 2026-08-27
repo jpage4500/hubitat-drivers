@@ -101,7 +101,7 @@ Added to eliminate magic literals: `FORCE_UPDATE_FETCH_DELAY_SECS = 6`, `CIRCLES
 ### Error handling
 
 - Auth failures (`401`/`403`) in `handleMemberLocationResponse` now log `jar-at-failure [...]` (cookie names) before clearing session, distinguishing a token problem from a cookie-path problem.
-- Per-member exponential transient backoff for `502`/`503`/`504`/`520`/`522`/`525` **and** network-level failures (no HTTP status): `state["transientCount-${memberId}"]` increments on each consecutive error; delay = `min(pollSecs * 2^(count-1), 300s)`. Bit-shift exponent capped at 6 to prevent `long` overflow. Clears on success.
+- Per-member exponential transient backoff for any `5xx` except the permanent `501`/`505` **and** network-level failures (no HTTP status): `state["transientCount-${memberId}"]` increments on each consecutive error; delay = `min(pollSecs * 2^(count-1), 300s)`. Bit-shift exponent capped at 6 to prevent `long` overflow. Clears on success.
 - Rate-limit (`429`) handling extracts `Retry-After` header from async response headers (Map lookup, not `getFirstHeader`), adds 10s margin.
 - `clearSessionCache()` extended to also remove `inflight-*`, `transientCount-*`, `transientUntilMs-*` keys in addition to `etag-*` and `cookies`.
 - Watchdog fires only on the rising edge (`state.watchdogWarned` flag); previously logged on every tick after threshold exceeded.

@@ -1,4 +1,7 @@
 - [Life360+ Changelog](#life360-changelog)
+  - [5.2.3](#523)
+  - [5.2.2](#522)
+  - [5.2.1](#521)
   - [5.2.0](#520)
     - [Reliability](#reliability)
     - [New capabilities](#new-capabilities)
@@ -12,6 +15,20 @@
   - [Pre-history](#pre-history)
 
 # Life360+ Changelog
+
+## 5.2.3
+
+**Any 5xx is now treated as a transient error.** Retryable statuses were an explicit allow-list that omitted 500 — which Life360 routinely returns for a single member while the rest of the circle succeeds. A 500 therefore fell through to the generic error path: red `unexpected response:500` in the log, no per-member backoff, retried at full poll rate. The check is now "any 5xx except the permanently-fatal 501/505", so unanticipated codes (Cloudflare has a dozen in the 520s) get exponential backoff instead of log spam.
+
+## 5.2.2
+
+**Fixed the heartbeat log always showing `memberCount:0`** on the newer `/circles` API endpoint, which no longer returns `memberCount`.
+
+**Added a "Driving Logging" option.** When off, a member in motion is logged only when they start and stop moving, instead of on every poll. Reduces log spam when several members are travelling.
+
+## 5.2.1
+
+**Fixed `captureCookiesAsync` throwing `MissingMethodException` on `tokenize()`**, which repeated every poll cycle.
 
 ## 5.2.0
 
