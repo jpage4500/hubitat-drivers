@@ -36,6 +36,10 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final String RECV    = "receiver-0"
 @Field static final String APP_DMR = "CC1AD845"          // Default Media Receiver
 @Field static final Integer CAST_PORT = 8009
+// value for an empty now-playing string attribute. Not "": the hub turns an empty-string event into null, which is
+// broadcast but never stored as the current value - so the old track stays current and, since currentValue never
+// reads back "", sendEventIfChanged re-sends the "clear" on every poll.
+@Field static final String NO_MEDIA = "none"
 
 // -- TTS text (see unescapeSsml) --
 // {tag ...} spelling of an SSML tag, for callers that strip angle brackets. Only real SSML tag names are
@@ -831,7 +835,7 @@ private void handleReceiverStatus(Map p) {
     def apps = st.applications ?: []
     if (apps.isEmpty()) {
         sendEventIfChanged("currentApp", "none")
-        sendEventIfChanged("appStatusText", "")
+        sendEventIfChanged("appStatusText", NO_MEDIA)
         sendEventIfChanged("playbackStatus", "IDLE")
         sendEventIfChanged("status", "stopped")
         clearNowPlaying()
@@ -842,7 +846,7 @@ private void handleReceiverStatus(Map p) {
         def mediaApp = apps.find { a -> (a.namespaces ?: []).any { it?.name == NS_MEDIA } }
         def app0 = mediaApp ?: apps[0]
         sendEventIfChanged("currentApp", app0.displayName ?: app0.appId)
-        sendEventIfChanged("appStatusText", app0.statusText ?: "")
+        sendEventIfChanged("appStatusText", app0.statusText ?: NO_MEDIA)
         state.appId = app0.appId
         String newTransport = app0.transportId
         if (newTransport) {
@@ -900,14 +904,14 @@ private void handleMediaStatus(Map p) {
         def md = media.metadata ?: [:]
         title = md.title
         artist = md.artist ?: md.subtitle
-        sendEventIfChanged("mediaTitle", title ?: "")
-        sendEventIfChanged("mediaArtist", artist ?: "")
-        sendEventIfChanged("mediaAlbum", md.albumName ?: "")
-        sendEventIfChanged("mediaSeries", md.seriesTitle ?: "")
-        sendEventIfChanged("mediaEpisode", md.episode != null ? "${md.episode}" : "")
+        sendEventIfChanged("mediaTitle", title ?: NO_MEDIA)
+        sendEventIfChanged("mediaArtist", artist ?: NO_MEDIA)
+        sendEventIfChanged("mediaAlbum", md.albumName ?: NO_MEDIA)
+        sendEventIfChanged("mediaSeries", md.seriesTitle ?: NO_MEDIA)
+        sendEventIfChanged("mediaEpisode", md.episode != null ? "${md.episode}" : NO_MEDIA)
         String art = md.images ? md.images[0]?.url : null
         if (art) sendEventIfChanged("albumArtUrl", art)
-        sendEventIfChanged("trackDescription", [title, artist].findAll { it }.join(" - "))
+        sendEventIfChanged("trackDescription", [title, artist].findAll { it }.join(" - ") ?: NO_MEDIA)
         sendEvent(name: "trackData", value: JsonOutput.toJson([title: title, artist: artist, album: md.albumName, image: art]))
     }
 
@@ -960,7 +964,7 @@ private void handlePeerClose(String src) {
 
 private void clearNowPlaying() {
     ["mediaTitle", "mediaArtist", "mediaAlbum", "mediaSeries", "mediaEpisode", "albumArtUrl", "mediaContentId", "trackDescription"].each {
-        sendEventIfChanged(it, "")
+        sendEventIfChanged(it, NO_MEDIA)
     }
     sendEventIfChanged("trackData", "{}")   // JSON attribute: reset to an empty object ("" wouldn't parse for consumers)
     sendEventIfChanged("mediaDuration", 0)
