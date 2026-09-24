@@ -335,8 +335,9 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     boolean moving = inTransit || isDriving
     boolean prevMoving = prevInTransit || prevIsDriving
     if (logEachPoll) {
-        // default on: log every poll when moving
-        if (moving) {
+        // default on: log every poll when moving — but not while stationary (Life360 keeps
+        // inTransit/isDriving set at a light, in traffic, or for a while after arriving)
+        if (moving && speedUnits >= 1.0) {
             log.info("${displayMember(memberFirstName, showNames)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
         }
     } else {
