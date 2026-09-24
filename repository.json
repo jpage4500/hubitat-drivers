@@ -100,6 +100,16 @@
       ],
       "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/govee/packageManifest.json",
       "description": "Temperature from a GoveeLife Smart Pool Thermometer (unsupported by Govee's official API)"
+    },
+    {
+      "id": "4d3d4e94-a409-48b9-98b9-fb18af510c44",
+      "name": "Android TV+",
+      "category": "Integrations",
+      "tags": [
+        "Multimedia"
+      ],
+      "location": "https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/android-tv-plus/packageManifest.json",
+      "description": "ADB control for Fire TV and Android TV devices"
     }
   ]
 }
