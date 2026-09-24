@@ -28,6 +28,10 @@ import groovy.transform.Field
 // its own. See isTransientStatus().
 @Field static final List<Integer> PERMANENT_5XX = [501, 505]
 
+// 4xx statuses that are really a server-side blip: 408 Request Timeout is Life360 giving up on a
+// slow request, and the next poll succeeds. See isTransientStatus().
+@Field static final List<Integer> TRANSIENT_4XX = [408]
+
 /**
  * ------------------------------------------------------------------------------------------------------------------------------
  * ** LIFE360+ Hubitat App **
@@ -723,7 +727,9 @@ private static int clamp(int val, int lo, int hi) {
  * that code falls through to the generic error path with no backoff at all.
  */
 private static boolean isTransientStatus(Integer status) {
-    return status != null && status >= 500 && !(status in PERMANENT_5XX)
+    if (status == null) return false
+    if (status in TRANSIENT_4XX) return true
+    return status >= 500 && !(status in PERMANENT_5XX)
 }
 
 private long applyTransientBackoff(String memberId) {

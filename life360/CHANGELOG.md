@@ -1,4 +1,5 @@
 - [Life360+ Changelog](#life360-changelog)
+  - [5.2.4](#524)
   - [5.2.3](#523)
   - [5.2.2](#522)
   - [5.2.1](#521)
@@ -15,6 +16,10 @@
   - [Pre-history](#pre-history)
 
 # Life360+ Changelog
+
+## 5.2.4
+
+**HTTP 408 is now treated as a transient error.** Life360 sometimes answers a slow request with 408 Request Timeout, and the next poll succeeds. It used to fall through to the generic error path and log a red `unexpected response:408`. It now gets the same handling as a 5xx: a warning, per-member exponential backoff, and a reset on the next successful fetch.
 
 ## 5.2.3
 

@@ -1,3 +1,4 @@
 09/24
 - Chromecast+: fixed the last track reappearing on idle devices after every poll
 - Android TV+: now installable through Hubitat Package Manager
+- Life360+: HTTP 408 timeouts now log a warning and retry instead of an error
