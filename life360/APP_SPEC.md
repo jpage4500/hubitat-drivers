@@ -108,8 +108,9 @@ cookie).
 ## 1. Design principles
 
 1. **Per-member + etag location loop.** Each selected member is fetched with
-   `GET /circles/{id}/members/{mid}` carrying that member's `If-None-Match`. An unchanged member
-   returns a near-free `304`; only movers return a `200` body. A **separate, slow** v3
+   `GET /circles/{id}/members/{mid}` carrying that member's `If-None-Match`. Life360 no longer answers that
+   with a `304` (it returns a full `200` with the same etag), so the app treats an unchanged etag as a `304`
+   itself and skips the parse and driver call for a member who is not moving (§4.1). A **separate, slow** v3
    `GET /circles/{id}/members` refresh (≤1 per 15 min) re-reads the roster and compares member ids;
    a change in who is in the circle triggers a device reconcile (§4.2). Locations are never pushed from the periodic refresh.
 2. **Async, with a per-member in-flight guard.** Every per-member fetch is `asynchttpGet`, so a
@@ -150,7 +151,7 @@ cookie).
 │   • schedule(pollFreq) ──► handleSlowTimer() each tick:              │
 │   •     watchdog → roster refresh (≤1/15 min) → fetchLocations()       │
 │   •   fetchLocations(): for each member → asynchttpGet member+etag   │
-│   •     handleMemberLocationResponse: 200 → update child; 304 → noop  │
+│   •     handleMemberLocationResponse: 200 → update child (unchanged etag → skip) │
 │   •     200 + in-transit → ensureFastChain() (§4.3, if dynamic on)   │
 │   •   fetchMembers(periodic): member-id diff → full sync if changed  │
 │   •     handleMembersResponse: refresh state.members; reconcile      │
@@ -311,7 +312,8 @@ handleMemberLocationResponse(response, data):
   if !status: applyTransientBackoff(memberId); return  # per-member backoff (§5)
   captureCookiesAsync(response)                        # EVERY response (§0)
   switch(status):
-    200: notifyChildDevice(memberId, response.json, ctx)
+    200: if etag == etag sent AND member not moving AND driver called < 15 min ago: markFetchSuccess; return   # Life360 never sends 304 now
+         notifyChildDevice(memberId, response.json, ctx)
          markFetchSuccess(memberId)                    # clear failCount/flags/backoff/watchdog
          store etag[memberId] from case-insensitive "l360-etag" header
     304: markFetchSuccess(memberId)
@@ -418,9 +420,9 @@ fastPollMember(data):
 **Chain lifecycle:**
 
 - Chains are seeded from `notifyChildDevice` when a `200` shows a member in transit:
-  `if (inTransit && dynamicPolling) ensureFastChain(memberId)`. This also fires on a 304 (member
-  still in transit from persisted state) so a reboot doesn't permanently lose the chain for a
-  moving member.
+  `if (inTransit && dynamicPolling) ensureFastChain(memberId)`. A member marked as moving is never
+  skipped by the unchanged-etag shortcut (§4.1), so this runs on every poll for them and a reboot
+  doesn't permanently lose the chain.
 - `scheduleSlowTimer()` calls `unschedule()` (kills ALL jobs) then clears all `fastChain-*` markers.
   The next slow tick re-seeds any members still in transit.
 - `fastChain-<id>` is an identity-scoped state key (survives `clearSessionCache()`); it is only
@@ -809,7 +811,7 @@ To rebuild from nothing, in dependency order:
    Verify a single `GET /circles/{id}/members/{mid}` returns 200 and cookies accumulate.
 2. **Soak the cookie path** against a live circle for hours — confirm no 403 creep. This gate has
    killed the integration before.
-3. **Confirm per-member 304** — `If-None-Match` on an idle member returns `304`.
+3. **Confirm the unchanged-etag skip** — an idle member logs `SUCCESS (200, etag unchanged -> treated as 304)` and the driver is called only about every 15 min. (Life360 itself no longer returns a real `304`.)
 4. **Slow timer + location loop (§4.1):** `handleSlowTimer` → `fetchLocations` →
    `fetchMemberLocation` (etag + in-flight guard) → `handleMemberLocationResponse` →
    `notifyChildDevice` → driver.

@@ -194,7 +194,7 @@ Set from `generatePresenceEvent`, mostly via `sendChanged` (sends only when the 
 | `address1`           | string        | Current place/address (`"Home"` when inside HOME radius; `"No Data"` if missing) |
 | `address1prev`       | string        | Previous value of `address1` when it changes                                     |
 | `lastLocationUpdate` | date          | When `address1` last changed (NOT every poll)                                    |
-| `lastUpdated`        | date          | When this driver event batch last ran (every 200 poll that reaches the driver; 304s skip it) |
+| `lastUpdated`        | date          | When this driver event batch last ran (every poll that reaches the driver; unchanged-etag polls for a parked member are skipped, so about every 15 min) |
 | `since`              | number        | Epoch seconds — Life360's "at current address since" timestamp                   |
 | `status`             | string        | `"At Home"` or `"<x.x> miles from Home"`                                         |
 | `distance`           | number        | Distance from HOME in user units (mi/km)                                         |
