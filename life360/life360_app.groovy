@@ -676,7 +676,7 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     def tag = state["etag-${memberId}"]
     if (tag) params["headers"]["If-None-Match"] = tag
 
-    asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx])
+    asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx, etagSent: (tag != null)])
 }
 
 Long rtGet(String name) { return RUNTIME[rtKey(name)] as Long }
@@ -712,6 +712,19 @@ def handleMemberLocationResponse(response, Map data) {
     captureCookiesAsync(response)
 
     if (status == 200) {
+        // Life360 no longer answers If-None-Match with a 304: it returns a full 200 carrying the same etag. Treat an unchanged
+        // etag as the 304 it should have been and skip the JSON parse and the driver call. Not while the member is moving
+        // (the driver must keep seeing them to decide when they stopped), and the driver is still called at least every
+        // MEMBERS_REFRESH_SECS so lastUpdated and any newly added attribute catch up.
+        def eTag = response.headers?.find { it.key?.equalsIgnoreCase("l360-etag") }?.value
+        def prevTag = state["etag-${memberId}"]
+        if (data.etagSent && eTag && eTag == prevTag && !isMemberInTransit(memberId)
+                && (new Date().getTime() - (rtGet("lastDriver-${memberId}") ?: 0L)) < MEMBERS_REFRESH_SECS * 1000L) {
+            if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200, etag unchanged -> treated as 304), member:${memberName}")
+            if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (unchanged)")
+            markFetchSuccess(memberId)
+            return
+        }
         def memberObj
         try {
             memberObj = response.json
@@ -724,11 +737,13 @@ def handleMemberLocationResponse(response, Map data) {
         notifyChildDevice(memberId, memberObj, ctx)
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
         markFetchSuccess(memberId)
-        // AsyncResponse headers are a plain Map — keys are case-sensitive, but HTTP headers
-        // are case-insensitive by spec; search case-insensitively so a server casing change
-        // can't silently disable the 304 optimization.
-        def eTag = response.headers?.find { it.key?.equalsIgnoreCase("l360-etag") }?.value
-        if (eTag && state["etag-${memberId}"] != eTag) state["etag-${memberId}"] = eTag
+        // (eTag / prevTag were read above; the header search is case-insensitive because HTTP header names are,
+        // and the AsyncResponse headers Map is not.)
+        if (logEnable) {   // shows whether an etag was sent and what came back
+            log.debug("fetchMemberLocation: member:${memberName}: If-None-Match ${data.etagSent ? 'sent' : 'not sent (none stored)'}; l360-etag header ${eTag ? (prevTag ? (eTag == prevTag ? 'received, unchanged' : 'received, CHANGED') : 'received, first one') : 'NOT received'}")
+            if (!eTag) log.debug("fetchMemberLocation: response header names: ${response.headers?.collect { it.key }?.sort()}")
+        }
+        if (eTag && prevTag != eTag) state["etag-${memberId}"] = eTag
 
     } else if (status == 304) {
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
@@ -1356,6 +1371,7 @@ private void cleanupMemberState(String memberId) {
     }
     INFLIGHT.remove(inflightKey(memberId))
     rtSet("lastFetch-${memberId}", null)
+    rtSet("lastDriver-${memberId}", null)
 }
 
 /**
@@ -1397,6 +1413,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
         if (deviceWrapper != null) {
             // send location and home to device driver
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, null, home, ctx)  // places arg unused by driver; kept for the frozen app↔driver signature
+            rtSet("lastDriver-${memberId}", new Date().getTime())
             boolean prevInTransit = isMemberInTransit(memberId)
             boolean transitFlipped = (prevInTransit != inTransit)
             if (transitFlipped) {
