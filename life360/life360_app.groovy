@@ -1550,7 +1550,7 @@ def renderView() {
                 battery   : (dev.currentValue("battery") ?: "").toString(),
                 presence  : (dev.currentValue("presence") ?: "").toString(),
                 updated   : (dev.currentValue("lastLocationUpdate") ?: "").toString(),
-                inTransit : (dev.currentValue("inTransit") ?: "false").toString()
+                inTransit : (dev.currentValue("isMoving") ?: dev.currentValue("inTransit") ?: "false").toString()
             ]
         } catch (e) {
             if (logEnable) log.debug("renderView: skipping ${dev.displayName}: ${e}")
@@ -1590,7 +1590,7 @@ private String popupBuilderJs() {
     var popup = '<div class="l360-popup"><b>' + escapeHtml(m.name) + '</b>';
     if (m.address)  popup += '<div class="row">' + escapeHtml(m.address) + '</div>';
     if (m.presence) popup += '<div class="row">Presence: ' + escapeHtml(m.presence) + '</div>';
-    if (m.inTransit === 'true') popup += '<div class="row">In transit</div>';
+    if (m.inTransit === 'true') popup += '<div class="row">Moving</div>';
     if (m.battery)  popup += '<div class="row">Battery: ' + escapeHtml(m.battery) + '%</div>';
     if (m.updated)  popup += '<div class="row">Updated: ' + escapeHtml(m.updated) + '</div>';
     popup += '</div>';

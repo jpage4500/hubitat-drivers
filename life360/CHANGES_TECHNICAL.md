@@ -155,6 +155,7 @@ Added to eliminate magic literals: `FORCE_UPDATE_FETCH_DELAY_SECS = 6`, `CIRCLES
 - `inTransit` / `isDriving` now trust Life360's flags directly. `transitThreshold` / `drivingThreshold` are explicit user overrides, not the default path. Previously, the speed-based heuristic was applied unconditionally when non-zero; now it's only applied when the user has set a non-zero threshold.
 - Speed-based motion log (`"moving @ N mph/kph"`) now fires only when `inTransit || isDriving`, not on every poll.
 - Threshold-override debug log only fires when a threshold is actually active.
+- (5.2.5) New derived `isMoving` attribute: Life360 `inTransit` AND the position changed beyond the phone's accuracy (clamped to 25-150 m) within two default refresh cycles (min 2 min). It is the value `generatePresenceEvent` returns to the app (stored in `inTransit-<id>`) and what the quiet-mode "started moving" / "stopped moving" lines, the HTML tile and the map view follow. `inTransit` / `isDriving` stay exactly as Life360 reports. The anchor is memory-only; after a reboot a member already marked not moving at the same spot stays not moving.
 
 ### Presence event
 

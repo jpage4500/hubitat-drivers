@@ -120,7 +120,9 @@ cookie).
    `location` object straight through. No GPS-jitter heuristics, no "the API is probably wrong so
    correct it" logic. The only sanctioned override is the user's explicit manual speed thresholds
    (`transitThreshold` / `drivingThreshold`). If part of Life360's API is genuinely broken, Life360
-   fixes it upstream — the client does not accrete more workarounds.
+   fixes it upstream — the client does not accrete more workarounds. The one addition is the derived
+   `isMoving` attribute and the value the driver returns for the fast-poll decision (§7): they reflect
+   whether the position is actually changing. The `inTransit` / `isDriving` attributes are never altered.
 4. **Force-update for freshness, not inference.** When a fresh fix is genuinely needed, _ask the
    phone_ (§6) instead of inferring movement from noisy data.
 5. **Fail loud, fail safe.** On auth failure: clear session, flag the token, slow polling, notify
@@ -585,7 +587,7 @@ one-shot `forceUpdateStatus` pattern. The status dropdown resets after firing
 ## 7. Driver (child device)
 
 The driver is the stable part; nearly all change is app-side. Entry point:
-`generatePresenceEvent(member, places, home, ctx)` (`places` is always `null` now; the driver ignores it) → returns a boolean `inTransit` the app reads.
+`generatePresenceEvent(member, places, home, ctx)` (`places` is always `null` now; the driver ignores it) → returns a boolean the app reads: `isMoving` (Life360 `inTransit`, unless the position has not changed beyond the phone's accuracy for two default refresh cycles, min 2 min).
 
 - Attributes go through `sendChanged()`, which skips `sendEvent` when the value equals the last one sent
   (`LAST_SENT`, memory-only, keyed by `device.id`; `arrived()`/`departed()` drop only the `presence` entry; `updated()` and `uninstalled()` drop the whole entry). The first
@@ -601,6 +603,9 @@ The driver is the stable part; nearly all change is app-side. Entry point:
   for units happens at most once per poll cycle rather than once per member.
 - Motion: trust Life360's `inTransit`/`isDriving`; the manual `transitThreshold`/`drivingThreshold`
   override only when set non-zero (compared against `speedUnits` in display units, null-safe).
+  The attributes are never altered otherwise. The driver separately derives `isMoving` (`inTransit` and the position
+  has changed beyond the phone's accuracy within two default refresh cycles, min 2 min); that value is also what
+  `generatePresenceEvent` returns to the app for the fast-poll decision.
 - The "moving @ N mph/kph" info log fires only when `inTransit || isDriving`, and includes a Google
   Maps link only when `ctx.showMapsLink` (or `parent?.getShowMapsLink()` for backward compat) is true.
 - HTML tile (only when `generateHtml`): uses `long` epoch for `since` (Y2K38-safe), `avatarFontSize`,
@@ -637,7 +642,7 @@ missing place/address ⇒ `"No Data"`. `status` is `"At Home"` or `"<x.x> miles 
 | -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Presence/power | `presence` (`present`/`not present`), `battery` (0–100), `powerSource` (`dc`/`battery`), `switch` (`on`/`off`), `contact` (`open`/`closed`), `acceleration` (`active`/`inactive`) |
 | Location       | `latitude`, `longitude`, `accuracy`, `address1`, `address1prev`, `lastLocationUpdate`, `lastUpdated`, `since`, `status`, `distance`                                |
-| Motion         | `inTransit` (`"true"`/`"false"`), `isDriving` (`"true"`/`"false"`), `speed`, `userActivity`                                                                                       |
+| Motion         | `inTransit` (`"true"`/`"false"`), `isDriving` (`"true"`/`"false"`), `isMoving` (`"true"`/`"false"`, derived: in transit and position actually changing), `speed`, `userActivity`                                                                                       |
 | Phone          | `charge` (`"true"`/`"false"`), `wifiState` (`"true"`/`"false"`), `shareLocation`                                                                                                  |
 | Identity       | `memberName`, `avatar`, `phone`, `email`                                                                                                                                          |
 | HTML / history | `avatarHtml`, `html`, `history`, plus external-app attrs `bpt-history`, `numOfCharacters`, `lastLogMessage`, `lastMap`                                                            |
@@ -653,7 +658,8 @@ the next poll — intentional. `sendHistory`/`sendTheMap` are called by the exte
 app.)
 
 **App ↔ driver bridge (frozen):** parent calls `childDevice.generatePresenceEvent(member, null,
-home, ctx)` and reads its boolean return. Parent helpers the driver calls: `getShowNamesInLogs`,
+home, ctx)` and reads its boolean return (true = `isMoving`; before 5.2.5 it was Life360's `inTransit`). The app stores it
+in `state["inTransit-<id>"]` (key name kept for compatibility). Parent helpers the driver calls: `getShowNamesInLogs`,
 `getShowMapsLink`, `getLogRawPayload`, `getUnitIsMiles`, `refresh`. Keeping these
 stable lets a new app drive an old installed driver (and vice-versa) during a staged update.
 
@@ -779,7 +785,7 @@ the documented default.
 
 `renderView` (mapped at `/view`, requires OAuth + `?access_token=<state.accessToken>`) collects every
 child device's current `latitude`/`longitude` (skipping null/0,0) plus name, avatar, address, battery,
-presence, last-update, and inTransit, serializes them to JSON, and renders a single full-page map:
+presence, last-update, and isMoving (falling back to inTransit), serializes them to JSON, and renders a single full-page map:
 
 - **OpenStreetMap (Leaflet)** by default — no API key required.
 - **Google Maps** when `googleMapsApiKey` is set (uses the Maps JavaScript API v.weekly +

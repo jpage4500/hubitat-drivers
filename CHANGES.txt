@@ -4,8 +4,10 @@
 - Life360+: HTTP 408 timeouts now log a warning and retry instead of an error
 
 10/27
-- Life360+: far fewer hub writes and less work per poll
-- Life360+: member-list check now runs every 15 minutes instead of every minute
-- Life360+: heartbeat log line is now optional (new Heartbeat Logging setting)
+- Life360+: far fewer hub writes while polling
+- Life360+: new Heartbeat Logging setting to turn off the heartbeat log line
 - Life360+: clearer message when the selected circle no longer exists
 - Life360+: a phone left sitting still no longer keeps fast polling on
+
+11/02
+- Life360+: new isMoving attribute goes false soon after a phone stops
