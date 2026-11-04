@@ -237,7 +237,6 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: ${showNames ? "lat:$latitude lng:$longitude" : "location hidden (names off)"} acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s inTransit:$inTransit isDriving:$isDriving"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -348,6 +347,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // to decide on fast polling). The first poll after an upgrade has no stored isMoving, so fall back to inTransit.
     boolean isMovingNow = inTransit && !stillTooLong
     boolean prevIsMoving = (device.currentValue('isMoving') != null) ? (device.currentValue('isMoving') == 'true') : prevInTransit
+    if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: ${showNames ? "lat:$latitude lng:$longitude" : "location hidden (names off)"} acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s inTransit:$inTransit isDriving:$isDriving isMoving:$isMovingNow"
     if (logEachPoll) {
         // default on: log every poll when moving — but not while stationary (Life360 keeps
         // inTransit/isDriving set at a light, in traffic, or for a while after arriving)
@@ -364,12 +364,12 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     }
     // extra debug detail only when debug logging is on
     if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName, showNames)}: " +
-        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} (threshold override)")
+        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} isMoving:${isMovingNow} (threshold override)")
 
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : " km from Home")
 
     if (logEnable && (isDriving || inTransit)) {
-        log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving"
+        log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving, isMoving:$isMovingNow"
     }
 
     sendEvent(name: "status", value: sStatus)
