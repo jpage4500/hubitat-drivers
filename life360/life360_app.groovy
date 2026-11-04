@@ -714,7 +714,7 @@ def handleMemberLocationResponse(response, Map data) {
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
         String locTsKey = "locTs-${memberId}"
         Long locTs = memberObj?.location?.timestamp as Long
-        if (logEnable && !unchanged && prevTag && locTs != null && locTs == rtGet(locTsKey)) log.debug("fetchMemberLocation: FALSE POSITIVE: etag changed but location timestamp did not (${locTs}), member:${memberName}")
+        if (logEnable && !unchanged && prevTag && locTs != null && locTs == rtGet(locTsKey)) log.debug("fetchMemberLocation: FALSE POSITIVE: etag changed but location timestamp did not (${locTs}), etag:${eTag?.take(6)} sent:${data.etagSent?.take(6)} stored:${prevTag?.take(6)}, member:${memberName}")
         if (locTs != null) rtSet(locTsKey, locTs)
         if (ctx?.logRawPayload ?: getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
         notifyChildDevice(memberId, memberObj, ctx)

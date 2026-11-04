@@ -476,15 +476,37 @@ dynamic 20 s):
 
 | Finding | Data |
 | --- | --- |
-| Location timestamp follows the etag | Raw payload `activity.timestamp` (member A): 211 of 211 unchanged-etag polls carried the same timestamp; 181 of 184 changed-etag polls carried a new one (the 3 exceptions are another field changing) |
+| Location timestamp follows the etag | Raw payload `activity.timestamp` (member A): 211 of 211 unchanged-etag polls carried the same timestamp. About 98% of changed-etag polls carried a new one (181 of 184); the exceptions are "false positives", see below |
 | While moving, a fix arrives about every 40 s | The etag alternates changed/unchanged on 20 s fast polls. Longest unchanged run while someone was moving: 61 s (member A, 2026-11-03 21:38:24 to 21:39:25). Every other moving run was 40 s or less; member C's 18:15 to 18:35 drive never exceeded 3 polls |
 | A stopped-but-flagged phone goes quiet | Member A's parks at 22:12:01 and 2026-11-04 05:40:22: Life360 still said `inTransit:true`, the etag had been unchanged for 341 s and 262 s, and the old position rule fired. Member B's four parks and member A's 21:57 park were cleared by Life360 itself |
 | Savings | 22:30 to 05:00: 529 member polls skipped, 121 reached the driver (81% skipped). Member A's 75-minute drive (20:42 to 21:57): 145 of 253 polls came back unchanged, each of which used to run the JSON parse and the driver |
 | Margin | Window = 2 × `pollFreq`. At 180 s that is 360 s against the 61 s worst moving gap (about 6×); at the default 60 s it is 120 s (about 2×); at 30 s it is 60 s, about equal to the worst gap |
 
-**Not yet measured:** the new rule itself. The captures were taken before it existed (the old position rule
-produced the stops above); the first hub run of the etag rule should confirm `no new Life360 data for Ns`
-fires roughly twice `pollFreq` after the last fix.
+**Observed on the hub with the rule in place** (2026-11-04, `pollFreq` 180, five members, about 30 drive/park
+cycles over 8 hours):
+
+- The stop rule fired 4 times, each on a parked phone that Life360 still called `inTransit:true`, each exactly
+  360 s (2 × `pollFreq`) after the last fix. The fast chain ended on the next poll and `isMoving` went false
+  while `inTransit` stayed true.
+- Every other stop was cleared by Life360 itself first; the rule was not needed.
+- No false stop during real driving. The longest gap between fixes while driving was 60 to 64 s.
+- Life360 sometimes sets `inTransit:true` again for a few minutes at speed 0 and the same position, then clears
+  it. That is Life360's own flicker, not the rule.
+- About 1.3% of changed-etag polls (5 of 400 since 11:00) are false positives (below).
+
+**False positives** (a changed etag with an unchanged location timestamp). The app logs
+`fetchMemberLocation: FALSE POSITIVE: etag changed but location timestamp did not (<timestamp>)` at debug.
+Cost: one extra driver call whose data matches the previous one; the tile's last-updated time moves. Nothing
+else is affected, and the rule treats it as new data (it only ever delays a stop).
+
+- In every case the driver's debug line (position, accuracy, battery, wifi, speed, flags) was identical to
+  the previous call. One earlier case had a fully logged raw payload, byte-for-byte identical.
+- Two followed a real change for the same member by 0.4 s and 2 s (the slow tick and a fast-chain tick landing
+  together); three were on parked phones one poll (3 min) after the poll that delivered the fix.
+- The overnight figure of 3 exceptions in 184 was measured with a probe that compared against a stored etag
+  the app had not yet updated, so at least one was an artifact; only the in-app line above counts.
+- Cause unknown: the etag appears to cover server-side state that is not in the payload. Whether the etag
+  header is present, and the values themselves, are not logged yet.
 
 **Why not position.** The old rule needed the driver on every moving poll, a per-device memory anchor,
 haversine and an accuracy slack, and still couldn't tell a stationary phone from one whose fixes jitter
