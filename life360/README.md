@@ -1,11 +1,3 @@
-- [Life360+](#life360)
-  - [What it does](#what-it-does)
-  - [Setup](#setup)
-  - [Getting your access token](#getting-your-access-token)
-  - [Privacy \& security](#privacy--security)
-  - [Related files](#related-files)
-  - [History](#history)
-
 # Life360+
 
 Unofficial Hubitat integration that tracks the members of your Life360 circle as Hubitat devices.
@@ -51,14 +43,13 @@ The token is equivalent to your Life360 password — treat it as a secret. Token
 - **Map view URL contains a live access token.** Anyone with LAN access to your hub and that URL can pull every tracked member's live coordinates. Don't share it or screenshot it. If the token leaks, disable and re-enable OAuth (Apps Code → Life360+ → OAuth) to rotate it.
 - **Google Maps API key is visible in page HTML.** If you set one, lock it down in Google Cloud Console: HTTP-referrer restriction to your hub's hostname, API restriction to _Maps JavaScript API_ only.
 - **Logs may include names, places, and coordinates.** Turn off _Include Names and Places in Logs_ and _Include Google Maps Link in Logs_ (app settings → Logging) before sharing hub logs publicly.
-- Cloudflare cookies are load-bearing — missing them causes 403s and polling goes dark. See [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md) if you're debugging auth failures.
+- Cloudflare cookies are load-bearing — missing them causes 403s and polling goes dark. See [APP_SPEC.md](APP_SPEC.md) §0 if you're debugging auth failures.
 
 ## Related files
 
-- [CHANGELOG.md](CHANGELOG.md) — version history, user-facing highlights.
-- [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md) — developer-level detail: security fix IDs, bug IDs, API/attribute notes.
+- [CHANGELOG.md](CHANGELOG.md) — version history.
 - [STATE_REFERENCE.md](STATE_REFERENCE.md) — every setting, state variable, scheduled job, and attribute.
-- [APP_SPEC.md](APP_SPEC.md) — design intent; the code is authoritative.
+- [APP_SPEC.md](APP_SPEC.md) — design contracts and the reasons behind them; the code is authoritative.
 
 ## History
 

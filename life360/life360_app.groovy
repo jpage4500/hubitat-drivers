@@ -3,9 +3,7 @@ import java.net.SocketTimeoutException
 import groovy.transform.Field
 import java.util.concurrent.ConcurrentHashMap
 
-// In-flight request markers, keyed "<appId>-<memberId>" (use inflightKey()). Memory-only: a hub reboot clears them, so a lost callback can never leave a member stuck.
-@Field static final ConcurrentHashMap INFLIGHT = new ConcurrentHashMap()
-// Memory-only timestamps (lastSuccessMs, watchdogStartMs, lastMembersPollMs), keyed "<appId>-<name>" (use rtGet/rtSet). Kept out of state so a steady-state poll dirties nothing; a reboot just resets them.
+// Memory-only timestamps (lastMembersPollMs, etagChangedMs-<memberId>), keyed "<appId>-<name>" (use rtGet/rtSet). Lost on reboot, which is right: the roster refreshes and the unchanged-etag clock restarts.
 @Field static final ConcurrentHashMap RUNTIME = new ConcurrentHashMap()
 
 @Field static final int    TOKEN_EXPIRED_POLL_SECS         = 300   // slow-poll rate when token is flagged expired
@@ -21,6 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final int    MAX_BACKOFF_SHIFT               = 6     // max bit-shift for exponential backoff (caps at 2^6 = 64× base interval)
 @Field static final int    MEMBERS_REFRESH_SECS            = 900   // how often the roster (/members) is re-read — membership rarely changes, so never hit it faster than this even at a fast pollFreq
 @Field static final int    MEMBERS_RETRY_NO_ROSTER_SECS    = 300   // retry rate while there is no roster yet
+@Field static final int    STALE_ETAG_CYCLES               = 2     // refresh cycles of unchanged etag before a member Life360 calls in transit is treated as not moving
 @Field static final String LIFE360_BASE_URL_V3             = "https://api-cloudfront.life360.com/v3"
 @Field static final String LIFE360_BASE_URL_V4             = "https://api-cloudfront.life360.com/v4"
 
@@ -147,7 +146,7 @@ def mainPage() {
             section(header("STEP 5: Verify Connectivity")) {
                 paragraph "<small style='color:#666'>Pulls current data for every selected member. Use this to confirm setup before saving.  If it fails, check the access token (STEP 1) and try again.</small>"
                 input("fetchLocationsBtn", "button", title: "Fetch Locations")
-                Long lastSuccessMs = rtGet("lastSuccessMs")
+                Long lastSuccessMs = state.lastSuccessMs as Long
                 if (lastSuccessMs) {
                     long ageSec = (long)((new Date().getTime() - lastSuccessMs) / 1000L)
                     String ageStr = (ageSec < SECS_PER_MIN) ? "${ageSec}s ago"
@@ -242,6 +241,7 @@ def appButtonHandler(String button) {
             fetchMembers()
             break
         case "fetchLocationsBtn":
+            removeStateKeysWithPrefix(["etag-"])   // Fetch Locations: reach the driver even for a parked member
             fetchLocations()
             break
         case "generateViewLinkBtn":
@@ -490,6 +490,7 @@ def fetchPlaces() {
                 if (getLogRawPayload()) log.trace("fetchPlaces: ${response.status} ${response.data}")
                 if (response.status == 200) {
                     state.places = response.data.places?.collect { [id: it.id, name: it.name, latitude: it.latitude, longitude: it.longitude, radius: it.radius] }
+                    removeStateKeysWithPrefix(["etag-"])   // parked members re-evaluate presence against the refreshed places
                     if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
                     if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
@@ -507,7 +508,7 @@ def fetchPlaces() {
     }
 }
 
-def fetchMembers(boolean periodic = false, boolean pushLocations = true) {
+def fetchMembers(boolean periodic = false) {
     if (isEmpty(circle)) {
         log.warn("fetchMembers: circle not set")
         return;
@@ -516,7 +517,7 @@ def fetchMembers(boolean periodic = false, boolean pushLocations = true) {
     def cookies = state["cookies"]
     if (cookies) params["headers"]["Cookie"] = cookies
     if (getLogRawPayload()) log.trace("fetchMembers: GET ${params.uri}")
-    asynchttpGet("handleMembersResponse", params, [periodic: periodic, push: pushLocations])
+    asynchttpGet("handleMembersResponse", params, [periodic: periodic])
 }
 
 def handleMembersResponse(response, data) {
@@ -552,30 +553,21 @@ def handleMembersResponse(response, data) {
         // here keeps state small so every execution's deserialize cost stays low
         def newMembers = rawMembers?.sort(false) { it.id }?.collect { [id: it.id, firstName: it.firstName ?: "", lastName: it.lastName ?: "", issues: [disconnected: it.issues?.disconnected ?: false]] }
         boolean rosterChanged = ((newMembers*.id ?: []) as Set) != ((state.members*.id ?: []) as Set)
+        if (rosterChanged && !isEmpty(state.members)) log.info("fetchMembers: roster changed (${state.members.size()} -> ${newMembers?.size() ?: 0} members)")
         if (newMembers != state.members) state.members = newMembers   // also names / connected flag; skip the write when identical
         if (logEnable) log.debug("fetchMembers: ${state.members?.size() ?: 0} members: ${state.members?.collect { showNamesInLogs() ? it.firstName : it.id }}")
         if (!periodic && state.message != null) state.message = null
         if (periodic) {
-            // routine refresh: sync devices only if who is in the circle changed, and never push the /members
-            // location (it can be older than the per-member poll's and would re-evaluate in-transit on stale data)
+            // routine refresh: sync devices only if who is in the circle changed
             logHeartbeat()
             if (rosterChanged) syncChildDevices()
             return
         }
 
-        // sync child devices: create for newly selected members, remove departed ones
+        // sync child devices: create for newly selected members, remove devices for deselected ones.
+        // This roster is for names and membership only; locations come solely from the per-member poll
+        // (fetchMemberLocation), so the app and the driver never act on a second, possibly older, location.
         syncChildDevices()
-
-        // push refreshed name/avatar/location to all selected members that have a device.
-        // use rawMembers (not state.members) — state.members is already trimmed above.
-        // /circles/<id>/members doesn't always include location; the driver early-returns
-        // on a null location anyway, but guard explicitly so the intent is visible here.
-        if (data?.push != false) {
-            settings.users?.each { memberId ->
-                def member = rawMembers?.find { it.id == memberId }
-                if (member?.location) notifyChildDevice(memberId, member)
-            }
-        }
     } else if (status == 401 || status == 403) {
         log.error("fetchMembers: access denied (${status}) — the token may be expired/revoked, or the circle may no longer be accessible; open Life360+ and re-paste the token (STEP 1) or re-select the circle (STEP 2)")
         if (!periodic) state.message = "fetchMembers: access denied (${status}) — open Life360+ and re-paste the access token (STEP 1), or re-select the circle (STEP 2) if it was deleted or you left it"
@@ -591,7 +583,7 @@ def handleMembersResponse(response, data) {
 /**
  * fetch location for every selected member
  */
-boolean fetchLocations(boolean routine = false) {
+boolean fetchLocations() {
     if (isEmpty(circle)) {
         if (logEnable) log.debug("fetchLocations: circle not set")
         return false
@@ -621,18 +613,8 @@ boolean fetchLocations(boolean routine = false) {
     ctx.useMiles     = getUnitIsMiles()   // null = not yet known; driver falls back to its local pref
     ctx.logRawPayload = getLogRawPayload()
     ctx.logDrivingTransitions = getLogDrivingTransitions()
-    ctx.pollFreqSecs = pollFreqSecs()   // the driver sizes its "not moving for too long" window from this
 
     settings.users.each { memberId ->
-        // routine slow tick: a member whose fast chain polled them a moment ago needs no second request. The recent
-        // fetch time (memory-only) keeps this self-healing: if the chain ever dies, the next slow tick polls them again.
-        if (routine && state["fastChain-${memberId}"]) {
-            long lastFetch = rtGet("lastFetch-${memberId}") ?: 0L
-            if (currentTimeMs - lastFetch < dynamicPollFreqSecs() * 2000L) {
-                if (logEnable) log.debug("fetchLocations: member:${memberDisplayName(memberId)}: fast chain polled ${(long)((currentTimeMs - lastFetch) / 1000L)}s ago, skipping slow-tick poll")
-                return
-            }
-        }
         fetchMemberLocation(memberId, ctx)
     }
 
@@ -640,21 +622,18 @@ boolean fetchLocations(boolean routine = false) {
 }
 
 def fetchMemberLocation(memberId, Map ctx = null) {
-    // in-flight guard (§7.1): skip if a prior request for this member is still pending.
-    // Size the timeout to this member's effective interval — the fast (dynamic) rate when
-    // they're in transit, else the default rate — so a hung request can't outlive its cadence
-    // and stack up, while never blocking a legitimate next tick.
     long startMs = new Date().getTime()
+    // honor a server-driven rate-limit window (429) here too: the 20-second fast chain calls this directly and would
+    // otherwise keep requesting, and keep extending the window, while Life360 is already refusing us
+    if (state.rateLimitedUntilMs && startMs < state.rateLimitedUntilMs) {
+        if (logEnable) log.debug("fetchMemberLocation: member:${memberDisplayName(memberId)}: rate-limited for ${(long)((state.rateLimitedUntilMs - startMs) / 1000L)}s, skipping")
+        return
+    }
     int effectiveSecs = (settings.dynamicPolling && isMemberInTransit(memberId))
         ? dynamicPollFreqSecs()
         : pollFreqSecs()
-    long inflightMs = (INFLIGHT[inflightKey(memberId)] ?: 0L) as long
-    Integer httpTimeout = clamp(effectiveSecs, 5, DEFAULT_POLL_SECS)
-    if (inflightMs > 0 && (startMs - inflightMs) < ((httpTimeout + 2) * 1000L)) {
-        if (logEnable) log.debug("fetchMemberLocation: member:${memberDisplayName(memberId)}: prior request pending, skipping")
-        return
-    }
-    // transient-error backoff (§5.3): skip if still in backoff window after a prior 5xx
+    Integer httpTimeout = clamp(effectiveSecs, 5, DEFAULT_POLL_SECS)   // a hung request times out within this member's own poll interval
+    // transient-error backoff: skip if still in backoff window after a prior 5xx
     long transientUntilMs = (state["transientUntilMs-${memberId}"] ?: 0L) as long
     if (transientUntilMs > 0 && startMs < transientUntilMs) {
         if (logEnable) {
@@ -663,9 +642,6 @@ def fetchMemberLocation(memberId, Map ctx = null) {
         }
         return
     }
-
-    INFLIGHT[inflightKey(memberId)] = startMs
-    rtSet("lastFetch-${memberId}", startMs)
 
     def params = life360Params("/circles/${circle}/members/${memberId}")
     params.timeout = httpTimeout
@@ -676,7 +652,7 @@ def fetchMemberLocation(memberId, Map ctx = null) {
     def tag = state["etag-${memberId}"]
     if (tag) params["headers"]["If-None-Match"] = tag
 
-    asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx, etagSent: (tag != null)])
+    asynchttpGet("handleMemberLocationResponse", params, [memberId: memberId, ctx: ctx, etagSent: tag])
 }
 
 Long rtGet(String name) { return RUNTIME[rtKey(name)] as Long }
@@ -687,15 +663,9 @@ void rtSet(String name, Long value) {
 
 String rtKey(String name) { return "${app.id}-${name}".toString() }
 
-// Must be a real String: a GString key hashes differently and silently never matches the map entry.
-private String inflightKey(memberId) {
-    return "${app.id}-${memberId}".toString()
-}
-
 def handleMemberLocationResponse(response, Map data) {
     String memberId = data.memberId
     Map ctx = data.ctx
-    INFLIGHT.remove(inflightKey(memberId))  // clear in-flight marker (§7.1)
 
     String memberName = memberDisplayName(memberId)
 
@@ -712,18 +682,27 @@ def handleMemberLocationResponse(response, Map data) {
     captureCookiesAsync(response)
 
     if (status == 200) {
-        // Life360 no longer answers If-None-Match with a 304: it returns a full 200 carrying the same etag. Treat an unchanged
-        // etag as the 304 it should have been and skip the JSON parse and the driver call. Not while the member is moving
-        // (the driver must keep seeing them to decide when they stopped), and the driver is still called at least every
-        // MEMBERS_REFRESH_SECS so lastUpdated and any newly added attribute catch up.
+        // Life360 no longer answers If-None-Match with a 304: it returns a full 200 carrying the same etag. An unchanged etag
+        // means no new fix, so skip the JSON parse and the driver call. A member Life360 still calls in transit whose etag has
+        // not changed for two refresh cycles gets one driver call carrying staleSecs, so the driver reports isMoving false.
+        // Done, refresh and Fetch Locations drop the stored etags, so the next poll reaches the driver (settings, new attributes).
         def eTag = response.headers?.find { it.key?.equalsIgnoreCase("l360-etag") }?.value
         def prevTag = state["etag-${memberId}"]
-        if (data.etagSent && eTag && eTag == prevTag && !isMemberInTransit(memberId)
-                && (new Date().getTime() - (rtGet("lastDriver-${memberId}") ?: 0L)) < MEMBERS_REFRESH_SECS * 1000L) {
-            if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200, etag unchanged -> treated as 304), member:${memberName}")
-            if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (unchanged)")
-            markFetchSuccess(memberId)
-            return
+        boolean unchanged = (eTag && (eTag == data.etagSent || eTag == prevTag))   // sent tag too: an older response arriving after a newer one must not roll the etag back
+        long nowMs = new Date().getTime()
+        String changedKey = "etagChangedMs-${memberId}"
+        if (!unchanged || rtGet(changedKey) == null) rtSet(changedKey, nowMs)
+        if (unchanged) {
+            boolean moving = isMemberInTransit(memberId)
+            long staleSecs = (long)((nowMs - rtGet(changedKey)) / 1000L)
+            if (!moving || staleSecs < STALE_ETAG_CYCLES * pollFreqSecs()) {
+                if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200, etag unchanged -> treated as 304), member:${memberName}")
+                if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (unchanged)")
+                markFetchSuccess(memberId)
+                if (moving) ensureFastChain(memberId)   // the skipped call would have re-seeded a lost chain
+                return
+            }
+            ctx = (ctx ?: [:]) + [staleSecs: staleSecs]   // copy: ctx is shared by every member this tick
         }
         def memberObj
         try {
@@ -737,13 +716,7 @@ def handleMemberLocationResponse(response, Map data) {
         notifyChildDevice(memberId, memberObj, ctx)
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
         markFetchSuccess(memberId)
-        // (eTag / prevTag were read above; the header search is case-insensitive because HTTP header names are,
-        // and the AsyncResponse headers Map is not.)
-        if (logEnable) {   // shows whether an etag was sent and what came back
-            log.debug("fetchMemberLocation: member:${memberName}: If-None-Match ${data.etagSent ? 'sent' : 'not sent (none stored)'}; l360-etag header ${eTag ? (prevTag ? (eTag == prevTag ? 'received, unchanged' : 'received, CHANGED') : 'received, first one') : 'NOT received'}")
-            if (!eTag) log.debug("fetchMemberLocation: response header names: ${response.headers?.collect { it.key }?.sort()}")
-        }
-        if (eTag && prevTag != eTag) state["etag-${memberId}"] = eTag
+        if (eTag && !unchanged) state["etag-${memberId}"] = eTag
 
     } else if (status == 304) {
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
@@ -771,7 +744,7 @@ def handleMemberLocationResponse(response, Map data) {
         Integer retryAfter = null
         try { retryAfter = response.headers?.find { it.key?.equalsIgnoreCase("Retry-After") }?.value?.toInteger() } catch (ignored) {}
         Integer delaySecs = (retryAfter ?: RATE_LIMIT_FALLBACK_SECS) + RATE_LIMIT_BUFFER_SECS
-        state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
+        state.rateLimitedUntilMs = Math.max((state.rateLimitedUntilMs ?: 0L) as long, new Date().getTime() + (delaySecs * 1000L))
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
         state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
 
@@ -820,7 +793,8 @@ private void markFetchSuccess(String memberId) {
     if (state.rateLimitedUntilMs != null) state.rateLimitedUntilMs = null
     if (state.message != null) state.message = null
     long nowMs = new Date().getTime()
-    rtSet("lastSuccessMs", nowMs)
+    // watchdog threshold is >= 10 min, so 1-minute resolution is plenty and keeps this to about one state write a minute
+    if (!state.lastSuccessMs || nowMs - (state.lastSuccessMs as long) >= 60000L) state.lastSuccessMs = nowMs
     if (state["transientCount-${memberId}"]) state["transientCount-${memberId}"] = 0
     if (state["transientUntilMs-${memberId}"] != null) state.remove("transientUntilMs-${memberId}")
     if (state.watchdogWarned) {
@@ -865,7 +839,7 @@ String handleException(String tag, Exception e) {
     if (status == 429) {
         Integer retryAfter = readRetryAfterSecs(e)
         Integer delaySecs = (retryAfter ?: RATE_LIMIT_FALLBACK_SECS) + RATE_LIMIT_BUFFER_SECS
-        state.rateLimitedUntilMs = new Date().getTime() + (delaySecs * 1000L)
+        state.rateLimitedUntilMs = Math.max((state.rateLimitedUntilMs ?: 0L) as long, new Date().getTime() + (delaySecs * 1000L))
         log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
         state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
         return "RATE_LIMIT"
@@ -1035,12 +1009,13 @@ def updated() {
     state.failCount = 0
     state.rateLimitedUntilMs = null
     state.message = null
-    unschedule("sendTokenExpiryReminder")  // clear any pending repeat reminder (§5.2)
+    unschedule("sendTokenExpiryReminder")  // clear any pending repeat reminder
     state.tokenStatus = null        // clear so a freshly-pasted token doesn't show stale status
     resetWatchdog()                 // restart the clock so the pre-fix gap can't trigger a stale WATCHDOG warning
+    removeStateKeysWithPrefix(["etag-"])   // the next poll reaches the driver, so changed settings take effect
     if (!isEmpty(circle) && !isEmpty(access_token)) {   // Done = refresh the roster now, don't wait out the floor
         rtSet("lastMembersPollMs", new Date().getTime())
-        fetchMembers(false, false)   // sync devices only: /members locations can be older than the per-member poll's
+        fetchMembers()
     }
     removeObsoleteStateKeys()
     syncChildDevices()
@@ -1054,7 +1029,7 @@ def initialize(evt) {
     removeObsoleteStateKeys()
     state.rateLimitedUntilMs = null // rate limit windows don't survive a reboot
     rtSet("lastMembersPollMs", null)  // refresh the roster on the first tick after reboot
-    resetWatchdog()                   // a warning from before the reboot must not mute the new clock
+    resetWatchdog()                   // a hub that was down longer than the threshold must not warn on its first tick
     syncChildDevices()
     refreshUserSettings()
     scheduleSlowTimer()
@@ -1062,14 +1037,13 @@ def initialize(evt) {
 
 private void removeObsoleteStateKeys() {
     ["placesJson", "cachedHome", "scheduledBaseSecs", "pollIntervalSecs",
-     "dynamicPollingActive", "memberInTransit", "lastCirclesFetchMs", "lastSuccessMs", "lastCirclesPollMs", "memberCount"].each { state.remove(it) }
-    removeStateKeysWithPrefix(["inflight-"])  // in-flight markers moved from state to the INFLIGHT map
+     "dynamicPollingActive", "memberInTransit", "lastCirclesFetchMs", "lastCirclesPollMs", "memberCount"].each { state.remove(it) }
+    removeStateKeysWithPrefix(["inflight-"])  // in-flight markers written to state by earlier versions
 }
 
 
 def uninstalled() {
     log.info("uninstalled")
-    INFLIGHT.keySet().findAll { it.startsWith("${app.id}-") }.each { INFLIGHT.remove(it) }
     RUNTIME.keySet().findAll { it.startsWith("${app.id}-") }.each { RUNTIME.remove(it) }
     removeChildDevices(getChildDevices())
 }
@@ -1078,8 +1052,8 @@ def uninstalled() {
  * can be called by child device to force update location
  */
 def refresh() {
+    removeStateKeysWithPrefix(["etag-"])   // the next poll must reach the driver even for a parked member
     fetchLocations()
-    scheduleSlowTimer()
 }
 
 /**
@@ -1173,13 +1147,11 @@ def fastPollMember(data) {
     ctx.useMiles     = getUnitIsMiles()
     ctx.logRawPayload = getLogRawPayload()
     ctx.logDrivingTransitions = getLogDrivingTransitions()
-    ctx.pollFreqSecs = pollFreqSecs()   // the driver sizes its "not moving for too long" window from this
     fetchMemberLocation(memberId, ctx)
 }
 
 private void resetWatchdog() {
-    rtSet("lastSuccessMs", null)
-    rtSet("watchdogStartMs", null)
+    state.remove("lastSuccessMs")   // no watchdog until the next success
     if (state.watchdogWarned) state.watchdogWarned = false   // re-arm the rising-edge warning
     if (state.message?.startsWith("WATCHDOG")) state.message = null   // its banner is stale once the clock restarts
 }
@@ -1193,13 +1165,9 @@ def handleSlowTimer() {
     // and a log.warn shows up in Hubitat's main log so the user can see something is wrong
     // without needing to rely on the auto_reboot script.
     Long now = new Date().getTime()
-    Long watchdogBaseMs = rtGet("lastSuccessMs") ?: rtGet("watchdogStartMs")
-    if (isEmpty(circle) || isEmpty(settings.users)) {
-        resetWatchdog()   // nothing to poll, so nothing to watch (deselecting everyone must not look like an outage)
-    } else if (watchdogBaseMs == null) {
-        rtSet("watchdogStartMs", now)   // after a reboot/save, start the clock now so a never-recovering fetch still trips it
-    } else {
-        long ageMs = now - watchdogBaseMs
+    Long lastSuccess = state.lastSuccessMs as Long
+    if (lastSuccess != null && !isEmpty(circle) && !isEmpty(settings.users)) {   // nothing to poll means nothing to watch
+        long ageMs = now - lastSuccess
         int pollFreqSec = pollFreqSecs()
         long thresholdMs = Math.max((long)(pollFreqSec * 10L * 1000L), (long)(10L * 60L * 1000L))
         if (ageMs > thresholdMs && !state.tokenLikelyExpired) {
@@ -1231,7 +1199,7 @@ def handleSlowTimer() {
         return
     }
 
-    if (!fetchLocations(true)) return
+    if (!fetchLocations()) return
 }
 
 /**
@@ -1311,7 +1279,7 @@ def createChildDevices() {
     if (isEmpty(settings.users)) return null;
     if (isEmpty(state.members)) return null;
 
-    // hoist getChildDevices() once — avoids O(N²) hub device-list walks (§4.4)
+    // hoist getChildDevices() once — avoids O(N²) hub device-list walks
     Map childMap = getChildDevices().collectEntries { [it.deviceNetworkId, it] }
 
     settings.users.each { memberId ->
@@ -1369,9 +1337,7 @@ private void cleanupMemberState(String memberId) {
     (MEMBER_STATE_PREFIXES_SESSION + MEMBER_STATE_PREFIXES_IDENTITY).each { prefix ->
         state.remove("${prefix}${memberId}")
     }
-    INFLIGHT.remove(inflightKey(memberId))
-    rtSet("lastFetch-${memberId}", null)
-    rtSet("lastDriver-${memberId}", null)
+    rtSet("etagChangedMs-${memberId}", null)
 }
 
 /**
@@ -1403,7 +1369,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     }
     state.placesEmptyWarned = false
 
-    // use pre-built context from fetchLocations() poll cycle, or build on the spot (§4.2)
+    // use pre-built context from fetchLocations() poll cycle, or build on the spot
     def home = ctx ? ctx.home : buildPlacesContext().home
 
     def externalId = "${app.id}.${memberId}"
@@ -1413,11 +1379,10 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
         if (deviceWrapper != null) {
             // send location and home to device driver
             boolean inTransit = deviceWrapper.generatePresenceEvent(memberObj, null, home, ctx)  // places arg unused by driver; kept for the frozen app↔driver signature
-            rtSet("lastDriver-${memberId}", new Date().getTime())
             boolean prevInTransit = isMemberInTransit(memberId)
             boolean transitFlipped = (prevInTransit != inTransit)
             if (transitFlipped) {
-                if (logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: inTransit:${inTransit}")
+                if (logEnable) log.debug("notifyChildDevice: ${showNamesInLogs() ? memberObj.firstName : memberId}: state changed: isMoving:${inTransit}")
                 state["inTransit-${memberId}"] = inTransit
             }
             // Re-seed even without a transit flip: after a reboot the runIn chain is gone but
@@ -1531,9 +1496,8 @@ private boolean mergeCookie(String cookieVal) {
  * ha-life360's coordinator does when it sees a LoginError before re-auth.
  */
 void clearSessionCache() {
-    if (logEnable) log.debug("clearSessionCache: dropping cookie jar [${cookieJarSummary()}] + etags/inflight/backoff (likely after auth failure)")
+    if (logEnable) log.debug("clearSessionCache: dropping cookie jar [${cookieJarSummary()}] + etags/backoff (likely after auth failure)")
     state.remove("cookies")
-    INFLIGHT.keySet().findAll { it.startsWith("${app.id}-") }.each { INFLIGHT.remove(it) }
     // only session-scoped keys — identity keys (inTransit) survive a re-auth so transit state
     // isn't lost when a token is merely re-pasted.
     removeStateKeysWithPrefix(MEMBER_STATE_PREFIXES_SESSION)

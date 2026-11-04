@@ -1,40 +1,20 @@
-- [Life360+ Changelog](#life360-changelog)
-  - [5.2.5 (testing)](#525-testing)
-  - [5.2.4](#524)
-  - [5.2.3](#523)
-  - [5.2.2](#522)
-  - [5.2.1](#521)
-  - [5.2.0](#520)
-    - [Reliability](#reliability)
-    - [New capabilities](#new-capabilities)
-    - [Settings page](#settings-page)
-    - [Notifications](#notifications)
-    - [Privacy](#privacy)
-    - [Performance](#performance)
-    - [Documentation](#documentation)
-  - [Historical — App (5.1.3 and earlier)](#historical--app-513-and-earlier)
-  - [Historical — Driver (5.1.4 and earlier)](#historical--driver-514-and-earlier)
-  - [Pre-history](#pre-history)
-
 # Life360+ Changelog
 
-## 5.2.5 (testing)
+## 5.2.5
 
-**Fresh, hub-untested changes — try on a spare/low-risk setup first.** Goal: less I/O on small hubs, minimal functional change.
+**Less hub I/O, a new `isMoving` attribute, and a fix for phones that keep fast polling after they stop.**
 
-- **Driver sends events only when a value changed** (was: every attribute on every update). `lastUpdated` and the dashboard tile (when HTML Fields is on) still send on every poll that reaches the driver — intentional, so they keep showing liveness. When Life360 sends no `userActivity`, the driver now reports Life360's own `unknown` instead of an empty value. Note: the hub already filters events whose value did not change, so this mainly saves the per-call overhead, not stored events.
-- **Fewer state writes in the app:** in-flight markers, the last-success time and the roster-refresh time are kept in memory instead of `state`; unchanged etag/cookie/roster values are no longer rewritten.
-- **The per-minute v4 `/circles` poll is gone.** The member roster (`/members`) is re-read at most every 15 minutes instead (and immediately when you press Done; about every 5 minutes while no roster has loaded yet); it picks up joins and leaves (devices are reconciled; no locations are pushed from the routine refresh). v4 `/circles` is only used by the setup picker, since it no longer returns `memberCount`.
-- **Heartbeat log is now once per roster refresh (~15 min) instead of every poll,** and there is a new **Heartbeat Logging** setting (default on) to turn it off.
-- **Watchdog fixes:** it restarts after a reboot, Done or token recovery, no longer fires when nothing is configured, and a routine roster refresh no longer erases a watchdog or error banner.
-- A roster response with no member list no longer wipes the saved roster (Done / Fetch Members shows a banner), and a deleted circle (HTTP 404 from `/members`) now logs "circle not found" and, on Done / Fetch Members, shows a banner telling you to reselect the circle.
-- With several phone numbers or emails on a member, the driver now settles on the last of each (as before) instead of re-sending each one on every update. A speed below zero (the phone has no reading) counts as zero.
-- **A phone that has stopped no longer holds fast polling on.** Life360 can keep `inTransit` / `isDriving` (and even the last speed) set for a phone that is sitting still, which kept the faster Dynamic Polling rate running indefinitely. If a member Life360 calls in transit has not left the spot where it was first seen (beyond the phone's own reported accuracy) for longer than two default refresh cycles, and at least 2 minutes, the driver now tells the app to stop fast polling. The `inTransit` / `isDriving` attributes still show exactly what Life360 reports; any real movement restarts the timer, and the rule is skipped when a Minimum 'Transit' / 'Driving' Speed is set on the device.
-- The routine slow poll skips a member who was fast-polled a moment ago, instead of requesting them twice. Manual fetches still poll everyone.
-- With "Include Names and Places in Logs" off, the driver's debug lines hide coordinates and addresses.
-- **New `isMoving` attribute** (true/false): `inTransit` AND the phone has actually changed position recently. It goes false a few minutes after a phone stops, long before Life360 clears `inTransit` (about 26 minutes later in one test), so a rule that wants "parked" can trigger on it. `inTransit` and `isDriving` still show exactly what Life360 reports. The "started moving" / "stopped moving" info lines (Driving Logging off) now follow `isMoving`. The HTML tile, the map view and the per-poll "moving @" line follow it too. With a Minimum Transit Speed set it equals `inTransit`. Driving-only states (Life360 `isDriving` true with `inTransit` false) no longer produce "started/stopped moving" lines.
-- **Unchanged responses are skipped.** Life360 no longer answers `If-None-Match` with a 304 (checked with curl: it returns a full 200 carrying the same etag). The app now treats a 200 whose etag matches the one it sent as unchanged and skips the JSON parse and the driver call for a member who is not moving. The driver is still called at least every 15 minutes, so `lastUpdated` and the HTML tile timestamp now advance every 15 minutes for a parked phone instead of every poll. Debug logging shows the etag state per poll.
-- The driver drops its last-sent cache when the device is removed or when you press arrived/departed (presence only).
+- **Fewer state writes:** the roster-refresh time is kept in memory instead of `state`, `lastSuccessMs` is written at most once a minute, and unchanged etag/cookie/roster values are no longer rewritten.
+- **Member roster:** the per-minute v4 `/circles` poll (which no longer returns `memberCount`) is replaced by re-reading the roster (`/members`) at most every 15 minutes (about every 5 minutes until a roster has loaded), and immediately on Done. It picks up joins and leaves; the roster is used for names and membership only, and its location is never pushed to devices (locations come from the per-member poll). A response with no (or an empty) member list no longer wipes the saved roster. A deleted circle (404) or denied access (401/403) now says what to do.
+- **Heartbeat Logging:** new setting (default on). The heartbeat is logged once per roster refresh instead of every poll.
+- **Watchdog:** stays idle when no circle or members are selected, restarts after Done or token recovery, and a routine roster refresh no longer erases a watchdog or error banner.
+- **Unchanged responses are skipped.** Life360 no longer answers `If-None-Match` with a 304 (checked with curl: it returns a full 200 carrying the same etag). The app treats a 200 whose etag matches the one it sent as unchanged and skips the JSON parse and the driver call, for parked and moving members alike (an unchanged etag means Life360 has no new fix: the location timestamp changed on 181 of 184 changed-etag polls and on 0 of 211 unchanged ones). A phone's `lastUpdated` and tile timestamp therefore move when its data changes (about every 40 seconds while driving, every few minutes when parked) instead of every poll. Done, refresh, Fetch Locations and Fetch Places drop the stored etags, so the next poll reaches the driver (changed settings, new attributes).
+- **Simpler request path:** the per-member in-flight guard is removed (the HTTP timeout already ends a hung request before the member's next poll), and a device Refresh no longer cancels running fast-poll chains.
+- **Rate limits:** the 20-second fast-poll chain now pauses while Life360 is rate-limiting (HTTP 429), like the normal poll, instead of continuing to request.
+- **A phone that has stopped no longer holds fast polling on.** Life360 can keep `inTransit` (and even the last speed) set for a phone that is sitting still. If a member Life360 calls in transit has sent no new data (the etag has not changed) for twice your Default Refresh Rate, the app makes one last driver call that stops fast polling. Skipped when a Minimum Transit Speed is set. The longest gap between new fixes seen while someone was actually moving was 61 seconds, so with a short `pollFreq` (60 seconds or less) the window is only 1 to 2 times that and a long stretch without a fix can briefly flip `isMoving`. The evidence behind this choice is in APP_SPEC.md ("Why stillness is decided by the etag").
+- **New `isMoving` attribute** (true/false): `inTransit` AND Life360 has sent new data (a changed etag) within that window. It goes false when that check passes, long before Life360 clears `inTransit`, so a rule that wants "parked" can trigger on it. `inTransit` and `isDriving` still show exactly what Life360 sends; with a Minimum Transit Speed set, `isMoving` equals `inTransit`. The HTML tile label, the map page and the "started moving" / "stopped moving" info lines (Driving Logging off) follow it, and the "moving @" line stops once the phone is judged still. A state where Life360 has `isDriving` true but `inTransit` false no longer shows "Driving" on the tile or logs start/stop lines.
+- **Debug lines:** the driver's per-update debug line now starts with the member's name (its misleading "changed:" label is gone), and coordinates and addresses are hidden when "Include Names and Places in Logs" is off.
+- **Smaller driver changes:** `userActivity` reports `unknown` when Life360 sends none; a negative speed (no reading) counts as zero; with several phone numbers or emails on a member, the last of each is used, decided once.
 - The unused places data is no longer built or passed to the driver.
 
 ## 5.2.4
@@ -47,7 +27,7 @@
 
 ## 5.2.2
 
-**Fixed the heartbeat log always showing `memberCount:0`** on the newer `/circles` API endpoint, which no longer returns `memberCount`; the count now comes from the `/members` roster.
+**Fixed the heartbeat log always showing `memberCount:0`** on the newer `/circles` API endpoint, which no longer returns `memberCount`.
 
 **Added a "Driving Logging" option.** When off, a member in motion is logged only when they start and stop moving, instead of on every poll. Reduces log spam when several members are travelling.
 
@@ -59,45 +39,17 @@
 
 Significant update from the 5.1.3 / 5.1.4 baseline. Core theme: **the integration now stays online** through Cloudflare cookie rotations and transient Life360 outages that previously caused permanent silent failures.
 
-### Reliability
-
-**Auto-recovery from token-expired state.** Three consecutive 401/403 errors still flag the token as likely expired and slow polling to 5-minute ticks — but the app now probes `/users/me` on each of those ticks. The moment Life360 responds normally (service healed, transient blip cleared), polling resumes at the normal rate automatically. Previously the integration was permanently dead until you manually re-pasted a token.
-
-**Polling survives hub reboots cleanly.** Previously, a hub reboot while a location fetch was in-flight would permanently block polling for those members until the app was re-saved. Fixed.
-
-**Token-expiry notifications stay armed.** Changing the poll frequency while the token is expired no longer silently kills the repeat-notification schedule.
-
-**Cloudflare cookie bug fixed.** Life360 sits behind Cloudflare, which issues two cookies: `_cfuvid` (stable) and `__cf_bm` (rotates every ~30 min). The async cookie handler was overwriting the entire cookie jar with just the fresh rotating cookie each time `__cf_bm` refreshed — silently dropping `_cfuvid`. Without both, Cloudflare returns 403 within minutes and polling goes completely dark. The failure was delayed and silent, which made it look like a Life360 outage. Fixed: cookie updates now merge by name so only the rotating entry is replaced. See the [Privacy & security](README.md#privacy--security) section in the README and [Cookie management](CHANGES_TECHNICAL.md#cookie-management) in CHANGES_TECHNICAL.md.
-
-### New capabilities
-
-- **Force Update** — settings-page button that POSTs a location-refresh request to a member's phone. Life360 signals the device for a fresh GPS fix (~5 seconds), which the next poll cycle picks up.
-- **Check Token** — validates your access token with an inline success/failure result on the settings page, including a "Hi, name!" confirmation. Also re-reads the account's units preference.
-- **Units auto-detected** — speed and distance follow your Life360 account's imperial/metric preference, fetched automatically from `/users/me`. The per-device `unitOverride` setting is a fallback only (old `isMiles` bool is migrated automatically).
-- **Dynamic polling reacts immediately** — when a member starts or stops moving, the polling rate switches on the same tick instead of lagging a full cycle.
-- **Membership auto-sync** — the member roster is re-read at most every 15 min (and immediately on Done); when the set of members changes, child devices are reconciled (new members get a device, devices for deselected members are removed) and existing devices get refreshed names/avatars — no need to reopen the app.
-
-### Settings page
-
-"Other Options" reorganized into focused **Polling**, **Notifications**, **Logging**, and **Map View** sections. New **STEP 5: Verify Connectivity** shows how long ago the last successful fetch was. Map View has explicit Generate/Revoke buttons for the OAuth link.
-
-### Notifications
-
-Token-expiry alerts now have a master enable/disable toggle plus a configurable repeat reminder (2 h / 6 h / 12 h / 24 h / 48 h / never). Reminders stop automatically when a fresh token is pasted or auto-recovery succeeds.
-
-### Privacy
-
-Two opt-in logging toggles under app settings → Logging, both default on: **Include Names and Places in Logs** (off = UUIDs only, safe for sharing) and **Include Google Maps Link in Logs** (off = coordinates omitted from the "moved" log line).
-
-**Map view security hardened.** Member names and place names in the map view are now HTML-escaped, preventing a maliciously crafted Life360 profile from injecting content into the page.
-
-### Performance
-
-All member location fetches are now async, with a per-member in-flight guard so a slow Life360 response can't pile up duplicate requests. Exponential backoff on repeated 5xx errors (capped at 5 min) instead of hammering the API at full rate. Places context is built once per poll cycle and shared across all member fetches.
-
-### Documentation
-
-[README.md](README.md) rewritten. [STATE_REFERENCE.md](STATE_REFERENCE.md) added (every setting, state var, scheduled job, and attribute). [APP_SPEC.md](APP_SPEC.md) records the clean-room design (the code is authoritative). Developer-level change details in [CHANGES_TECHNICAL.md](CHANGES_TECHNICAL.md).
+- **Auto-recovery from an expired-token state.** After 3 consecutive 401/403 the app slows to 5-minute ticks and probes `/users/me`; the moment Life360 answers normally, polling resumes. Previously it stayed dead until you re-pasted a token. Token-expiry notifications now have a master toggle and a repeat reminder (2 / 6 / 12 / 24 / 48 h / never) and stay armed when you change the poll frequency.
+- **Hub reboots no longer block polling** for members whose fetch was in flight.
+- **Cloudflare cookie fix.** The async cookie handler overwrote the whole jar with the freshly rotated `__cf_bm`, silently dropping `_cfuvid`, so polling went dark within minutes. Cookie updates now merge by name.
+- **Force Update** button (asks a member's phone for a fresh GPS fix) and **Check Token** button (inline result, re-reads the account's units preference).
+- **Units follow your Life360 account** (imperial/metric); the per-device `unitOverride` is a fallback (the old `isMiles` bool is migrated).
+- **Dynamic polling** reacts on the same tick a member starts or stops moving.
+- **Membership auto-sync:** a circle poll noticed joins and leaves and reconciled child devices (replaced in 5.2.5 by the periodic roster refresh).
+- **Settings page** reorganized into Polling, Notifications, Logging and Map View, plus STEP 5 (Verify Connectivity) and Generate/Revoke buttons for the map link.
+- **Privacy:** two logging toggles, both default on: _Include Names and Places in Logs_ (off = ids only) and _Include Google Maps Link in Logs_. Member and place names in the map view are HTML-escaped.
+- **Performance:** member fetches are async; repeated 5xx errors back off exponentially (capped at 5 min); the places context is built once per poll cycle.
+- Docs added: [README.md](README.md), [STATE_REFERENCE.md](STATE_REFERENCE.md), [APP_SPEC.md](APP_SPEC.md).
 
 ---
 

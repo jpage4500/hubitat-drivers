@@ -11,4 +11,7 @@
 
 11/02
 - Life360+: new isMoving attribute goes false soon after a phone stops
-- Life360+: parked phones no longer reprocess unchanged Life360 responses
+
+11/03
+- Life360+: a phone's last-updated time moves only when its data changes
+- Life360+: fast polling now pauses while Life360 is rate-limiting
