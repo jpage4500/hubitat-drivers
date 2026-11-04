@@ -3,7 +3,7 @@ import java.net.SocketTimeoutException
 import groovy.transform.Field
 import java.util.concurrent.ConcurrentHashMap
 
-// Memory-only timestamps (lastMembersPollMs, etagChangedMs-<memberId>), keyed "<appId>-<name>" (use rtGet/rtSet). Lost on reboot, which is right: the roster refreshes and the unchanged-etag clock restarts.
+// Memory-only timestamps (lastMembersPollMs, etagChangedMs-<memberId>, locTs-<memberId>), keyed "<appId>-<name>" (use rtGet/rtSet). Lost on reboot, which is right: the roster refreshes and the unchanged-etag clock restarts.
 @Field static final ConcurrentHashMap RUNTIME = new ConcurrentHashMap()
 
 @Field static final int    TOKEN_EXPIRED_POLL_SECS         = 300   // slow-poll rate when token is flagged expired
@@ -712,6 +712,10 @@ def handleMemberLocationResponse(response, Map data) {
             return
         }
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
+        String locTsKey = "locTs-${memberId}"
+        Long locTs = memberObj?.location?.timestamp as Long
+        if (logEnable && !unchanged && prevTag && locTs != null && locTs == rtGet(locTsKey)) log.debug("fetchMemberLocation: FALSE POSITIVE: etag changed but location timestamp did not (${locTs}), member:${memberName}")
+        if (locTs != null) rtSet(locTsKey, locTs)
         if (ctx?.logRawPayload ?: getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
         notifyChildDevice(memberId, memberObj, ctx)
         if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
@@ -1338,6 +1342,7 @@ private void cleanupMemberState(String memberId) {
         state.remove("${prefix}${memberId}")
     }
     rtSet("etagChangedMs-${memberId}", null)
+    rtSet("locTs-${memberId}", null)
 }
 
 /**
