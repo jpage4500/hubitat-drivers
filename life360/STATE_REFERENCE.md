@@ -76,7 +76,9 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | ------------------- | ------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | ~~`memberCount`~~   | Integer | removed | Obsolete — v4 `/circles` no longer returns it; the count is `state.members.size()`. Deleted by `removeObsoleteStateKeys()` |
 | `lastMembersPollMs` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleSlowTimer` | Throttles the periodic roster refresh to once per `max(pollFreq, 900)` s (~5 min while no roster). Stamped by `updated()`, cleared by `initialize()` |
-| `etagChangedMs-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | When this member's etag last changed; drives the stale-etag stop (APP_SPEC §13). Removed by `cleanupMemberState()`; lost on reboot, which only restarts the clock |
+| `etagChangedMs-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | When this member's etag last changed; drives the stale-etag stop (APP_SPEC §13). Removed by `cleanupMemberState()` and `uninstalled()`; lost on reboot, which only restarts the clock |
+| `noEtagWarnMs` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | When the "no l360-etag header" warning last fired (one per `MEMBERS_REFRESH_SECS`, app-wide). Cleared by `uninstalled()` |
+| `locTs-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | Last location timestamp Life360 sent; used only by the debug `FALSE POSITIVE` line. Removed by `cleanupMemberState()` and `uninstalled()` |
 
 ### UI one-shot status (button results)
 
@@ -181,7 +183,7 @@ Set from `generatePresenceEvent`, with plain `sendEvent` (the hub drops unchange
 | -------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inTransit`    | enum `true`/`false` | From Life360, optionally overridden by `transitThreshold`                                                                                                                                               |
 | `isDriving`    | enum `true`/`false` | From Life360, optionally overridden by `drivingThreshold`                                                                                                                                               |
-| `isMoving`     | enum `true`/`false` | Derived: `inTransit` AND Life360 still sending new data (APP_SPEC §13); goes `false` long before Life360 clears `inTransit`, and is what the app uses for the fast-poll decision. With a Minimum Transit Speed set it equals `inTransit` |
+| `isMoving`     | enum `true`/`false` | Derived: `inTransit` AND Life360 still sending new data (APP_SPEC §13); goes `false` after 240 s without new data, usually well before Life360 clears `inTransit`, and is what the app uses for the fast-poll decision. With a Minimum Transit Speed set it equals `inTransit` |
 | `speed`        | number              | Current speed in user units (mph/kph)                                                                                                                                                                   |
 | `userActivity` | string              | Life360 activity hint (`unknown`/`biking`/`running`/`vehicle`); the `os_` prefix is stripped. Sent on every update (the hub drops unchanged values); `unknown` when Life360 sends none. The value is only meaningful when the API payload includes it (often blank on V3) |
 

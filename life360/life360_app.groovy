@@ -3,7 +3,7 @@ import java.net.SocketTimeoutException
 import groovy.transform.Field
 import java.util.concurrent.ConcurrentHashMap
 
-// Memory-only timestamps (lastMembersPollMs, etagChangedMs-<memberId>, locTs-<memberId>), keyed "<appId>-<name>" (use rtGet/rtSet). Lost on reboot, which is right: the roster refreshes and the unchanged-etag clock restarts.
+// Memory-only timestamps (lastMembersPollMs, etagChangedMs-<memberId>, locTs-<memberId>, noEtagWarnMs), keyed "<appId>-<name>" (use rtGet/rtSet). Lost on reboot, which is right: the roster refreshes and the unchanged-etag clock restarts.
 @Field static final ConcurrentHashMap RUNTIME = new ConcurrentHashMap()
 
 @Field static final int    TOKEN_EXPIRED_POLL_SECS         = 300   // slow-poll rate when token is flagged expired
@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final int    MAX_BACKOFF_SHIFT               = 6     // max bit-shift for exponential backoff (caps at 2^6 = 64× base interval)
 @Field static final int    MEMBERS_REFRESH_SECS            = 900   // how often the roster (/members) is re-read — membership rarely changes, so never hit it faster than this even at a fast pollFreq
 @Field static final int    MEMBERS_RETRY_NO_ROSTER_SECS    = 300   // retry rate while there is no roster yet
-@Field static final int    STALE_ETAG_CYCLES               = 2     // refresh cycles of unchanged etag before a member Life360 calls in transit is treated as not moving
+@Field static final int    STALE_ETAG_SECS                 = 240   // unchanged etag this long (a moving phone's fixes are at most ~60 s apart) and Life360 still says in transit -> treated as not moving
 @Field static final String LIFE360_BASE_URL_V3             = "https://api-cloudfront.life360.com/v3"
 @Field static final String LIFE360_BASE_URL_V4             = "https://api-cloudfront.life360.com/v4"
 
@@ -684,18 +684,23 @@ def handleMemberLocationResponse(response, Map data) {
     if (status == 200) {
         // Life360 no longer answers If-None-Match with a 304: it returns a full 200 carrying the same etag. An unchanged etag
         // means no new fix, so skip the JSON parse and the driver call. A member Life360 still calls in transit whose etag has
-        // not changed for two refresh cycles gets one driver call carrying staleSecs, so the driver reports isMoving false.
+        // not changed for STALE_ETAG_SECS gets one driver call carrying staleSecs, so the driver reports isMoving false.
         // Done, refresh and Fetch Locations drop the stored etags, so the next poll reaches the driver (settings, new attributes).
         def eTag = response.headers?.find { it.key?.equalsIgnoreCase("l360-etag") }?.value
         def prevTag = state["etag-${memberId}"]
         boolean unchanged = (eTag && (eTag == data.etagSent || eTag == prevTag))   // sent tag too: an older response arriving after a newer one must not roll the etag back
         long nowMs = new Date().getTime()
+        if (!eTag && nowMs - (rtGet("noEtagWarnMs") ?: 0L) > MEMBERS_REFRESH_SECS * 1000L) {   // at most one warning per roster-refresh interval, for the whole app
+            rtSet("noEtagWarnMs", nowMs)
+            log.warn("fetchMemberLocation: Life360 sent no l360-etag header (member:${memberName}); skipping unchanged polls and the stopped-phone check are off until it returns")
+        }
         String changedKey = "etagChangedMs-${memberId}"
-        if (!unchanged || rtGet(changedKey) == null) rtSet(changedKey, nowMs)
+        Long changedAt = rtGet(changedKey)
+        if (!unchanged || changedAt == null) { changedAt = nowMs; rtSet(changedKey, nowMs) }
         if (unchanged) {
             boolean moving = isMemberInTransit(memberId)
-            long staleSecs = (long)((nowMs - rtGet(changedKey)) / 1000L)
-            if (!moving || staleSecs < STALE_ETAG_CYCLES * pollFreqSecs()) {
+            long staleSecs = (long)((nowMs - changedAt) / 1000L)
+            if (!moving || staleSecs < STALE_ETAG_SECS) {
                 if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200, etag unchanged -> treated as 304), member:${memberName}")
                 if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (unchanged)")
                 markFetchSuccess(memberId)
@@ -703,6 +708,7 @@ def handleMemberLocationResponse(response, Map data) {
                 return
             }
             ctx = (ctx ?: [:]) + [staleSecs: staleSecs]   // copy: ctx is shared by every member this tick
+            rtSet(changedKey, nowMs)   // if the driver ignores staleSecs (Minimum Transit Speed set) this repeats once per window, not every poll
         }
         def memberObj
         try {
@@ -713,7 +719,8 @@ def handleMemberLocationResponse(response, Map data) {
         }
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200), locationUpdate:true, member:${memberName}")
         String locTsKey = "locTs-${memberId}"
-        Long locTs = memberObj?.location?.timestamp as Long
+        String rawTs = memberObj?.location?.timestamp?.toString()
+        Long locTs = rawTs?.isLong() ? rawTs.toLong() : null
         if (logEnable && !unchanged && prevTag && locTs != null && locTs == rtGet(locTsKey)) log.debug("fetchMemberLocation: FALSE POSITIVE: etag changed but location timestamp did not (${locTs}), etag:${eTag?.take(6)} sent:${data.etagSent?.take(6)} stored:${prevTag?.take(6)}, member:${memberName}")
         if (locTs != null) rtSet(locTsKey, locTs)
         if (ctx?.logRawPayload ?: getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")

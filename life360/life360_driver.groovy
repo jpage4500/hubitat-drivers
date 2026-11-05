@@ -54,7 +54,7 @@ metadata {
         // driving data
         attribute "inTransit", "enum", ["true", "false"]
         attribute "isDriving", "enum", ["true", "false"]
-        attribute "isMoving", "enum", ["true", "false"]   // inTransit AND Life360 has sent new data recently; goes false long before Life360 clears a stale inTransit
+        attribute "isMoving", "enum", ["true", "false"]   // inTransit AND Life360 has sent new data recently; goes false after 240 s without new data, usually before Life360 clears a stale inTransit
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
@@ -175,7 +175,7 @@ def updated() {
 // @param member - Life360 member object (user details)
 // @param thePlaces - unused; the app passes null. Kept only so the app<->driver signature stays stable.
 // @param home - Life360 circle which user selected as 'home'
-// @param ctx - optional poll-cycle context map (showNames, showMapsLink, useMiles; staleSecs only when Life360 has sent no new data for two refresh cycles) hoisted by the app once per tick
+// @param ctx - optional poll-cycle context map (showNames, showMapsLink, useMiles; staleSecs only when Life360 has sent no new data for 240 s) hoisted by the app once per tick
 //
 // @return true if the app should treat the member as in transit for polling (Life360 inTransit flag, unless Life360 has sent no new data for too long)
 boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
@@ -332,9 +332,9 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     }
     // Life360's inTransit/isDriving are reported exactly as received. But Life360 can keep them (and even a stale speed) set after
     // the phone has stopped sending fixes, and the value we return to the app drives the fast poll rate. That is OUR polling
-    // decision, not Life360's data: the app passes ctx.staleSecs when Life360's etag has not changed (no new fix) for two normal
-    // refresh cycles while it still says inTransit, and we then tell the app to stop fast polling. Skipped when the user set a
-    // Minimum Transit Speed, which already decides inTransit from speed.
+    // decision, not Life360's data: the app passes ctx.staleSecs when Life360's etag has not changed (no new fix) for 240 s while it
+    // still says inTransit, and we then tell the app to stop fast polling. Ignored when the user set a Minimum Transit Speed,
+    // which already decides inTransit from speed (the app still sends it).
     boolean stillTooLong = false
     if (transitThresholdD <= 0.0 && inTransit && ctx?.staleSecs != null) {
         if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: no new Life360 data for ${ctx.staleSecs}s with inTransit:true; not fast polling"
