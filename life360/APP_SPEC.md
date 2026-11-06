@@ -462,9 +462,7 @@ Hubitat has no local test harness: install on a real hub against a real circle a
 ## 13. Why stillness is decided by the etag
 
 **Decision (2026-11-04).** A member Life360 still calls in transit is judged stopped when Life360's
-`l360-etag` for that member has not changed for `STALE_ETAG_SECS` (240 s, whatever the refresh rate). This replaced a
-driver-side rule that compared positions against an anchor (first sighting, slack = the phone's reported
-accuracy). Life360 can keep `inTransit` (and even a stale speed) set after a phone stops, and the value the
+`l360-etag` for that member has not changed for `STALE_ETAG_SECS` (240 s, whatever the refresh rate). Life360 can keep `inTransit` (and even a stale speed) set after a phone stops, and the value the
 driver returns drives the fast poll rate, so this is a polling decision, not a change to Life360's data.
 
 **What the etag is.** Life360 returns a full `200` with an identical etag when nothing changed, never a `304`
@@ -478,16 +476,16 @@ dynamic 20 s):
 | --- | --- |
 | Location timestamp follows the etag | Raw payloads (three members): `location.timestamp` and `activity.timestamp` moved together on every poll. 372 of 372 unchanged-etag polls carried the same timestamps; 444 of 461 changed-etag polls carried new ones (the 17 exceptions include at least one measurement artifact, see below); with etags logged on a later build, about 98% |
 | While moving, a fix arrives about every 40 s | The etag alternates changed/unchanged on 20 s fast polls. Longest unchanged run while someone was moving: 61 s (member A, 2026-11-03 21:38:24 to 21:39:25). Every other moving run was 40 s or less; member C's 18:15 to 18:35 drive never exceeded 3 polls |
-| A stopped-but-flagged phone goes quiet | Member A's parks at 22:12:01 and 2026-11-04 05:40:22: Life360 still said `inTransit:true`, the etag had been unchanged for 341 s and 262 s, and the old position rule fired. Member B's four parks and member A's 21:57 park were cleared by Life360 itself |
+| A stopped-but-flagged phone goes quiet | Member A's parks at 22:12:01 and 2026-11-04 05:40:22: Life360 still said `inTransit:true` and the etag had been unchanged for 341 s and 262 s. Member B's four parks and member A's 21:57 park were cleared by Life360 itself |
 | Savings | 22:30 to 05:00: 529 member polls skipped, 121 reached the driver (81% skipped). Member A's 75-minute drive (20:42 to 21:57): 145 of 253 polls came back unchanged, each of which used to run the JSON parse and the driver |
-| Margin | Window = a flat 240 s, about 4× the 61 s worst moving gap, at every refresh rate. History: first built as 2 × `pollFreq`, which is only 20 to 60 s at the 10, 15 and 30 s settings (shorter than the usual 40 s between fixes); capped at 120 s, then set flat at 240 s so a short dead stretch (a tunnel) does not flip `isMoving` |
+| Margin | Window = a flat 240 s, about 4× the 61 s worst moving gap, at every refresh rate. A window tied to the refresh rate would be only 20 to 60 s at the 10, 15 and 30 s settings, shorter than the usual 40 s between fixes; 240 s also keeps a short dead stretch (a tunnel) from flipping `isMoving` |
 
-**Observed on the hub with the rule in place** (2026-11-04, `pollFreq` 180, five members, about 30 drive/park
-cycles over 24 hours):
+**Observed on the hub with the rule in place** (2026-11-04 to 2026-11-05, five members, about 30 drive/park
+cycles):
 
-- The stop rule fired 6 times, each on a parked phone that Life360 still called `inTransit:true`, each at
-  360 to 380 s (the then-current 2 × `pollFreq`, checked on the next 20 s poll) after the last fix. The fast chain ended on the next poll and `isMoving` went false
-  while `inTransit` stayed true.
+- The stop rule fired 11 times, each on a phone Life360 still called `inTransit:true` (a parked phone, or one
+  flagged on a single fix at speed 0), once the etag had been unchanged for the whole window (the next 20 s poll
+  after it). The fast chain ended on the next poll and `isMoving` went false while `inTransit` stayed true.
 - Every other stop was cleared by Life360 itself first; the rule was not needed.
 - No false stop during real driving. The longest gap between fixes while driving was 60 to 64 s.
 - Life360 sometimes sets `inTransit:true` again for a few minutes at speed 0 and the same position, then clears
@@ -503,12 +501,10 @@ else is affected, and the rule treats it as new data (it only ever delays a stop
   the previous call. One earlier case had a fully logged raw payload, byte-for-byte identical.
 - Some followed a real change for the same member by 0.4 s or 2 s (the slow tick and a fast-chain tick landing
   together); the rest were on parked phones one poll (3 min) after the poll that delivered the fix.
-- The overnight figure of 3 exceptions in 184 was measured with a probe that compared against a stored etag
-  the app had not yet updated, so at least one was an artifact; only the in-app line above counts.
-- With etags logged (8 of 425 changed-etag polls over the next 14 hours, about 1.9%): the new etag
+- With etags logged (about 2% of changed-etag polls): the new etag
   differs from both the one sent and the one stored, so Life360 really did change it; a missing or
   differently-cased header is ruled out.
-- All 13 seen so far come either one slow poll (180 s) after the poll that delivered the fix, or 2 s after it
+- Of the 13 checked, all came either one slow poll (180 s) after the poll that delivered the fix, or 2 s after it
   (a second request in the same tick). The 180 s cases are clean: the request sent the stored etag and got a
   different one back with an identical payload, so Life360 sometimes issues a second etag for the same fix. The
   2 s cases are unexplained: the logged sent and stored etags were equal although the response 2 s earlier
@@ -517,16 +513,15 @@ else is affected, and the rule treats it as new data (it only ever delays a stop
 - Decision: leave it. Suppressing it would put a "did the timestamp move" check back in the app, which is
   the extra logic this design removed, to save one driver call in about 50.
 
-**Why not position.** The old rule needed the driver on every moving poll, a per-device memory anchor,
-haversine and an accuracy slack, and still couldn't tell a stationary phone from one whose fixes jitter
-inside the slack. The etag already says "Life360 has nothing new", costs one string compare, and lets the
+**Why not position.** Comparing GPS positions against an anchor would need the driver on every moving poll, a
+per-device memory anchor, haversine and an accuracy slack, and still couldn't tell a stationary phone from one
+whose fixes jitter inside the slack. The etag already says "Life360 has nothing new", costs one string compare, and lets the
 app skip the driver for moving members too.
 
 **Known limits** (documented so nobody rediscovers them):
 
 - Fixes that keep arriving while Life360 still says `inTransit` (jitter) reset the clock, so the stop comes
-  later than a position rule would (member A 2026-11-04 05:36: a fix inside the 50 m accuracy circle during
-  the stop delayed it about 1.5 min).
+  later (member A: a fix inside the 50 m accuracy circle during the stop delayed it about 1.5 min).
 - If Life360 stops sending `l360-etag`, every poll reaches the driver and the stop rule never fires (a stuck
   member fast-polls as it did before this design). The app logs a WARN, at most once per roster-refresh
   interval, so the condition is visible.
