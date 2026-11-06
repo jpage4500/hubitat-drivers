@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "5.2.4",
+  "version": "5.2.5",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "HTTP 408 (request timeout) from Life360 is now treated as a transient error: a warning plus per-member backoff instead of an error log.",
+  "releaseNotes": "Less hub I/O: fewer state writes, a 15-minute member refresh instead of the per-minute /circles poll, unchanged responses skipped, even while driving. New isMoving attribute, and a phone left sitting still no longer keeps fast polling on. Lightly tested.",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",

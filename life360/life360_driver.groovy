@@ -54,6 +54,7 @@ metadata {
         // driving data
         attribute "inTransit", "enum", ["true", "false"]
         attribute "isDriving", "enum", ["true", "false"]
+        attribute "isMoving", "enum", ["true", "false"]   // inTransit AND Life360 has sent new data recently; goes false after 240 s without new data, usually before Life360 clears a stale inTransit
         attribute "speed", "number"
         attribute "distance", "number"
         attribute "since", "number"
@@ -61,7 +62,7 @@ metadata {
         attribute "userActivity", "string"
 
         // device data
-        // NOTE: 'battery' attribute is provided by capability "Battery"; don't redeclare (§8.11)
+        // NOTE: 'battery' attribute is provided by capability "Battery"; don't redeclare
         attribute "charge", "enum", ["true", "false"]
         attribute "status", "string"
         attribute "wifiState", "enum", ["true", "false"]
@@ -172,11 +173,11 @@ def updated() {
 
 // called from Life360+ app
 // @param member - Life360 member object (user details)
-// @param thePlaces - pre-serialized JSON of all Life360 places (string); a raw Map is still accepted for backward compat
+// @param thePlaces - unused; the app passes null. Kept only so the app<->driver signature stays stable.
 // @param home - Life360 circle which user selected as 'home'
-// @param ctx - optional poll-cycle context map (showNames, showMapsLink, useMiles) hoisted by the app once per tick
+// @param ctx - optional poll-cycle context map (showNames, showMapsLink, useMiles; staleSecs only when Life360 has sent no new data for 240 s) hoisted by the app once per tick
 //
-// @return true if member is in transit (per Life360 inTransit flag)
+// @return true if the app should treat the member as in transit for polling (Life360 inTransit flag, unless Life360 has sent no new data for too long)
 boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     if (member == null) return false
     // Capture hub temperatureScale before `location` is shadowed by member.location below
@@ -210,6 +211,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     if (userActivity?.startsWith("os_")) {
         userActivity = userActivity.substring(3)
     }
+    if (!userActivity) userActivity = "unknown"   // Life360's own "no activity" value; always a real string, never a null event
 
     // -- name --
     String memberFirstName = (member.firstName) ? member.firstName : ""
@@ -228,7 +230,6 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // -- previous values (used for address history and location history) --
     Double prevLatitude = device.currentValue('latitude')
     Double prevLongitude = device.currentValue('longitude')
-    Boolean prevIsDriving = device.currentValue('isDriving') == 'true'
     Boolean prevInTransit = device.currentValue('inTransit') == 'true'
 
     if (logRawPayload) log.trace("generatePresenceEvent: location payload: ${location}")
@@ -236,7 +237,6 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // -----------------------------------------------
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
-    if (logEnable) log.debug "generatePresenceEvent: changed: lat:$latitude lng:$longitude acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s inTransit:$inTransit isDriving:$isDriving"
     Date lastUpdated = new Date()
 
     // *** Member Name ***
@@ -265,7 +265,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
 
     String prevAddress = device.currentValue('address1')
     if (address1 != prevAddress) {
-        if (logEnable) log.debug "generatePresenceEvent: address1:$address1, prevAddress = $prevAddress"
+        if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: address1:${showNames ? address1 : "(hidden)"}, prevAddress = ${showNames ? prevAddress : "(hidden)"}"
         // Update old and current address information and trigger events
         sendEvent(name: "address1prev", value: prevAddress)
         sendEvent(name: "address1", value: address1)
@@ -294,7 +294,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     Double speedUnits       // in user's preference of MPH or KPH
     Double distanceUnits    // in user's preference of miles or km
     // check for iPhone reporting speed of -1
-    if (speed == -1) speed = 0.0
+    if (speed < 0) speed = 0.0   // any negative speed means "no reading" (Apple reports -1), never a real speed
     // Hard overrides (imperial/metric/hubitat) ignore the Life360 API entirely.
     // "life360" (default): API setting wins, fall back to Hubitat system if not yet known.
     Boolean useMiles
@@ -330,44 +330,59 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     if (drivingThresholdD > 0.0) {
         isDriving = (speedUnits >= drivingThresholdD)
     }
+    // Life360's inTransit/isDriving are reported exactly as received. But Life360 can keep them (and even a stale speed) set after
+    // the phone has stopped sending fixes, and the value we return to the app drives the fast poll rate. That is OUR polling
+    // decision, not Life360's data: the app passes ctx.staleSecs when Life360's etag has not changed (no new fix) for 240 s while it
+    // still says inTransit, and we then tell the app to stop fast polling. Ignored when the user set a Minimum Transit Speed,
+    // which already decides inTransit from speed (the app still sends it).
+    boolean stillTooLong = false
+    if (transitThresholdD <= 0.0 && inTransit && ctx?.staleSecs != null) {
+        if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: no new Life360 data for ${ctx.staleSecs}s with inTransit:true; not fast polling"
+        stillTooLong = true
+    }
 
     String suffix = showMapsLink ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
     boolean moving = inTransit || isDriving
-    boolean prevMoving = prevInTransit || prevIsDriving
+    // isMoving = Life360 says in transit AND it has not gone quiet for too long (the same value the app uses
+    // to decide on fast polling). The first poll after an upgrade has no stored isMoving, so fall back to inTransit.
+    boolean isMovingNow = inTransit && !stillTooLong
+    boolean prevIsMoving = (device.currentValue('isMoving') != null) ? (device.currentValue('isMoving') == 'true') : prevInTransit
+    if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: ${showNames ? "lat:$latitude lng:$longitude" : "location hidden (names off)"} acc:${accuracy}m b:${battery}% wifi:$wifiState speed:${speed.round(2)}m/s inTransit:$inTransit isDriving:$isDriving isMoving:$isMovingNow"
     if (logEachPoll) {
         // default on: log every poll when moving — but not while stationary (Life360 keeps
         // inTransit/isDriving set at a light, in traffic, or for a while after arriving)
-        if (moving && speedUnits >= 1.0) {
+        if (moving && !stillTooLong && speedUnits >= 1.0) {
             log.info("${displayMember(memberFirstName, showNames)}: moving @ ${speedUnits} ${useMiles ? 'mph' : 'kph'}${suffix}")
         }
     } else {
-        // quiet mode: only log start/stop of any motion (driving or transit)
-        if (moving && !prevMoving) {
+        // quiet mode: only log start/stop of movement (isMoving: in transit and Life360 has sent new data)
+        if (isMovingNow && !prevIsMoving) {
             log.info("${displayMember(memberFirstName, showNames)}: started moving${suffix}")
-        } else if (!moving && prevMoving) {
+        } else if (!isMovingNow && prevIsMoving) {
             log.info("${displayMember(memberFirstName, showNames)}: stopped moving${suffix}")
         }
     }
     // extra debug detail only when debug logging is on
     if (thresholdActive && logEnable) log.debug("MOTION ${displayMember(memberFirstName, showNames)}: " +
-        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} (threshold override)")
+        "speedUnits:${speedUnits} inTransit:${inTransit} isDriving:${isDriving} isMoving:${isMovingNow} (threshold override)")
 
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : " km from Home")
 
     if (logEnable && (isDriving || inTransit)) {
-        log.debug "generatePresenceEvent: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving"
+        log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: $sStatus, speedUnits:$speedUnits, transitThreshold:$transitThreshold, inTransit:$inTransit, drivingThreshold:$drivingThreshold, isDriving:$isDriving, isMoving:$isMovingNow"
     }
 
     sendEvent(name: "status", value: sStatus)
 
     sendEvent(name: "inTransit", value: inTransit.toString())
     sendEvent(name: "isDriving", value: isDriving.toString())
+    sendEvent(name: "isMoving", value: isMovingNow.toString())
     sendEvent(name: "speed", value: speedUnits)
     sendEvent(name: "distance", value: distanceUnits)
     sendEvent(name: "userActivity", value: userActivity)
 
     // Set acceleration to active state if we are either moving or if we are anywhere outside home radius
-    // REPURPOSED CAPABILITY (§5.4): 'acceleration' active/inactive = in transit OR driving OR away from home (NOT physical acceleration)
+    // REPURPOSED CAPABILITY: 'acceleration' active/inactive = in transit OR driving OR away from home (NOT physical acceleration)
     sendEvent(name: "acceleration", value: (inTransit || isDriving || memberPresence == "not present") ? "active" : "inactive")
 
     // *** Battery Level ***
@@ -378,12 +393,12 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     String powerSourceDisplay = charge ? "DC" : "BTRY"  // abbreviated form used in tile display only
     sendEvent(name: "charge", value: charge.toString())
     sendEvent(name: "powerSource", value: powerSource)
-    // REPURPOSED CAPABILITY (§5.4): 'contact' open/closed = charging / on battery (NOT a contact sensor)
+    // REPURPOSED CAPABILITY: 'contact' open/closed = charging / on battery (NOT a contact sensor)
     sendEvent(name: "contact", value: charge ? "open" : "closed")
 
     // *** Wifi ***
     sendEvent(name: "wifiState", value: wifiState.toString())
-    // REPURPOSED CAPABILITY (§5.4): 'switch' on/off = WiFi connected / not (NOT a controllable switch)
+    // REPURPOSED CAPABILITY: 'switch' on/off = WiFi connected / not (NOT a controllable switch)
     sendEvent(name: "switch", value: wifiState ? "on" : "off")
 
     // ** Member Features **
@@ -393,14 +408,16 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
 
     // ** Member Communications **
     if (member.communications != null) {
-        member.communications.each { comm ->
-            String commType = comm.get('channel')
-            if (commType == "Voice") {
-                if (comm.value != device.currentValue("phone")) sendEvent(name: "phone", value: comm.value)
-            } else if (commType == "Email") {
-                if (comm.value != device.currentValue("email")) sendEvent(name: "email", value: comm.value)
-            }
-        }
+        // the last entry per channel wins, as the old loop did (it overwrote the field with each entry in turn), but
+        // decided once so several numbers/addresses can't overwrite each other
+        def voices = member.communications.findAll { it.get('channel') == "Voice" }
+        def emails = member.communications.findAll { it.get('channel') == "Email" }
+        def voice = voices ? voices[-1] : null
+        def email = emails ? emails[-1] : null
+        String phone = voice?.value?.toString()
+        String emailAddr = email?.value?.toString()
+        if (phone && phone != device.currentValue("phone")) sendEvent(name: "phone", value: phone)
+        if (emailAddr && emailAddr != device.currentValue("email")) sendEvent(name: "email", value: emailAddr)
     }
 
     // *** Timestamp ***
@@ -408,14 +425,14 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {
-        return inTransit
+        return isMovingNow
     }
 
     if (avatarHtml != device.currentValue("avatarHtml")) sendEvent(name: "avatarHtml", value: avatarHtml)
 
     String motionLabel
-    if (isDriving) motionLabel = "Driving"
-    else if (inTransit) motionLabel = "Moving"
+    if (isDriving && isMovingNow) motionLabel = "Driving"
+    else if (isMovingNow) motionLabel = "Moving"
     else motionLabel = "Not Moving"
 
     long sEpoch = since ?: 0L
@@ -432,7 +449,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     tileMap += "Since: ${dateSince}<br>"
     tileMap += (sStatus == "At Home") ? "" : "${sStatus}<br>"
     tileMap += "${motionLabel}"
-    if (address1 != "Home" && inTransit) {
+    if (address1 != "Home" && isMovingNow) {
         tileMap += " @ ${sprintf("%.1f", speedUnits)} "
         tileMap += useMiles ? "MPH" : "KPH"
     }
@@ -444,7 +461,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     int tileDevice1Count = tileMap.length()
     if (tileDevice1Count > HUBITAT_TILE_MAX_CHARS) log.warn "generatePresenceEvent: Too many characters to display on Dashboard (${tileDevice1Count})"
     sendEvent(name: "html", value: tileMap, displayed: true)
-    return inTransit
+    return isMovingNow
 }
 
 /**
@@ -529,7 +546,7 @@ def getHistory() {
     }
 }
 
-// §8.12: pure math, no instance state — make static
+// pure math, no instance state — make static
 static def haversine(lat1, lon1, lat2, lon2) {
     Double R = EARTH_RADIUS_KM
     // In kilometers

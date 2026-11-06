@@ -1,34 +1,6 @@
-- [Life360+ App \& Driver — State Reference](#life360-app--driver--state-reference)
-  - [App: Settings (user inputs)](#app-settings-user-inputs)
-  - [App: State variables](#app-state-variables)
-    - [Selection / discovery cache](#selection--discovery-cache)
-  - [App: Account preferences (fetched from Life360)](#app-account-preferences-fetched-from-life360)
-    - [Session / HTTP plumbing](#session--http-plumbing)
-    - [Polling / scheduling](#polling--scheduling)
-    - [Membership / discovery polling](#membership--discovery-polling)
-    - [UI one-shot status (button results)](#ui-one-shot-status-button-results)
-    - [Error / health](#error--health)
-  - [App: Scheduled jobs](#app-scheduled-jobs)
-  - [App: Subscriptions](#app-subscriptions)
-  - [App: HTTP endpoints (mappings)](#app-http-endpoints-mappings)
-  - [Driver: Settings (per child device)](#driver-settings-per-child-device)
-  - [Driver: Attributes (per child device)](#driver-attributes-per-child-device)
-    - [Capabilities (standard Hubitat)](#capabilities-standard-hubitat)
-    - [Location](#location)
-    - [Motion / driving](#motion--driving)
-    - [Phone / connectivity](#phone--connectivity)
-    - [Identity](#identity)
-    - [HTML tiles (only when `generateHtml` is true)](#html-tiles-only-when-generatehtml-is-true)
-    - [External-integration attributes](#external-integration-attributes)
-  - [Driver: State variables](#driver-state-variables)
-  - [Driver: Commands](#driver-commands)
-  - [Capability-repurposing cheatsheet](#capability-repurposing-cheatsheet)
-
 # Life360+ App & Driver — State Reference
 
-Quick-reference map of every setting, state variable, scheduled job, subscription, and child-device attribute used by the Life360+ app (`life360_app.groovy`) and driver (`life360_driver.groovy`). Useful when triaging a misbehaving install or grepping the Hubitat "App Status" / "Device Details" pages.
-
-Sourced from the Hubitat Apps inspector + the source files. Live values shown here are illustrative.
+Lookup map of every setting, state variable, scheduled job, subscription and child-device attribute in the Life360+ app and driver, for triaging an install or reading the Hubitat "App Status" / "Device Details" pages. Behavior and reasoning live in [APP_SPEC.md](APP_SPEC.md); the code is authoritative.
 
 ---
 
@@ -36,25 +8,27 @@ Sourced from the Hubitat Apps inspector + the source files. Live values shown he
 
 Configured via the app's preferences page. Read at runtime as `settings.<name>` or just `<name>`.
 
-| Setting             | Type                    | Purpose                                                                                                                                                                                                                                                         | Example                   |
-| ------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| `access_token`      | text                    | Life360 bearer token (paste from `life360.com` → DevTools → Network → token packet)                                                                                                                                                                             | `OTJj...8k`               |
-| `circle`            | enum                    | Selected Life360 circle ID                                                                                                                                                                                                                                      | `<uuid>`                  |
-| `place`             | enum                    | Life360 place ID that represents HOME for this Hubitat install                                                                                                                                                                                                  | `<uuid>`                  |
-| `users`             | enum (multi)            | Life360 member IDs to create child devices for                                                                                                                                                                                                                  | `["<uuid>","<uuid>",…]`   |
-| `pollFreq`          | enum                    | Default poll interval (seconds): `10`/`15`/`30`/`60`/`180`/`300`/`0`=Disabled                                                                                                                                                                                   | `10`                      |
-| `dynamicPolling`    | bool                    | If true, poll faster while any member is in transit. Only engages when `pollFreq > dynamicPollFreq`                                                                                                                                                             | `true`                    |
-| `dynamicPollFreq`   | enum                    | Poll interval while a member is in transit: `5`/`10`/`20`/`30`                                                                                                                                                                                                  | `20`                      |
-| `notifyTokenExpiry` | bool                    | Master switch for token-expiry alerts (default on). When off, the device picker + repeat-reminder inputs are hidden and no alerts fire                                                                                                                          | `true`                    |
-| `notifyDevices`     | capability.notification | Devices notified on access-token failure (shown only when `notifyTokenExpiry` is on)                                                                                                                                                                            | `[<notification device>]` |
-| `notifyRepeatHours` | enum                    | Repeat the token-expiry reminder every `never`/`2`/`6`/`12`/`24`/`48` h (shown only when at least one notify device is set)                                                                                                                                     | `never`                   |
-| `googleMapsApiKey`  | text (optional)         | If set, `/view` endpoint uses Google Maps; else OpenStreetMap                                                                                                                                                                                                   | empty                     |
-| `logEnable`         | bool                    | Verbose debug logging                                                                                                                                                                                                                                           | `false`                   |
-| `logRawPayload`     | bool                    | Verbose raw-API diagnostics — logs sensitive data (GPS, partial token, cookie heads, full payloads). Debug only                                                                                                                                                 | `false`                   |
-| `logShowNames`      | bool                    | Include member/place/circle names in logs (default on). Off → UUIDs only, for safe log sharing                                                                                                                                                                  | `true`                    |
-| `logShowMapsLink`   | bool                    | Include a Google Maps link in the "member moved" info log (default on)                                                                                                                                                                                          | `true`                    |
-| `logUnits`          | enum                    | Units for speed/distance in logs and device attributes: `"life360"` (follow account pref), `"hubitat"` (hub °F/°C), `"imperial"`, `"metric"`. App-level override — takes priority over each driver's `unitOverride` when set to anything other than `"life360"` | `"life360"`               |
-| `forceUpdateMember` | enum (transient)        | Member targeted by the Force Update button. Fire-once — cleared (`app.removeSetting`) immediately after the request is sent, so the dropdown resets to blank                                                                                                    | (blank)                   |
+| Setting             | Type                    | Purpose                                                                                                                                                                                                                                                         |
+| ------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `access_token`      | text                    | Life360 bearer token (paste from `life360.com` → DevTools → Network → token packet)                                                                                                                                                                             |
+| `circle`            | enum                    | Selected Life360 circle ID                                                                                                                                                                                                                                      |
+| `place`             | enum                    | Life360 place ID that represents HOME for this Hubitat install                                                                                                                                                                                                  |
+| `users`             | enum (multi)            | Life360 member IDs to create child devices for                                                                                                                                                                                                                  |
+| `pollFreq`          | enum                    | Default poll interval (seconds): `10`/`15`/`30`/`60`/`180`/`300`/`0`=Disabled                                                                                                                                                                                   |
+| `dynamicPolling`    | bool                    | If true, poll faster while any member is in transit. Only engages when `pollFreq > dynamicPollFreq`                                                                                                                                                             |
+| `dynamicPollFreq`   | enum                    | Poll interval while a member is in transit: `5`/`10`/`20`/`30`                                                                                                                                                                                                  |
+| `notifyTokenExpiry` | bool                    | Master switch for token-expiry alerts (default on). When off, the device picker + repeat-reminder inputs are hidden and no alerts fire                                                                                                                          |
+| `notifyDevices`     | capability.notification | Devices notified on access-token failure (shown only when `notifyTokenExpiry` is on)                                                                                                                                                                            |
+| `notifyRepeatHours` | enum                    | Repeat the token-expiry reminder every `never`/`2`/`6`/`12`/`24`/`48` h (shown only when at least one notify device is set)                                                                                                                                     |
+| `googleMapsApiKey`  | text (optional)         | If set, `/view` endpoint uses Google Maps; else OpenStreetMap                                                                                                                                                                                                   |
+| `logEnable`         | bool                    | Verbose debug logging                                                                                                                                                                                                                                           |
+| `logRawPayload`     | bool                    | Verbose raw-API diagnostics — logs sensitive data (GPS, partial token, cookie heads, full payloads). Debug only                                                                                                                                                 |
+| `logShowNames`      | bool                    | Include member/place/circle names in logs (default on). Off → UUIDs only, for safe log sharing                                                                                                                                                                  |
+| `logHeartbeat`      | bool                    | Log one heartbeat line per periodic roster refresh (default on)                                                                                                                                                                                                 |
+| `logDrivingTransitions` | bool                | "Driving Logging" (default on): log every poll of a member in motion; off = log only when a member starts or stops moving                                                                                                                                    |
+| `logShowMapsLink`   | bool                    | Include a Google Maps link in the "member moved" info log (default on)                                                                                                                                                                                          |
+| `logUnits`          | enum                    | Units for speed/distance in logs and device attributes: `"life360"` (follow account pref), `"hubitat"` (hub °F/°C), `"imperial"`, `"metric"`. Applies to every device whose own `unitOverride` is `"life360"`; a device set to anything else keeps its own choice (the app's help text overstates this) |
+| `forceUpdateMember` | enum (transient)        | Member targeted by the Force Update button. Fire-once — cleared (`app.removeSetting`) immediately after the request is sent, so the dropdown resets to blank                                                                                                    |
 
 ---
 
@@ -68,7 +42,7 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | ------------- | ------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `circles`     | List   | `fetchCircles()`              | Response from `/v4/circles` for the circle picker                                                                                                                                                                                                                                              |
 | `places`      | List   | `fetchPlaces()`               | Response from `/v3/circles/<id>/places` for the HOME picker                                                                                                                                                                                                                                    |
-| `members`     | List   | `fetchMembers()`              | **Trimmed** — stores only `[id, firstName, lastName, issues.disconnected]` per member (not the full API response). A successful fetch also runs `syncChildDevices()` (create new / remove orphaned) and pushes refreshed location to existing devices using the untrimmed `rawMembers` objects |
+| `members`     | List   | `fetchMembers()`              | **Trimmed** to `[id, firstName, lastName, issues.disconnected]` per member, sorted by id. See APP_SPEC §4.2 |
 | `accessToken` | String | `createAccessToken()` (OAuth) | Token used for the `/view` map endpoint URL                                                                                                                                                                                                                                                    |
 
 ---
@@ -77,32 +51,34 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 
 | Variable        | Type   | Set by                                                                                   | Notes                                                                                                                                                                                                                                                        |
 | --------------- | ------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `unitOfMeasure` | String | `captureUnitOfMeasure()` (called from `checkToken()` and `handleUserSettingsResponse()`) | Life360 account units preference: `"i"` = imperial (miles/mph), `"m"` = metric (km/kph). Fetched on `installed()`, `updated()`, and Check Token. Read by `getUnitIsMiles()` and forwarded to child devices. Null until the first successful `GET /users/me`. |
+| `unitOfMeasure` | String | `captureUnitOfMeasure()` (called from `checkToken()`, `handleUserSettingsResponse()` and the token probe) | Life360 account units preference: `"i"` = imperial (miles/mph), `"m"` = metric (km/kph). Fetched on `installed()`, `updated()`, and Check Token. Read by `getUnitIsMiles()` and forwarded to child devices. Null until the first successful `GET /users/me`. |
 
 ### Session / HTTP plumbing
 
 | Variable                      | Type            | Set by                                                                                               | Cleared by                                             | Notes                                                                                                                                   |
 | ----------------------------- | --------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
 | `cookies`                     | String          | `captureCookies` / `captureCookiesAsync` (via `mergeCookie`)                                         | `clearSessionCache()` (auth errors)                    | `Cookie` header value (`__cf_bm` + `_cfuvid`) sent on subsequent requests. Merged by name so a rotating `__cf_bm` never drops `_cfuvid` |
-| `etag-<memberId>`             | String          | `handleMemberLocationResponse` on 200 OK                                                             | `clearSessionCache()`                                  | Per-member `If-None-Match` value for 304-not-modified responses                                                                         |
-| `inflight-<memberId>`         | Long (epoch ms) | `fetchMemberLocation` before `asynchttpGet`                                                          | `handleMemberLocationResponse` / `clearSessionCache()` | In-flight marker; prevents async-HTTP pile-up                                                                                           |
-| `transientCount-<memberId>`   | Integer         | `handleMemberLocationResponse` on 5xx (502/503/504/520/522/525) or a network-level error (no status) | 200/304 success, `clearSessionCache()`                 | Consecutive-transient-error streak; drives exponential backoff (shift exponent capped at 6 to avoid `long` overflow)                    |
+| `etag-<memberId>`             | String          | `handleMemberLocationResponse` on 200 OK                                                             | `clearSessionCache()`; etag drops by Done, refresh, Fetch Locations/Places | Per-member `If-None-Match` value; an unchanged response is skipped (APP_SPEC §4.1)                                                                         |
+| `transientCount-<memberId>`   | Integer         | `handleMemberLocationResponse` on 408, any 5xx except 501/505, or a network-level error (no status) | 200/304 success, `clearSessionCache()`                 | Consecutive-transient-error streak; drives exponential backoff (shift exponent capped at 6 to avoid `long` overflow)                    |
 | `transientUntilMs-<memberId>` | Long (epoch ms) | `handleMemberLocationResponse` on 5xx or network error                                               | 200/304 success, `clearSessionCache()`                 | Skip this member's fetch until this time (capped 300s backoff)                                                                          |
 
 ### Polling / scheduling
 
 | Variable               | Type    | Set by                                    | Notes                                                                                                                                                            |
 | ---------------------- | ------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `lastSuccessMs`        | Long    | `handleMemberLocationResponse` on 200/304 | Watchdog input; triggers warn if stale > `max(pollFreq×10, 10min)`                                                                                               |
-| `inTransit-<memberId>` | Boolean | `notifyChildDevice` (echo from driver)    | Per-member in-transit flag (identity-scoped; survives re-auth). Used by `ensureFastChain` to decide whether to seed a fast-poll chain for this member            |
+| `lastSuccessMs`        | Long    | `markFetchSuccess` (at most once a minute) | Watchdog input; triggers warn if stale > `max(pollFreq×10, 10min)`. Removed by `resetWatchdog()` (Done, token recovery) |
+| `inTransit-<memberId>` | Boolean | `notifyChildDevice` (echo from driver)    | Per-member moving flag: the driver's return value (`isMoving`: Life360 `inTransit` and Life360 still sending new data; key name kept for compatibility; identity-scoped; survives re-auth). Used by `ensureFastChain` to decide whether to seed a fast-poll chain for this member            |
 | `fastChain-<memberId>` | Boolean | `ensureFastChain()`                       | True while a per-member `runIn` fast-poll chain is active. Dropped by `scheduleSlowTimer()` (which calls `unschedule()`) and cleared when a chain ends naturally |
 
 ### Membership / discovery polling
 
 | Variable            | Type    | Set by                      | Notes                                                                                                                                                                                                                                                                                                              |
 | ------------------- | ------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `memberCount`       | Integer | `handleCirclesPollResponse` | Baseline circle member count from the once-per-minute v4 `/circles` poll; a change triggers `fetchMembers()` (which reconciles child devices and refreshes names/avatars). On first baseline, also triggers an initial `fetchMembers()` if `state.members` is empty. Reset to `null` by `updated()` to re-baseline |
-| `lastCirclesPollMs` | Long    | `handleSlowTimer`           | Throttles the v4 `/circles` membership poll to at most once per `max(pollFreq, 60)` seconds. Reset to `null` by `updated()` so the next tick re-checks membership                                                                                                                                                  |
+| ~~`memberCount`~~   | Integer | removed | Obsolete — v4 `/circles` no longer returns it; the count is `state.members.size()`. Deleted by `removeObsoleteStateKeys()` |
+| `lastMembersPollMs` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleSlowTimer` | Throttles the periodic roster refresh to once per `max(pollFreq, 900)` s (~5 min while no roster). Stamped by `updated()`, cleared by `initialize()` |
+| `etagChangedMs-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | When this member's etag last changed; drives the stale-etag stop (APP_SPEC §13). Removed by `cleanupMemberState()` and `uninstalled()`; lost on reboot, which only restarts the clock |
+| `noEtagWarnMs` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | When the "no l360-etag header" warning last fired (one per `MEMBERS_REFRESH_SECS`, app-wide). Cleared by `uninstalled()` |
+| `locTs-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | Last location timestamp Life360 sent; used only by the debug `FALSE POSITIVE` line. Removed by `cleanupMemberState()` and `uninstalled()` |
 
 ### UI one-shot status (button results)
 
@@ -118,10 +94,10 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | Variable             | Type    | Set by                                                           | Cleared by                                                     | Notes                                                                                                                                                                                                                                                                                       |
 | -------------------- | ------- | ---------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `failCount`          | Integer | `handleException` / `handleMemberLocationResponse` on 401/403    | 200-OK response, `updated()`                                   | Auth-failure streak; triggers `tokenLikelyExpired` at ≥3                                                                                                                                                                                                                                    |
-| `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | `handleTokenProbeResponse` on 200 (auto-recovery), `updated()` | When true, normal polling is short-circuited and slowed to 5 min. Each 5-min tick fires `probeTokenAfterExpiry()` (async `GET /users/me`); a 200 response auto-recovers — clears this flag, resets `failCount`, restores normal polling. A 401/403 probe stays quiet and retries next tick. |
+| `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | `handleTokenProbeResponse` on 200 (auto-recovery), `updated()` | When true, polling slows to 5 min and each tick probes `/users/me`; a 200 auto-recovers (APP_SPEC §5). |
 | `rateLimitedUntilMs` | Long    | `handleException` / `handleMemberLocationResponse` on 429        | 200-OK response, `updated()`                                   | Honors `Retry-After`; polling skipped until this time                                                                                                                                                                                                                                       |
-| `watchdogWarned`     | Boolean | `handleSlowTimer` watchdog (rising edge)                         | 200/304 success                                                | Prevents the "no successful update" warning from spamming every tick                                                                                                                                                                                                                        |
-| `message`            | String  | various error paths                                              | 200-OK success / `updated()` / no-arg `initialize()`           | Red banner shown on the app's main page                                                                                                                                                                                                                                                     |
+| `watchdogWarned`     | Boolean | `handleSlowTimer` watchdog (rising edge)                         | 200/304 success, `resetWatchdog()`                                                | Prevents the "no successful update" warning from spamming every tick                                                                                                                                                                                                                        |
+| `message`            | String  | various error paths                                              | `markFetchSuccess`, `fetchCircles`/`fetchPlaces` 200, non-periodic `fetchMembers` 200, token probe 200, `updated()`; `resetWatchdog()` clears only a `WATCHDOG` banner. The periodic roster refresh never touches it | Red banner shown on the app's main page                                                                                                                                                                                                                                                     |
 | `placesEmptyWarned`  | Boolean | `notifyChildDevice` (rising edge)                                | `fetchPlaces()` success                                        | Prevents the "state.places is empty" error from spamming every tick while places are missing                                                                                                                                                                                                |
 
 ---
@@ -130,11 +106,11 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Handler                   | Schedule                                                           | Set by                                   | Purpose                                                                                                                                                                                                                                                                    |
 | ------------------------- | ------------------------------------------------------------------ | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `handleSlowTimer`         | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *`   | `scheduleSlowTimer()`                    | Each tick: run the stale-data watchdog, poll v4 `/circles` at most once per `max(pollFreq, 60)` seconds to detect membership changes (via the `memberCount` diff → `fetchMembers()`), then either probe `/users/me` (when `tokenLikelyExpired`) or call `fetchLocations()` |
-| `fastPollMember`          | one-shot `runIn(<dynamicPollFreq>s)`, self-rescheduling per member | `ensureFastChain()` / `fastPollMember()` | Per-member fast-poll chain; fires extra location fetches for in-transit members while dynamic polling is enabled. Chain ends when the member stops moving, is deselected, or `scheduleSlowTimer()` is called                                                               |
+| `handleSlowTimer`         | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *`   | `scheduleSlowTimer()`                    | Each tick: watchdog, roster refresh (APP_SPEC §4.2), then `fetchLocations()` (or the `/users/me` probe when `tokenLikelyExpired`) |
+| `fastPollMember`          | one-shot `runIn(<dynamicPollFreq>s)`, self-rescheduling per member | `ensureFastChain()` / `fastPollMember()` | Per-member fast-poll chain for in-transit members (APP_SPEC §4.3); ends when the member stops moving, is deselected, or `scheduleSlowTimer()` is called                                                               |
 | `sendTokenExpiryReminder` | one-shot `runIn(<notifyRepeatHours>h)`, self-rescheduling          | `scheduleTokenExpiryReminder()`          | Repeats the token-expiry notification while `tokenLikelyExpired` stays true; chain stops once the token is refreshed or `notifyRepeatHours = never`                                                                                                                        |
 
-`baseSecs` = `pollFreq`; forced to 300 when `tokenLikelyExpired`. Dynamic polling for movers is handled by per-member `runIn` chains (`fastPollMember`), not by changing the slow-timer rate.
+`baseSecs` = `pollFreq`, forced to 300 when `tokenLikelyExpired`.
 
 ---
 
@@ -142,7 +118,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 | Source               | Event         | Handler                                                                                                                   |
 | -------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `location` (Hubitat) | `systemStart` | `initialize` — calls `clearSessionCache()` (clears in-flight keys left from before the restart) then re-schedules polling |
+| `location` (Hubitat) | `systemStart` | `initialize` — calls `clearSessionCache()` (drops session caches left from before the restart) then re-schedules polling |
 
 ---
 
@@ -171,7 +147,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 
 ## Driver: Attributes (per child device)
 
-Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue("<name>")` or in Rule Machine.
+Set from `generatePresenceEvent`, with plain `sendEvent` (the hub drops unchanged values itself). Read via `device.currentValue("<name>")` or in Rule Machine.
 
 ### Capabilities (standard Hubitat)
 
@@ -187,19 +163,19 @@ Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue(
 ### Location
 
 | Attribute            | Type          | Meaning                                                                          |
-| -------------------- | ------------- | -------------------------------------------------------------------------------- | --------- | ------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| -------------------- | ------------- | -------------------------------------------------------------------------------- |
 | `latitude`           | number        | Current latitude                                                                 |
 | `longitude`          | number        | Current longitude                                                                |
 | `accuracy`           | number        | GPS uncertainty radius in meters (lower = better fix)                            |
 | `address1`           | string        | Current place/address (`"Home"` when inside HOME radius; `"No Data"` if missing) |
 | `address1prev`       | string        | Previous value of `address1` when it changes                                     |
 | `lastLocationUpdate` | date          | When `address1` last changed (NOT every poll)                                    |
-| `lastUpdated`        | date          | When this driver event batch last ran (every poll that reaches the driver)       |
+| `lastUpdated`        | date          | When this driver event batch last ran (every poll that reaches the driver; polls whose etag is unchanged are skipped, so it moves when the member's data changes) |
 | `since`              | number        | Epoch seconds — Life360's "at current address since" timestamp                   |
 | `status`             | string        | `"At Home"` or `"<x.x> miles from Home"`                                         |
 | `distance`           | number        | Distance from HOME in user units (mi/km)                                         |
-| `savedPlaces`        | string (JSON) | All Life360 places in the circle                                                 |
-| `history`            | string        | Compact encoded location history (when `saveHistory` is true). Format: `"1       | s,lat,lng | ds,dlat,dlng | …"`— first entry absolute, rest are signed deltas in units of`0.00001°`. Capped at 1024 chars. GPS jitter (<5m) suppressed. |
+| `savedPlaces`        | string (JSON) | Declared but never emitted (the app no longer passes places to the driver)       |
+| `history`            | string        | Compact location history (when `saveHistory` is on), format in APP_SPEC §7.4. Capped at 1024 chars. |
 
 ### Motion / driving
 
@@ -207,8 +183,9 @@ Set via `sendEvent` from `generatePresenceEvent`. Read via `device.currentValue(
 | -------------- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inTransit`    | enum `true`/`false` | From Life360, optionally overridden by `transitThreshold`                                                                                                                                               |
 | `isDriving`    | enum `true`/`false` | From Life360, optionally overridden by `drivingThreshold`                                                                                                                                               |
+| `isMoving`     | enum `true`/`false` | Derived: `inTransit` AND Life360 still sending new data (APP_SPEC §13); goes `false` after 240 s without new data, usually well before Life360 clears `inTransit`, and is what the app uses for the fast-poll decision. With a Minimum Transit Speed set it equals `inTransit` |
 | `speed`        | number              | Current speed in user units (mph/kph)                                                                                                                                                                   |
-| `userActivity` | string              | Life360 activity hint (`unknown`/`biking`/`running`/`vehicle`); the `os_` prefix is stripped. Emitted every poll, but the value is only meaningful when the API payload includes it (often blank on V3) |
+| `userActivity` | string              | Life360 activity hint (`unknown`/`biking`/`running`/`vehicle`); the `os_` prefix is stripped. Sent on every update (the hub drops unchanged values); `unknown` when Life360 sends none. The value is only meaningful when the API payload includes it (often blank on V3) |
 
 ### Phone / connectivity
 
@@ -260,21 +237,9 @@ These are written by the "Life360 Tracker" external app via the driver's `sendHi
 
 | Command            | Args   | Purpose                                                                                                                                             |
 | ------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `refresh`          | —      | Calls `parent.refresh()` → forces an immediate `fetchLocations()` and re-arms the schedule                                                          |
+| `refresh`          | —      | Calls `parent.refresh()` → drops the stored etags and forces an immediate `fetchLocations()` (the schedule and any fast-poll chains are left running)                                                          |
 | `arrived`          | —      | Manually flip `presence` to `present`                                                                                                               |
 | `departed`         | —      | Manually flip `presence` to `not present`                                                                                                           |
 | `sendHistory`      | string | External integration — prepends a line to `state.list1` → `bpt-history` tile                                                                        |
 | `sendTheMap`       | string | External integration — sets `lastMap`                                                                                                               |
 | `historyClearData` | —      | Clears the entire driver-side history surface: `state.locationHistory` + `state.list1`, and resets `bpt-history`/`numOfCharacters`/`lastLogMessage` |
-
----
-
-## Capability-repurposing cheatsheet
-
-These standard capabilities are repurposed for Life360 data, which is non-obvious in Rule Machine:
-
-| Capability                            | Real meaning here                            |
-| ------------------------------------- | -------------------------------------------- |
-| `Switch` on/off                       | WiFi connected / not                         |
-| `Contact Sensor` open/closed          | Charging / on battery                        |
-| `Acceleration Sensor` active/inactive | In transit OR driving OR outside home radius |

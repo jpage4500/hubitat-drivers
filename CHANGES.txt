@@ -2,3 +2,16 @@
 - Chromecast+: fixed the last track reappearing on idle devices after every poll
 - Android TV+: now installable through Hubitat Package Manager
 - Life360+: HTTP 408 timeouts now log a warning and retry instead of an error
+
+10/27
+- Life360+: far fewer hub writes while polling
+- Life360+: new Heartbeat Logging setting to turn off the heartbeat log line
+- Life360+: clearer message when the selected circle no longer exists
+- Life360+: a phone left sitting still no longer keeps fast polling on
+
+11/02
+- Life360+: new isMoving attribute goes false soon after a phone stops
+
+11/03
+- Life360+: a phone's last-updated time moves only when its data changes
+- Life360+: fast polling now pauses while Life360 is rate-limiting
