@@ -65,6 +65,8 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
 @Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
 @Field static final Map priorApp = new ConcurrentHashMap() // device.id -> what was playing right before we launched the DMR over it (see capturePriorApp); written by the command thread, read by parse() -> can't live in state
+@Field static final Map imageArm = new ConcurrentHashMap() // device.id -> [url, secs, armed] for showImage; the countdown is armed from parse() when the image actually shows, so it can't live in state (a scheduled-job write-back could reset "armed" and the periodic status polls would keep pushing the timeout out)
+@Field static final Map imageVolRestore = new ConcurrentHashMap() // device.id -> [vol: 0-100 to put back, url: last showImage url, shown: image has been reported on screen]; read/written from parse() -> @Field, not state
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -87,6 +89,9 @@ metadata {
         command "disconnect"
         command "launchApp", [[name: "App ID*", type: "STRING", description: "Cast app id, e.g. CC1AD845"]]
         command "stopApp"
+        command "showImage", [[name: "Image URL*", type: "STRING", description: "http(s) URL of a .jpg/.jpeg/.png/.gif/.webp/.bmp image"],
+                              [name: "Seconds", type: "NUMBER", description: "How long to show it, then close the cast session (blank or 0 = leave it up)"],
+                              [name: "Volume", type: "NUMBER", description: "Volume (0-100) for the cast start sound; the previous volume is restored when the image session ends (blank = leave volume alone)"]]
 
         // -- now-playing / status (child mode) --
         attribute "connectionStatus", "string"   // sticky reachability: online / offline (idle until first connect; disconnected = manual)
@@ -279,6 +284,58 @@ def unmute()       { setMute(false) }
 
 // -- app control --
 def launchApp(appId) { logInfo "launchApp: ${appId}"; enqueue([type: "launch", stage: "receiver", appId: appId]) }
+// show a still image on a cast display, then close the session after `seconds` (0/blank = leave it up). The countdown
+// starts when the display reports the image is showing (launching the receiver + loading takes a few seconds), not
+// when the command runs. A new showImage replaces the picture and restarts the timer. The timeout only stops the
+// session if this image is still what's showing - if something else was cast meanwhile, it is left alone.
+//
+// volume (optional): set before the receiver launches, so the cast start sound plays at that level. The volume from
+// before the first showImage is restored once the image session ends (timeout STOP, or the session closing any other
+// way). A showImage on top of one still showing keeps that original volume as the one to restore.
+def showImage(url, seconds = null, volume = null) {
+    if (isEmpty(url as String)) return
+    Integer secs = (seconds ? (seconds as BigDecimal).intValue() : 0)
+    Integer vol = (volume != null && "${volume}".trim() != "") ? Math.max(0, Math.min(100, (volume as BigDecimal).intValue())) : null
+    logInfo "showImage: ${url}${secs > 0 ? " for ${secs}s" : ""}${vol != null ? ", volume ${vol}" : ""}"
+    unschedule("imageTimeout")
+    unschedule("restoreImageVolume")
+    String key = device.id as String
+    if (secs > 0) imageArm[key] = [url: (url as String), secs: secs, armed: false]
+    else imageArm.remove(key)
+    if (vol != null) {
+        def cur = device.currentValue("volume")
+        Map r = imageVolRestore[key]
+        if (r) { r.url = (url as String); r.shown = false }   // keep the original volume from the first showImage
+        else if (cur != null) imageVolRestore[key] = [vol: (cur as Integer), url: (url as String), shown: false]
+        // receiver-stage action: pump() runs it at READY, before ensureApp launches the media receiver (= the beep)
+        if (cur == null || (cur as Integer) != vol) setDeviceVolume(vol)
+    }
+    playMedia(url as String, null, null, null, "none")
+}
+// put back the volume showImage replaced. Idempotent: only the first caller (session-end status or the post-STOP
+// fallback) does anything.
+def restoreImageVolume() {
+    Map r = imageVolRestore.remove(device.id as String)
+    if (r?.vol == null) return
+    logInfo "showImage: restoring volume ${r.vol}"
+    setDeviceVolume(r.vol as Integer)
+}
+// called from handleMediaStatus: start the showImage countdown the first time the receiver reports our image
+private void armImageTimeout(String contentId) {
+    Map arm = imageArm[device.id as String]
+    if (!arm || arm.armed || contentId != arm.url) return
+    arm.armed = true
+    logDebug "showImage: image is showing, closing in ${arm.secs}s"
+    runIn(arm.secs as Integer, "imageTimeout")
+}
+def imageTimeout() {
+    Map arm = imageArm.remove(device.id as String)
+    if (!arm) return
+    logDebug "imageTimeout: ${arm.url}"
+    enqueue([type: "stopImage", stage: "receiver", url: arm.url])
+    // fallback in case no session-end RECEIVER_STATUS arrives (handleReceiverStatus normally restores first)
+    if (imageVolRestore.containsKey(device.id as String)) runIn(5, "restoreImageVolume")
+}
 def stopApp()        { logInfo "stopApp"; if (state.sessionId) sendReceiverStop(state.sessionId) }
 def reconnect()      { logInfo "reconnect"; closeSocket(); runIn(1, "connect") }
 def disconnect()     { logInfo "disconnect"; state.pendingActions = []; closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
@@ -370,6 +427,11 @@ private void runAction(Map a) {
         case "setVolumePre": sendSetVolume([level: a.level]); break
         case "announce":  startAnnounce(a); break
         case "media":     startMedia(a); break
+        case "stopImage":
+            String cur = device.currentValue("mediaContentId") as String
+            if (state.appId == APP_DMR && state.sessionId && cur == a.url) sendReceiverStop(state.sessionId)
+            else logDebug "imageTimeout: not stopping - now showing ${cur ?: 'nothing'} (app=${state.appId ?: 'none'})"
+            break
     }
 }
 
@@ -515,11 +577,13 @@ private boolean isPlayableUrl(String s) {
 
 private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0) {
     if (!state.transportId) { logWarn "sendMediaLoad: no transportId"; return }
+    String ctype = inferContentType(url)
     Map media = [
         contentId  : url,
         streamType : "BUFFERED",
-        contentType: inferContentType(url),
-        metadata   : [metadataType: 0, title: (title ?: ""), subtitle: (subtitle ?: "")]
+        contentType: ctype,
+        // metadataType 4 = PhotoMediaMetadata, 0 = GenericMediaMetadata
+        metadata   : [metadataType: (ctype.startsWith("image/") ? 4 : 0), title: (title ?: ""), subtitle: (subtitle ?: "")]
     ]
     if (art) media.metadata.images = [[url: art]]
     Map load = [type: "LOAD", requestId: nextRequestId(), autoplay: true, currentTime: (startTime ?: 0), media: media]
@@ -545,6 +609,13 @@ private String inferContentType(String url) {
     if (u.endsWith(".mp4") || u.endsWith(".m4v")) return "video/mp4"
     if (u.endsWith(".m3u8")) return "application/x-mpegurl"
     if (u.endsWith(".mpd"))  return "application/dash+xml"
+    // still images (Nest Hub / Chromecast with a screen): the Default Media Receiver displays these when the LOAD
+    // says image/*; sent as the audio/mpeg default they fail with LOAD_FAILED
+    if (u.endsWith(".jpg") || u.endsWith(".jpeg")) return "image/jpeg"
+    if (u.endsWith(".png"))  return "image/png"
+    if (u.endsWith(".gif"))  return "image/gif"
+    if (u.endsWith(".webp")) return "image/webp"
+    if (u.endsWith(".bmp"))  return "image/bmp"
     return "audio/mpeg"
 }
 
@@ -845,6 +916,10 @@ private void handleReceiverStatus(Map p) {
         clearNowPlaying()
         state.appId = null; state.transportId = null; state.sessionId = null; state.mediaSessionId = null
         if (state.conn == "APP_CONNECTED") setConn("READY", "DMR exited (receiver idle)")   // a new announce must relaunch it
+        // a showImage session has ended -> put its volume back (short delay so it lands after the session teardown)
+        // (only once the image has really been on screen: a status taken while the receiver is still launching also
+        // reports no apps)
+        if (imageVolRestore[device.id as String]?.shown) runIn(1, "restoreImageVolume")
     } else {
         // prefer the media-capable app: a receiver can list a control/idle app alongside the one actually playing
         def mediaApp = apps.find { a -> (a.namespaces ?: []).any { it?.name == NS_MEDIA } }
@@ -852,6 +927,8 @@ private void handleReceiverStatus(Map p) {
         sendEventIfChanged("currentApp", app0.displayName ?: app0.appId)
         sendEventIfChanged("appStatusText", app0.statusText ?: NO_MEDIA)
         state.appId = app0.appId
+        // a showImage session has ended and the display went back to its ambient app (e.g. Nest Hub "Backdrop")
+        if (app0.appId != APP_DMR && imageVolRestore[device.id as String]?.shown) runIn(1, "restoreImageVolume")
         String newTransport = app0.transportId
         if (newTransport) {
             boolean changed = (newTransport != state.transportId)
@@ -904,7 +981,12 @@ private void handleMediaStatus(Map p) {
     def media = s.media
     if (media != null) {
         if (media.duration != null) sendEventIfChanged("mediaDuration", (media.duration as BigDecimal).intValue())
-        if (media.contentId != null) sendEventIfChanged("mediaContentId", media.contentId)
+        if (media.contentId != null) {
+            sendEventIfChanged("mediaContentId", media.contentId)
+            armImageTimeout(media.contentId as String)
+            Map vr = imageVolRestore[device.id as String]
+            if (vr && vr.url == media.contentId) vr.shown = true
+        }
         def md = media.metadata ?: [:]
         title = md.title
         artist = md.artist ?: md.subtitle

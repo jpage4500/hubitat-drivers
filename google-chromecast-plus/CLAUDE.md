@@ -206,6 +206,33 @@ switch) is what clipped displays, and it depended on the device reaching the hub
 the SSML break. The app-level "Pre-roll silence" toggle and "Lead-in delay" setting were removed with it
 (lead-in is now per-device).
 
+## Still images / showImage (2026-11-12, contributed)
+
+`inferContentType()` only knew audio/video extensions and fell back to `audio/mpeg`, so an image URL was sent
+as audio and the DMR answered **LOAD_FAILED**. Image extensions (`.jpg/.jpeg/.png/.gif/.webp/.bmp`) now map to
+`image/*`, and `sendMediaLoad()` sends `metadataType: 4` (PhotoMediaMetadata) for them; `streamType` stays
+`BUFFERED`. The DMR reports a displayed image as `PAUSED` (after a brief `IDLE`) and keeps it up indefinitely.
+
+`showImage(url, seconds, volume)` (child command):
+
+- **Timer armed from `parse()`, not the command.** Launching the DMR + loading takes ~2 s on a Nest Hub, so a
+  `runIn(seconds)` from the command fired before the image existed — with 1 s the timeout saw nothing showing,
+  skipped the STOP, and the picture stayed up forever. `armImageTimeout()` (from `handleMediaStatus`) starts the
+  countdown the first time MEDIA_STATUS reports our `contentId`. Bookkeeping is the `@Field imageArm` map
+  (cross-thread; a `state` write-back from a scheduled job could reset `armed`, and the 60 s status polls would
+  then keep re-arming and pushing the timeout out).
+- **`imageTimeout` only STOPs if our image is still current** (`mediaContentId == url`, app is the DMR) — the
+  `stopImage` receiver-stage action. Anything cast meanwhile is left alone. A new `showImage` replaces the
+  picture and restarts the timer.
+- **Volume** is a receiver-stage `setDeviceVolume` enqueued *before* `playMedia`, so `pump()` sends it at
+  READY ahead of `ensureApp()` → the cast start earcon plays at that level. The pre-call volume goes in
+  `@Field imageVolRestore` (kept from the *first* of back-to-back calls) and is restored once the session ends:
+  `handleReceiverStatus` sees no apps or a non-DMR app (Nest Hub returns to `Backdrop`) **after** the image was
+  reported on screen (`shown` — a status taken mid-launch also shows no apps), with a 5 s fallback after the
+  timeout's STOP. `restoreImageVolume` is idempotent. The restore is a SET_VOLUME, so a volume-beep device may
+  chirp at the restored level (see Chirps above).
+- Verified on a Nest Hub against a Node-RED-served JPEG: 1 s and 3 s timeouts, volume 5 → restored 1.
+
 ## Related findings (came up during TTS debugging)
 
 - **Request-id race — FIXED.** `nextRequestId()` did a non-atomic `state.requestId` read-modify-write; the

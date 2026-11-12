@@ -18,3 +18,7 @@
 
 11/07
 - Chromecast+: lead-in delay now accepts fractional seconds (e.g. 0.5)
+
+11/12
+- Chromecast+: images (.jpg, .png, .gif, .webp) can now be cast to displays
+- Chromecast+: new showImage command shows a picture for a set time at a set volume
