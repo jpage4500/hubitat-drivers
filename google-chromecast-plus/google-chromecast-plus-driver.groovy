@@ -65,8 +65,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
 @Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
 @Field static final Map priorApp = new ConcurrentHashMap() // device.id -> what was playing right before we launched the DMR over it (see capturePriorApp); written by the command thread, read by parse() -> can't live in state
-@Field static final Map imageArm = new ConcurrentHashMap() // device.id -> [url, secs, armed] for showImage; the countdown is armed from parse() when the image actually shows, so it can't live in state (a scheduled-job write-back could reset "armed" and the periodic status polls would keep pushing the timeout out)
-@Field static final Map imageVolRestore = new ConcurrentHashMap() // device.id -> [vol: 0-100 to put back, url: last showImage url, shown: image has been reported on screen]; read/written from parse() -> @Field, not state
+@Field static final Map imageSess = new ConcurrentHashMap() // device.id -> showImage bookkeeping [url, secs, shown, armed, restoreVol, mediaSessionId, sessionId, pendingRestore]; written from parse() as well as the command thread, so it can't live in state (a scheduled-job write-back could reset "armed" and the periodic status polls would keep pushing the timeout out). See showImage.
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -89,8 +88,8 @@ metadata {
         command "disconnect"
         command "launchApp", [[name: "App ID*", type: "STRING", description: "Cast app id, e.g. CC1AD845"]]
         command "stopApp"
-        command "showImage", [[name: "Image URL*", type: "STRING", description: "http(s) URL of a .jpg/.jpeg/.png/.gif/.webp/.bmp image"],
-                              [name: "Seconds", type: "NUMBER", description: "How long to show it, then close the cast session (blank or 0 = leave it up)"],
+        command "showImage", [[name: "Image URL*", type: "STRING", description: "http(s) URL of an image (.jpg/.png/.gif/.webp/.bmp; no extension = sent as JPEG, e.g. a camera snapshot URL)"],
+                              [name: "Seconds", type: "NUMBER", description: "How long to show it, then close the cast session (blank or 0 = leave it up; fractions round up)"],
                               [name: "Volume", type: "NUMBER", description: "Volume (0-100) for the cast start sound; the previous volume is restored when the image session ends (blank = leave volume alone)"]]
 
         // -- now-playing / status (child mode) --
@@ -192,6 +191,7 @@ def uninstalled() {
     lastMedia.remove(key)
     reqId.remove(key)
     priorApp.remove(key)
+    imageSess.remove(key)
     pending.remove("${device.id}:getStatus")
 }
 
@@ -199,6 +199,12 @@ def initialize() {
     setConn("IDLE", "initialize")
     state.retryCount = 0
     state.pendingActions = []
+    imageQueueDropped()                               // a showImage still queued is gone with the queue
+    Map img = imageSess[device.id as String]
+    if (img?.shown) {
+        img.armed = false                             // updated() unscheduled its timeout: re-arm on the next MEDIA_STATUS
+        if (img.timedOut && img.restoreVol != null) runIn(5, "restoreImageVolume")   // ...and the restore fallback
+    }
     state.ttsActive = false                           // clear any TTS flags stuck on from a dropped session
     rxBuf[device.id as String] = ""
     sendEventIfChanged("connectionStatus", "idle")
@@ -284,61 +290,143 @@ def unmute()       { setMute(false) }
 
 // -- app control --
 def launchApp(appId) { logInfo "launchApp: ${appId}"; enqueue([type: "launch", stage: "receiver", appId: appId]) }
-// show a still image on a cast display, then close the session after `seconds` (0/blank = leave it up). The countdown
-// starts when the display reports the image is showing (launching the receiver + loading takes a few seconds), not
-// when the command runs. A new showImage replaces the picture and restarts the timer. The timeout only stops the
-// session if this image is still what's showing - if something else was cast meanwhile, it is left alone.
+// show a still image on a cast display, then close the session after `seconds` (0/blank = leave it up; fractions
+// round up). The countdown starts when the display reports the image is showing (launching the receiver + loading
+// takes a few seconds), not when the command runs. A new showImage replaces the picture and restarts the timer. The
+// timeout only stops the session if the media session it loaded is still the current one - if something else was
+// cast meanwhile, it is left alone. The URL needs no extension (camera snapshot URLs usually have none): anything
+// that isn't recognisably another image type is sent as image/jpeg.
 //
-// volume (optional): set before the receiver launches, so the cast start sound plays at that level. The volume from
-// before the first showImage is restored once the image session ends (timeout STOP, or the session closing any other
-// way). A showImage on top of one still showing keeps that original volume as the one to restore.
+// volume (optional): set before the receiver launches, so the cast start sound plays at that level. When it differs
+// from the current volume, the volume from before the first showImage is restored once the image session ends
+// (timeout STOP, the session closing any other way, a failed load, or the queue being dropped). A showImage on top of
+// one still showing keeps that original volume as the one to restore. An announcement or track cast over the image
+// takes over the restore (see handOverImageVolume).
 def showImage(url, seconds = null, volume = null) {
-    if (isEmpty(url as String)) return
-    Integer secs = (seconds ? (seconds as BigDecimal).intValue() : 0)
+    String u = url as String
+    if (isEmpty(u)) return
+    BigDecimal sd = ("${seconds ?: ''}".trim() ? (seconds as BigDecimal) : 0)
+    Integer secs = (sd > 0 ? (Math.ceil(sd.doubleValue()) as Integer) : 0)
     Integer vol = (volume != null && "${volume}".trim() != "") ? Math.max(0, Math.min(100, (volume as BigDecimal).intValue())) : null
-    logInfo "showImage: ${url}${secs > 0 ? " for ${secs}s" : ""}${vol != null ? ", volume ${vol}" : ""}"
+    logInfo "showImage: ${u}${secs > 0 ? " for ${secs}s" : ""}${vol != null ? ", volume ${vol}" : ""}"
     unschedule("imageTimeout")
     unschedule("restoreImageVolume")
     String key = device.id as String
-    if (secs > 0) imageArm[key] = [url: (url as String), secs: secs, armed: false]
-    else imageArm.remove(key)
-    if (vol != null) {
-        def cur = device.currentValue("volume")
-        Map r = imageVolRestore[key]
-        if (r) { r.url = (url as String); r.shown = false }   // keep the original volume from the first showImage
-        else if (cur != null) imageVolRestore[key] = [vol: (cur as Integer), url: (url as String), shown: false]
-        // receiver-stage action: pump() runs it at READY, before ensureApp launches the media receiver (= the beep)
-        if (cur == null || (cur as Integer) != vol) setDeviceVolume(vol)
-    }
-    playMedia(url as String, null, null, null, "none")
+    def cur = device.currentValue("volume")
+    boolean volChange = (vol != null && (cur == null || (cur as Integer) != vol))
+    // keep the original volume from the first of back-to-back calls; only record one when this call changes it
+    // (a no-op restore SET_VOLUME still makes the device beep)
+    Integer restoreVol = (Integer) imageSess[key]?.restoreVol
+    if (restoreVol == null && volChange && cur != null) restoreVol = cur as Integer
+    if (secs > 0 || restoreVol != null) imageSess[key] = [url: u, secs: secs, shown: false, armed: false, restoreVol: restoreVol]
+    else imageSess.remove(key)
+    // receiver-stage action: pump() runs it at READY, before ensureApp launches the media receiver (= the beep)
+    if (volChange) setDeviceVolume(vol)
+    String ctype = inferContentType(u)
+    playMedia(u, null, null, null, "none", (ctype.startsWith("image/") ? ctype : "image/jpeg"), true)
 }
+
 // put back the volume showImage replaced. Idempotent: only the first caller (session-end status or the post-STOP
 // fallback) does anything.
 def restoreImageVolume() {
-    Map r = imageVolRestore.remove(device.id as String)
-    if (r?.vol == null) return
-    logInfo "showImage: restoring volume ${r.vol}"
-    setDeviceVolume(r.vol as Integer)
+    Map s = imageSess.remove(device.id as String)
+    if (s?.restoreVol == null) return
+    logInfo "showImage: restoring volume ${s.restoreVol}"
+    setDeviceVolume(s.restoreVol as Integer)
 }
-// called from handleMediaStatus: start the showImage countdown the first time the receiver reports our image
-private void armImageTimeout(String contentId) {
-    Map arm = imageArm[device.id as String]
-    if (!arm || arm.armed || contentId != arm.url) return
-    arm.armed = true
-    logDebug "showImage: image is showing, closing in ${arm.secs}s"
-    runIn(arm.secs as Integer, "imageTimeout")
+
+// called from handleMediaStatus: the receiver reported our image -> remember the media session it was loaded on (what
+// the timeout checks) and start the countdown. Re-arms after initialize() (a preferences save unschedules the job).
+// Only PLAYING/PAUSED count as on screen (a displayed image reports PAUSED): the receiver already names the contentId
+// in the IDLE/BUFFERING statuses it sends while loading, including just before a LOAD_FAILED. Later statuses often
+// leave out `media`, so the media session is matched by the id from the first status that named our URL.
+// Called for every MEDIA_STATUS; contentId is null when the status carried no media.
+private void noteImageShowing(String contentId, String playerState, msid) {
+    Map s = imageSess[device.id as String]
+    if (!s || s.pendingRestore) return
+    if (!s.shown) {
+        // only statuses after our LOAD went out, and never the previous media session: the doorbell re-sends the
+        // same URL, so the picture being replaced would otherwise match by URL
+        if (!s.loadSent || (msid != null && msid == s.ignoreMsid)) return
+        if (contentId != null && contentId == s.url && msid != null) s.mediaSessionId = msid
+        if (contentId != null && contentId != s.url) return          // a status about something else
+        if (msid == null || s.mediaSessionId == null || msid != s.mediaSessionId) return
+        if (!(playerState in ["PLAYING", "PAUSED"])) return
+        s.shown = true
+        s.sessionId = state.sessionId
+    } else if (contentId != s.url && msid != s.mediaSessionId) {
+        return
+    }
+    if ((s.secs ?: 0) > 0 && !s.armed) {
+        s.armed = true
+        logDebug "showImage: image is showing, closing in ${s.secs}s"
+        // the job carries what it needs: after a hub reboot the @Field map is empty but the scheduled job survives
+        runIn(s.secs as Integer, "imageTimeout", [data: [url: s.url, mediaSessionId: s.mediaSessionId, sessionId: s.sessionId, restoreVol: s.restoreVol]])
+    }
 }
-def imageTimeout() {
-    Map arm = imageArm.remove(device.id as String)
-    if (!arm) return
-    logDebug "imageTimeout: ${arm.url}"
-    enqueue([type: "stopImage", stage: "receiver", url: arm.url])
-    // fallback in case no session-end RECEIVER_STATUS arrives (handleReceiverStatus normally restores first)
-    if (imageVolRestore.containsKey(device.id as String)) runIn(5, "restoreImageVolume")
+
+def imageTimeout(Map data = null) {
+    String key = device.id as String
+    Map s = imageSess[key]
+    if (!s && data?.url) {
+        // hub rebooted since the countdown started: rebuild the entry from the job's data
+        s = [url: data.url, secs: 0, shown: true, armed: true, restoreVol: data.restoreVol,
+             mediaSessionId: data.mediaSessionId, sessionId: data.sessionId]
+        imageSess[key] = s
+    }
+    if (!s?.shown) return
+    s.secs = 0      // countdown done; the entry stays only to drive the volume restore at session end
+    s.timedOut = true
+    logDebug "imageTimeout: ${s.url}"
+    enqueue([type: "stopImage", stage: "receiver", url: s.url, mediaSessionId: s.mediaSessionId, sessionId: s.sessionId])
+    if (s.restoreVol != null) runIn(5, "restoreImageVolume")   // fallback in case no session-end RECEIVER_STATUS arrives
+    else imageSess.remove(key)
 }
+
+// the image session is over (receiver idle, or another app took the display): put the volume back
+private void imageSessionEnded() {
+    String key = device.id as String
+    Map s = imageSess[key]
+    if (!s?.shown || s.pendingRestore) return
+    unschedule("imageTimeout")
+    if (s.restoreVol != null) runIn(1, "restoreImageVolume")   // short delay so it lands after the session teardown
+    else imageSess.remove(key)
+}
+
+// the image's LOAD failed: nothing will ever show, so restore the volume now
+private void imageLoadFailed() {
+    Map s = imageSess[device.id as String]
+    if (!s || s.shown || s.pendingRestore) return
+    logWarn "showImage: ${s.url} failed to load"
+    unschedule("imageTimeout")
+    restoreImageVolume()
+}
+
+// queued actions were dropped (offline / disconnect / initialize). If the image hadn't shown yet we can't tell whether
+// its SET_VOLUME went out, so put the original volume back on the next receiver status - only if it actually differs.
+private void imageQueueDropped() {
+    String key = device.id as String
+    Map s = imageSess[key]
+    if (!s || s.shown) return
+    unschedule("imageTimeout")
+    unschedule("restoreImageVolume")
+    if (s.restoreVol != null) imageSess[key] = [pendingRestore: true, restoreVol: s.restoreVol]
+    else imageSess.remove(key)
+}
+
+// an announcement or track is replacing the image: the image's timer and volume restore must not run in the middle of
+// it. Returns the image's original volume (or null) for the caller to restore at the right time; the entry is dropped.
+private Integer handOverImageVolume() {
+    Map s = imageSess.remove(device.id as String)
+    if (!s) return null
+    unschedule("imageTimeout")
+    unschedule("restoreImageVolume")
+    return (Integer) s.restoreVol
+}
+
 def stopApp()        { logInfo "stopApp"; if (state.sessionId) sendReceiverStop(state.sessionId) }
 def reconnect()      { logInfo "reconnect"; closeSocket(); runIn(1, "connect") }
-def disconnect()     { logInfo "disconnect"; state.pendingActions = []; closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
+def disconnect()     { logInfo "disconnect"; state.pendingActions = []; imageQueueDropped(); closeSocket(); sendEventIfChanged("connectionStatus", "disconnected") }
 
 // ============================================================================
 // CHILD mode: high-level actions
@@ -354,11 +442,12 @@ private void announce(String text, volume, String mode, String voice = null) {
              volume: (volume != null ? volume : ttsVolume), mode: mode, title: "Announcement"])
 }
 
-private void playMedia(String url, String title, String subtitle, volume, String mode) {
+// contentType: null = infer from the URL extension; image = this LOAD is a showImage (no image hand-over in startMedia)
+private void playMedia(String url, String title, String subtitle, volume, String mode, String contentType = null, boolean image = false) {
     if (isEmpty(url)) return
     logInfo "playMedia: ${url} (mode=${mode ?: "none"}${volume != null ? ", volume=${volume}" : ""})"
     enqueue([type: "media", stage: "app", url: url, title: title, subtitle: subtitle,
-             volume: volume, mode: mode ?: "none"])
+             volume: volume, mode: mode ?: "none", contentType: contentType, image: image])
 }
 
 private void setDeviceVolume(vol) {
@@ -428,9 +517,14 @@ private void runAction(Map a) {
         case "announce":  startAnnounce(a); break
         case "media":     startMedia(a); break
         case "stopImage":
+            // match on the receiver + media session the image was loaded on, not the mediaContentId attribute (that is
+            // blanked on any IDLE status, which some receivers report for a still image). Any later LOAD gets a new
+            // mediaSessionId. After an on-demand reconnect the mediaSessionId isn't known yet -> fall back to the URL.
             String cur = device.currentValue("mediaContentId") as String
-            if (state.appId == APP_DMR && state.sessionId && cur == a.url) sendReceiverStop(state.sessionId)
-            else logDebug "imageTimeout: not stopping - now showing ${cur ?: 'nothing'} (app=${state.appId ?: 'none'})"
+            boolean sameSession = (state.appId == APP_DMR && state.sessionId && state.sessionId == a.sessionId)
+            boolean sameMedia = (state.mediaSessionId != null) ? (state.mediaSessionId == a.mediaSessionId) : (cur == a.url || isEmpty(cur) || cur == NO_MEDIA)
+            if (sameSession && sameMedia) sendReceiverStop(state.sessionId)
+            else logDebug "imageTimeout: not stopping - the image is no longer showing (now ${cur ?: 'nothing'}, app=${state.appId ?: 'none'})"
             break
     }
 }
@@ -450,6 +544,18 @@ private void startAnnounce(Map a) {
     state.ttsTitle = a.title ?: "Announcement"
     state.ttsDur = (a.dur ?: 0)
     state.ttsVolumeApplied = false
+    // announcing over a showImage that changed the volume: the announcement takes over that restore, so only one
+    // restore runs (the image's own would fire mid-speech and the announcement would then "restore" the image level)
+    Integer imgVol = handOverImageVolume()
+    if (imgVol != null) {
+        if (a.mode in ["restore", "resume"]) {
+            state.ttsRestore = ((state.ttsRestore ?: [:]) as Map) + [volume: imgVol]
+            state.ttsVolumeApplied = true
+        } else if (a.volume == null) {
+            sendSetVolume([level: imgVol / 100.0d])   // no restore of its own: the image's level ends with the image
+            sendEventIfChanged("volume", imgVol)
+        }
+    }
     if (a.volume != null) {
         sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
         state.ttsVolumeApplied = true   // only then does finishTts have a real level to restore - see finishTts
@@ -483,8 +589,16 @@ private void startMedia(Map a) {
     takePriorApp()      // this load owns the device now; don't let the evicted app leak into a later announcement's restore
     state.ttsActive = false
     state.ttsMode = "none"
+    if (a.image) {
+        Map img = imageSess[device.id as String]
+        if (img && img.url == a.url && !img.shown) { img.loadSent = true; img.ignoreMsid = state.mediaSessionId }
+    } else {
+        // a track cast over a showImage ends the image: put back the volume it replaced, unless this track sets its own
+        Integer imgVol = handOverImageVolume()
+        if (imgVol != null && a.volume == null) { sendSetVolume([level: imgVol / 100.0d]); sendEventIfChanged("volume", imgVol) }
+    }
     if (a.volume != null) sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
-    sendMediaLoad(a.url, a.title, a.subtitle, null)
+    sendMediaLoad(a.url, a.title, a.subtitle, null, 0, a.contentType as String)
 }
 
 // What was on the device before the announcement, so finishTts can put it back.
@@ -575,9 +689,9 @@ private boolean isPlayableUrl(String s) {
     return u.startsWith("http://") || u.startsWith("https://")
 }
 
-private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0) {
+private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0, String contentType = null) {
     if (!state.transportId) { logWarn "sendMediaLoad: no transportId"; return }
-    String ctype = inferContentType(url)
+    String ctype = contentType ?: inferContentType(url)
     Map media = [
         contentId  : url,
         streamType : "BUFFERED",
@@ -650,7 +764,7 @@ def connect() {
             markOffline(msg)
         } else {
             logWarn "connect: failed to ${getIp()}:${getPort()} - ${msg}"
-            if (isKeepAlive()) scheduleReconnect() else state.pendingActions = []
+            if (isKeepAlive()) scheduleReconnect() else { state.pendingActions = []; imageQueueDropped() }
         }
     }
 }
@@ -703,6 +817,7 @@ private void handleSocketDown(String why) {
         scheduleReconnect()
     } else {
         state.pendingActions = []            // on-demand: don't reconnect, the next poll re-establishes
+        imageQueueDropped()
     }
 }
 
@@ -722,6 +837,7 @@ private void markOffline(String why) {
     setConn("IDLE", "offline: ${why}")
     state.transportId = null; state.sessionId = null; state.mediaSessionId = null
     state.pendingActions = []                // drop queued work; the next scheduled poll retries
+    imageQueueDropped()
     unschedule("heartbeatTick")
     sendEventIfChanged("connectionStatus", "offline")
     sendEventIfChanged("playbackStatus", "OFFLINE")
@@ -907,6 +1023,13 @@ private void handleReceiverStatus(Map p) {
         if (st.volume.level != null) sendEventIfChanged("volume", Math.round((st.volume.level as BigDecimal).doubleValue() * 100) as Integer)
         if (st.volume.muted != null) sendEventIfChanged("mute", st.volume.muted ? "muted" : "unmuted")
     }
+    // a showImage whose queue was dropped before it showed: put the volume back if the device really is off it
+    Map img = imageSess[device.id as String]
+    if (img?.pendingRestore && st.volume?.level != null) {
+        imageSess.remove(device.id as String)
+        Integer curVol = Math.round((st.volume.level as BigDecimal).doubleValue() * 100) as Integer
+        if (curVol != (img.restoreVol as Integer)) { logInfo "showImage: restoring volume ${img.restoreVol}"; setDeviceVolume(img.restoreVol as Integer) }
+    }
     def apps = st.applications ?: []
     if (apps.isEmpty()) {
         sendEventIfChanged("currentApp", "none")
@@ -916,10 +1039,9 @@ private void handleReceiverStatus(Map p) {
         clearNowPlaying()
         state.appId = null; state.transportId = null; state.sessionId = null; state.mediaSessionId = null
         if (state.conn == "APP_CONNECTED") setConn("READY", "DMR exited (receiver idle)")   // a new announce must relaunch it
-        // a showImage session has ended -> put its volume back (short delay so it lands after the session teardown)
-        // (only once the image has really been on screen: a status taken while the receiver is still launching also
-        // reports no apps)
-        if (imageVolRestore[device.id as String]?.shown) runIn(1, "restoreImageVolume")
+        // a showImage session has ended -> put its volume back (only once the image has really been on screen: a
+        // status taken while the receiver is still launching also reports no apps)
+        imageSessionEnded()
     } else {
         // prefer the media-capable app: a receiver can list a control/idle app alongside the one actually playing
         def mediaApp = apps.find { a -> (a.namespaces ?: []).any { it?.name == NS_MEDIA } }
@@ -928,7 +1050,7 @@ private void handleReceiverStatus(Map p) {
         sendEventIfChanged("appStatusText", app0.statusText ?: NO_MEDIA)
         state.appId = app0.appId
         // a showImage session has ended and the display went back to its ambient app (e.g. Nest Hub "Backdrop")
-        if (app0.appId != APP_DMR && imageVolRestore[device.id as String]?.shown) runIn(1, "restoreImageVolume")
+        if (app0.appId != APP_DMR) imageSessionEnded()
         String newTransport = app0.transportId
         if (newTransport) {
             boolean changed = (newTransport != state.transportId)
@@ -972,6 +1094,7 @@ private void handleMediaStatus(Map p) {
     boolean wasTts = state.ttsActive     // capture before the TTS block below can flip it off (finishTts)
 
     String ps = s.playerState ?: "UNKNOWN"
+    noteImageShowing((s.media?.contentId as String), ps, s.mediaSessionId)
     sendEventIfChanged("playbackStatus", ps)
     sendEventIfChanged("status", mapPlayerState(ps))
     if (s.currentTime != null) sendEventIfChanged("mediaPosition", (s.currentTime as BigDecimal).intValue())
@@ -983,9 +1106,6 @@ private void handleMediaStatus(Map p) {
         if (media.duration != null) sendEventIfChanged("mediaDuration", (media.duration as BigDecimal).intValue())
         if (media.contentId != null) {
             sendEventIfChanged("mediaContentId", media.contentId)
-            armImageTimeout(media.contentId as String)
-            Map vr = imageVolRestore[device.id as String]
-            if (vr && vr.url == media.contentId) vr.shown = true
         }
         def md = media.metadata ?: [:]
         title = md.title
@@ -1030,7 +1150,7 @@ private void handleMediaStatus(Map p) {
 
 private void handleMediaError(Map p) {
     logWarn "media error: ${p.type} ${p}"
-    if (!state.ttsActive) return
+    if (!state.ttsActive) { imageLoadFailed(); return }
     // a failed silent lead-in must not abort the announcement - play it directly instead
     if (state.ttsPhase == "preroll") loadTtsNow()
     else finishTts()
