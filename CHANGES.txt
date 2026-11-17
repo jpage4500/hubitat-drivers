@@ -17,6 +17,7 @@
 - Life360+: fast polling now pauses while Life360 is rate-limiting
 
 11/07
+- Chromecast+: lead-in delay now accepts fractional seconds (e.g. 0.5)
 - Life360+: fixed the watchdog staying silent when an outage continues past a reboot or Done
 - Life360+: fewer Life360 requests while a member is moving
 - Life360+: acceleration no longer stays active at home while Life360 still says driving

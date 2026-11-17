@@ -114,7 +114,7 @@ metadata {
     preferences {
         input name: "keepAlive", type: "bool", title: "Real-time updates", description: "Keeps a persistent connection to the device. Turn OFF to poll on-demand (quieter, higher latency)", defaultValue: true
         input name: "ttsVolume", type: "number", title: "Announcement volume (0-100, blank = leave current)", description: "NOTE: this sets the volumne on every TTS request. For more fine-grained control, leave this blank and call the Play Text with volume argument command instead", required: false, range: "0..100"
-        input name: "leadInDelay", type: "number", title: "Lead-in delay (seconds, 0 = none)", description: "Prepends a silent pause to TTS announcements to prevent clipping on slow-to-wake devices", defaultValue: 0, range: "0..5"
+        input name: "leadInDelay", type: "decimal", title: "Lead-in delay (seconds, e.g. 0.5; 0 = none)", description: "Prepends a silent pause to TTS announcements to prevent clipping on slow-to-wake devices", defaultValue: 0, range: "0..5"
         input name: "stopAfterTts", type: "bool", title: "Stop after TTS is complete", description: "When an announcement ends, close the cast session so the device returns to its default state", defaultValue: false
         // debug logging is a single toggle in the app (broadcast as state.debug); no per-device switch
     }
@@ -128,7 +128,11 @@ private Integer getPort()  { return (getDataValue("port") ?: "${CAST_PORT}") as 
 // null (never saved) counts as ON, so app-created children get real-time until explicitly turned off
 private boolean isKeepAlive() { return settings.keepAlive != false }
 // lead-in delay (seconds, 0 = none): per-device preference driving an SSML pause prepended to the TTS text.
-private Integer leadInSec() { return Math.max(0, Math.min(5, (settings.leadInDelay ?: 0) as Integer)) }
+// Fractional seconds are allowed (0.5 = 500 ms); returned as whole milliseconds, clamped to 0..5000.
+private Integer leadInMs() {
+    BigDecimal sec = (settings.leadInDelay ?: 0) as BigDecimal
+    return Math.max(0, Math.min(5000, (Math.round(sec.doubleValue() * 1000) as Integer)))
+}
 
 // Rule Machine (and anything else that sanitizes HTML in a text field) strips everything between < and >,
 // so SSML typed into a rule action never reaches the driver - the same text works from the device page.
@@ -149,11 +153,11 @@ private String unescapeSsml(String text) {
 // into that silence instead of the first words, and it plays as one media item (no separate pre-roll to swap).
 // Skipped when the delay is 0 or the caller already supplied SSML. Needs a TTS engine that honors <break>.
 private String withLeadIn(String text) {
-    Integer sec = leadInSec()
-    if (sec < 1) return text
+    Integer ms = leadInMs()
+    if (ms <= 0) return text
     String lc = text.toLowerCase()
     if (lc.contains("<break") || lc.contains("<speak")) return text
-    return "<break time=\"${sec}s\"/>${text}"
+    return "<break time=\"${ms}ms\"/>${text}"
 }
 
 // ============================================================================

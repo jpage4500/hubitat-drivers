@@ -73,7 +73,7 @@ Skip this unless you like knowing what's under the hood.
 Most reports are about announcements, so start here.
 
 ### The first word is cut off
-The speaker's amp is still waking up. Make sure **Pre-roll silence** is on (app settings), then raise the **Lead-in delay** — leave it blank for automatic, or try `1`–`2` seconds. The lead-in delay is integration-wide, so raising it adds a little latency to every device; displays generally need more than plain speakers.
+The speaker's amp is still waking up. Raise that device's **Lead-in delay** (device preferences) — try `0.5`–`2` seconds; fractions like `0.3` are fine. It's per device, so only the device that clips pays the extra latency; displays generally need more than plain speakers.
 
 ### The announcement cuts off after ~2 seconds
 That was the built-in integration's signature bug and should be fixed here. If you still see it, it usually means the connection is dropping — enable debug logging (below) and report it.

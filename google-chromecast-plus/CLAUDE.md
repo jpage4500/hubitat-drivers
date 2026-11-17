@@ -82,9 +82,11 @@ upgrade. Same logic in `android-tv-plus`'s parent driver; keep the two in sync.
 ~22 kHz mono) → a **single** media `LOAD` to the Default Media Receiver (`CC1AD845`) → restore prior content
 afterward (mode `restore`/`resume`). `playTrack()` / `playMedia()` play a URL directly (no TTS, no lead-in).
 
-- **Lead-in delay** is a **per-device** driver preference (`leadInDelay`, seconds, default **0**, range 0–5).
-  When ≥1, `announce()` prepends an SSML pause `<break time="Ns"/>` to the text (`withLeadIn()`), so the
-  returned MP3 *opens with silence*. This is the current fix for first-word/sentence clipping (below). It's
+- **Lead-in delay** is a **per-device** driver preference (`leadInDelay`, **decimal** seconds, default **0**,
+  range 0–5). When >0, `announce()` prepends an SSML pause `<break time="Nms"/>` to the text (`withLeadIn()`),
+  so the returned MP3 *opens with silence*. Fractions were added 2026-11-07 (user asked for milliseconds): the
+  unit stayed **seconds** on purpose — switching to ms would have silently turned every saved `2` into a 2 ms
+  pause; `leadInMs()` converts to ms for the break. This is the current fix for first-word/sentence clipping (below). It's
   skipped when the delay is 0 or the text already contains `<break`/`<speak>`.
 - There is **no separate silence clip and no swap** anymore — the announcement is one media item.
 
