@@ -9,6 +9,7 @@ See community post: https://community.hubitat.com/t/beta-google-chromecast/16499
 - **Auto-discovery** of Cast devices on your network (manual IP entry as a fallback)
 - **Announcements (TTS)** with optional volume, then auto-restore of whatever was playing
 - **Play media** by URL (audio or video)
+- **Show images** on Cast displays (Nest Hub, Chromecast with a TV) — for a set time, with an optional volume for the cast start sound
 - **Playback control** — play, pause, stop, next / previous, seek, volume, mute
 - **Now-playing status** — title, artist, album art, position, current app, and playback state
 - **Launch / stop** Cast apps
@@ -41,6 +42,7 @@ Every device looks like a standard speaker to Hubitat, so it works out of the bo
 
 - **Make an announcement** (text-to-speech) — see below
 - **Play media** from a URL (a sound effect, a radio stream, a video)
+- **Show a picture** on a display (e.g. a doorbell snapshot) — see below
 - **Control playback** — play, pause, stop, next / previous, seek
 - **Set volume or mute**
 - **See what's playing** — title, artist, album art, and which app is running
@@ -55,6 +57,16 @@ This is the feature most people use, so here's exactly what happens when a rule 
 4. **Whatever was playing before comes back.** If music was playing when the announcement fired, the app restores it afterward — so an announcement politely interrupts and then resumes.
 
 **Announcement volume.** You can optionally give an announcement its own volume (say, louder for a doorbell alert). If you *don't* set one, the message simply plays at the speaker's current volume and the app doesn't touch the volume at all. Leaving it blank is the quietest option — see [Troubleshooting](#troubleshooting) if you're hearing beeps.
+
+### Showing images
+
+**Play Track** with an image URL (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.bmp`) shows the picture on a display until something else is cast. For a picture that goes away on its own, use the **Show Image** command:
+
+- **Image URL** — where the picture is. The display fetches it itself, so it must be reachable from the display (a local `http://` URL is fine).
+- **Seconds** — how long to show it. The countdown starts when the picture actually appears, then the cast session closes and the display goes back to its normal screen. Blank or 0 leaves it up.
+- **Volume** — optional. Google displays play a short sound when a cast starts; this sets the volume for it, and the previous volume is put back once the picture is gone.
+
+A new Show Image while one is still up replaces the picture and restarts the timer (handy for a doorbell sending several snapshots). If something else is cast in the meantime, the timer leaves it alone.
 
 ## Advanced / technical details
 

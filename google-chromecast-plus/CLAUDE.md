@@ -199,12 +199,66 @@ duck-and-resume via a privileged firmware path that isn't in the Cast protocol.
 exactly like plain `playTrack`. Same fix shape as the TTS path (snapshot + finish on the IDLE transition), not
 implemented.
 
+### Announcement restore lost when the DMR is warm (open, found 2026-11-16)
+`speak(text, 70)` on a Kitchen-display Nest Hub at 60: **cold** (Backdrop showing, DMR launched by the announce)
+→ restored to 60. **Warm** (DMR already up — after an image or a previous cast) → stays at 70, and the IDLE at
+the end ran the ordinary `clearNowPlaying` path, i.e. `state.ttsActive` was already false. Likely cause: warm,
+`pump()`'s APP_CONNECTED case runs `startAnnounce` on the *command* thread, the LOAD replies arrive while it is
+still running, and a `parse()` execution's state write-back clobbers `ttsActive`/`ttsRestore`. Cold, the action
+runs from `parse()` itself after the launch, so no race. Not confirmed with debug logs. Fix shape: keep the TTS
+bookkeeping in a `@Field` map like the image's, not `state`.
+
 ### Old pre-roll silence — REMOVED
 Previously: generate an 8 kHz silent WAV, host it on the hub (`/local/`), LOAD it, then swap in the TTS on
 PLAYING (with a lead-in hold for displays). Removed entirely — the swap (and the WAV→MP3 codec/sample-rate
 switch) is what clipped displays, and it depended on the device reaching the hub's HTTP server. Replaced by
 the SSML break. The app-level "Pre-roll silence" toggle and "Lead-in delay" setting were removed with it
 (lead-in is now per-device).
+
+## Still images / showImage (2026-11-12, contributed)
+
+`inferContentType()` only knew audio/video extensions and fell back to `audio/mpeg`, so an image URL was sent
+as audio and the DMR answered **LOAD_FAILED**. Image extensions (`.jpg/.jpeg/.png/.gif/.webp/.bmp`) now map to
+`image/*`, and `sendMediaLoad()` sends `metadataType: 4` (PhotoMediaMetadata) for them; `streamType` stays
+`BUFFERED`. The DMR reports a displayed image as `PAUSED` (after a brief `IDLE`) and keeps it up indefinitely.
+
+`showImage(url, seconds, volume)` (child command). Bookkeeping is one `@Field imageSess` map per device
+(`url, secs, shown, armed, restoreVol, imageVol, mediaSessionId, sessionId, loadSent, loadReqId, timedOut, pendingRestore`);
+cross-thread, so not `state`. Reworked 2026-11-16 after the PR #108 review.
+
+- **Content type.** `showImage` passes an explicit type through `playMedia` → `startMedia` → `sendMediaLoad`:
+  the extension's `image/*` type, else `image/jpeg`. Camera snapshot URLs (`/api/snapshot?id=3`) have no
+  extension and were sent as `audio/mpeg` → LOAD_FAILED. Verified on the Nest Hub with an extensionless URL.
+- **"Shown" = PLAYING/PAUSED on the media session our LOAD created.** `startMedia` allocates the LOAD's
+  `requestId` up front (`loadReqId`); the receiver answers a LOAD with a MEDIA_STATUS carrying that requestId
+  (confirmed on the Nest Hub), and that reply is the only place `noteImageShowing()` learns the image's
+  `mediaSessionId`. Then PLAYING/PAUSED on that id = on screen (later statuses are unsolicited, requestId 0, and
+  often omit `media`). Two earlier attempts failed on the hub: "a status naming our URL" (the receiver names the
+  URL in its loading IDLE/BUFFERING statuses, including just before LOAD_FAILED) and "ignore the previous media
+  session" (on a quick double press both LOADs go out before any status, so the outgoing picture's PAUSED — same
+  doorbell URL — was taken for the new one and the timeout then declined to stop the real one).
+- **Timer** armed on first shown, `runIn(secs, "imageTimeout", [data: …])`. The job's data carries url / session
+  ids / restoreVol, so after a hub reboot (map wiped, job survives) `imageTimeout` rebuilds the entry. `initialize()`
+  resets `armed` so the next MEDIA_STATUS re-arms after a preferences save (`updated()` → `unschedule()`).
+  `seconds` rounds **up** (0.5 → 1; `intValue()` made it 0 = leave up forever).
+- **`stopImage` matches the receiver + media session** the image was loaded on, not the `mediaContentId`
+  attribute (blanked on any IDLE status). After an on-demand reconnect the mediaSessionId isn't known yet →
+  falls back to the URL / blank attribute.
+- **Volume.** A restore is only recorded when the call actually changes the volume (a no-op SET_VOLUME beeps).
+  Restored at session end (`imageSessionEnded`: no apps / non-DMR app after shown, 1 s delay), 5 s after the
+  timeout's STOP as a fallback, immediately on a LOAD_FAILED whose requestId matches the image's LOAD (`imageLoadFailed` — not LOAD_CANCELLED /
+  INVALID_REQUEST, which a second showImage replacing a first still loading produces), 20 s after the LOAD if it
+  never showed and nothing answered (`imageLoadWatchdog`; the Nest Hub sometimes stays silent for an unreachable
+  host), and — when the queue is dropped before the image showed (offline / disconnect / initialize) — on the next
+  RECEIVER_STATUS, only if the device still reports the image's own level (`imageVol`, `pendingRestore`), so a
+  `setVolume` made in between isn't undone. Verified: failed load (matching requestId) → immediate restore;
+  3 s image → STOP at 3 s, restore; warm double press → the second picture closes on time, restore.
+- **Announcement / track over an image** (`handOverImageVolume`): the image entry is dropped and its timer and
+  restore cancelled. A `restore`/`resume` announcement takes over the image's original volume as its own restore
+  target; one with no restore and no volume of its own puts the image's volume back first; a track does the same.
+  **Limit, found while testing:** on the Nest Hub the announcement's own restore doesn't run when the DMR is
+  already up (always true over an image) — see "Announcement restore lost when the DMR is warm" above. So today
+  the device ends at the announcement's volume instead of the pre-image one; it no longer flips mid-speech.
 
 ## Related findings (came up during TTS debugging)
 
