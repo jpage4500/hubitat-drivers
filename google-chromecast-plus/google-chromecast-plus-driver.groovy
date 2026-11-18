@@ -65,7 +65,7 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final Map lastMedia = new ConcurrentHashMap() // device.id -> last logged now-playing summary (debug-log dedup; @Field so a scheduled-job state write can't clobber it)
 @Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
 @Field static final Map priorApp = new ConcurrentHashMap() // device.id -> what was playing right before we launched the DMR over it (see capturePriorApp); written by the command thread, read by parse() -> can't live in state
-@Field static final Map imageSess = new ConcurrentHashMap() // device.id -> showImage bookkeeping [url, secs, shown, armed, restoreVol, mediaSessionId, sessionId, pendingRestore]; written from parse() as well as the command thread, so it can't live in state (a scheduled-job write-back could reset "armed" and the periodic status polls would keep pushing the timeout out). See showImage.
+@Field static final Map imageSess = new ConcurrentHashMap() // device.id -> showImage bookkeeping [url, secs, shown, armed, restoreVol, imageVol, mediaSessionId, sessionId, loadSent, loadReqId, timedOut, pendingRestore]; written from parse() as well as the command thread, so it can't live in state (a scheduled-job write-back could reset "armed" and the periodic status polls would keep pushing the timeout out). See showImage.
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -318,7 +318,9 @@ def showImage(url, seconds = null, volume = null) {
     // (a no-op restore SET_VOLUME still makes the device beep)
     Integer restoreVol = (Integer) imageSess[key]?.restoreVol
     if (restoreVol == null && volChange && cur != null) restoreVol = cur as Integer
-    if (secs > 0 || restoreVol != null) imageSess[key] = [url: u, secs: secs, shown: false, armed: false, restoreVol: restoreVol]
+    // the level this image set (kept from an earlier call when this one sets none) - see imageQueueDropped
+    Integer imageVol = (vol != null) ? vol : (Integer) imageSess[key]?.imageVol
+    if (secs > 0 || restoreVol != null) imageSess[key] = [url: u, secs: secs, shown: false, armed: false, restoreVol: restoreVol, imageVol: imageVol]
     else imageSess.remove(key)
     // receiver-stage action: pump() runs it at READY, before ensureApp launches the media receiver (= the beep)
     if (volChange) setDeviceVolume(vol)
@@ -337,24 +339,22 @@ def restoreImageVolume() {
 
 // called from handleMediaStatus: the receiver reported our image -> remember the media session it was loaded on (what
 // the timeout checks) and start the countdown. Re-arms after initialize() (a preferences save unschedules the job).
-// Only PLAYING/PAUSED count as on screen (a displayed image reports PAUSED): the receiver already names the contentId
-// in the IDLE/BUFFERING statuses it sends while loading, including just before a LOAD_FAILED. Later statuses often
-// leave out `media`, so the media session is matched by the id from the first status that named our URL.
-// Called for every MEDIA_STATUS; contentId is null when the status carried no media.
-private void noteImageShowing(String contentId, String playerState, msid) {
+// The media session is learned only from the MEDIA_STATUS that answers this image's own LOAD (same requestId): URL
+// matching misfires because the doorbell re-sends the same URL, and on a quick double press both LOADs go out before
+// any status comes back, so the outgoing picture's PAUSED would be taken for the new one. Only PLAYING/PAUSED on that
+// session count as on screen (a displayed image reports PAUSED; the loading statuses are IDLE/BUFFERING, including
+// the one just before a LOAD_FAILED). Called for every MEDIA_STATUS; later ones are unsolicited (requestId 0).
+private void noteImageShowing(String playerState, msid, rid) {
     Map s = imageSess[device.id as String]
-    if (!s || s.pendingRestore) return
+    if (!s || s.pendingRestore || msid == null) return
     if (!s.shown) {
-        // only statuses after our LOAD went out, and never the previous media session: the doorbell re-sends the
-        // same URL, so the picture being replaced would otherwise match by URL
-        if (!s.loadSent || (msid != null && msid == s.ignoreMsid)) return
-        if (contentId != null && contentId == s.url && msid != null) s.mediaSessionId = msid
-        if (contentId != null && contentId != s.url) return          // a status about something else
-        if (msid == null || s.mediaSessionId == null || msid != s.mediaSessionId) return
+        if (!s.loadSent) return
+        if (rid != null && s.loadReqId != null && (rid as Integer) == (s.loadReqId as Integer)) s.mediaSessionId = msid
+        if (s.mediaSessionId == null || msid != s.mediaSessionId) return
         if (!(playerState in ["PLAYING", "PAUSED"])) return
         s.shown = true
         s.sessionId = state.sessionId
-    } else if (contentId != s.url && msid != s.mediaSessionId) {
+    } else if (msid != s.mediaSessionId) {
         return
     }
     if ((s.secs ?: 0) > 0 && !s.armed) {
@@ -393,24 +393,38 @@ private void imageSessionEnded() {
     else imageSess.remove(key)
 }
 
-// the image's LOAD failed: nothing will ever show, so restore the volume now
-private void imageLoadFailed() {
+// the image's LOAD failed: nothing will ever show, so restore the volume now. Only a LOAD_FAILED answering this image's
+// own LOAD counts: LOAD_CANCELLED / INVALID_REQUEST, or an error for an earlier LOAD, arrive when a second showImage
+// replaces a first one still loading (a quick double doorbell press), and must not cancel the new image's countdown.
+private void imageLoadFailed(Map p) {
     Map s = imageSess[device.id as String]
     if (!s || s.shown || s.pendingRestore) return
+    if (p?.type != "LOAD_FAILED" || s.loadReqId == null || (p.requestId as Integer) != (s.loadReqId as Integer)) return
     logWarn "showImage: ${s.url} failed to load"
     unschedule("imageTimeout")
     restoreImageVolume()
 }
 
+// the image's LOAD got no answer at all (seen on a Nest Hub with an unreachable host): treat it like a failed load.
+// Keyed on the LOAD's requestId so it never touches a newer showImage.
+def imageLoadWatchdog(Map data = null) {
+    Map s = imageSess[device.id as String]
+    if (!s || s.shown || s.pendingRestore || data?.reqId == null || (s.loadReqId as Integer) != (data.reqId as Integer)) return
+    logWarn "showImage: ${s.url} still not showing 20s after loading - giving up"
+    unschedule("imageTimeout")
+    restoreImageVolume()
+}
+
 // queued actions were dropped (offline / disconnect / initialize). If the image hadn't shown yet we can't tell whether
-// its SET_VOLUME went out, so put the original volume back on the next receiver status - only if it actually differs.
+// its SET_VOLUME went out, so on the next receiver status put the original volume back only if the device still reports
+// the image's own level - a setVolume (or a change on the device) made in between is left alone.
 private void imageQueueDropped() {
     String key = device.id as String
     Map s = imageSess[key]
     if (!s || s.shown) return
     unschedule("imageTimeout")
     unschedule("restoreImageVolume")
-    if (s.restoreVol != null) imageSess[key] = [pendingRestore: true, restoreVol: s.restoreVol]
+    if (s.restoreVol != null && s.imageVol != null) imageSess[key] = [pendingRestore: true, restoreVol: s.restoreVol, imageVol: s.imageVol]
     else imageSess.remove(key)
 }
 
@@ -589,16 +603,24 @@ private void startMedia(Map a) {
     takePriorApp()      // this load owns the device now; don't let the evicted app leak into a later announcement's restore
     state.ttsActive = false
     state.ttsMode = "none"
+    Integer reqId = null
     if (a.image) {
         Map img = imageSess[device.id as String]
-        if (img && img.url == a.url && !img.shown) { img.loadSent = true; img.ignoreMsid = state.mediaSessionId }
+        if (img && img.url == a.url && !img.shown) {
+            img.loadSent = true
+            // allocate the LOAD's requestId up front so a LOAD_FAILED can be matched to this image (see imageLoadFailed)
+            reqId = nextRequestId()
+            img.loadReqId = reqId
+            // some receivers never answer a LOAD whose host is unreachable (no LOAD_FAILED): give up after 20 s
+            runIn(20, "imageLoadWatchdog", [data: [reqId: reqId]])
+        }
     } else {
         // a track cast over a showImage ends the image: put back the volume it replaced, unless this track sets its own
         Integer imgVol = handOverImageVolume()
         if (imgVol != null && a.volume == null) { sendSetVolume([level: imgVol / 100.0d]); sendEventIfChanged("volume", imgVol) }
     }
     if (a.volume != null) sendSetVolume([level: (Math.max(0, Math.min(100, (a.volume as Integer))) / 100.0d)])
-    sendMediaLoad(a.url, a.title, a.subtitle, null, 0, a.contentType as String)
+    sendMediaLoad(a.url, a.title, a.subtitle, null, 0, a.contentType as String, reqId)
 }
 
 // What was on the device before the announcement, so finishTts can put it back.
@@ -689,7 +711,7 @@ private boolean isPlayableUrl(String s) {
     return u.startsWith("http://") || u.startsWith("https://")
 }
 
-private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0, String contentType = null) {
+private void sendMediaLoad(String url, String title, String subtitle, String art, Integer startTime = 0, String contentType = null, Integer requestId = null) {
     if (!state.transportId) { logWarn "sendMediaLoad: no transportId"; return }
     String ctype = contentType ?: inferContentType(url)
     Map media = [
@@ -700,7 +722,7 @@ private void sendMediaLoad(String url, String title, String subtitle, String art
         metadata   : [metadataType: (ctype.startsWith("image/") ? 4 : 0), title: (title ?: ""), subtitle: (subtitle ?: "")]
     ]
     if (art) media.metadata.images = [[url: art]]
-    Map load = [type: "LOAD", requestId: nextRequestId(), autoplay: true, currentTime: (startTime ?: 0), media: media]
+    Map load = [type: "LOAD", requestId: (requestId ?: nextRequestId()), autoplay: true, currentTime: (startTime ?: 0), media: media]
     sendCastMessage(SRC, state.transportId, NS_MEDIA, JsonOutput.toJson(load))
 }
 
@@ -1028,7 +1050,7 @@ private void handleReceiverStatus(Map p) {
     if (img?.pendingRestore && st.volume?.level != null) {
         imageSess.remove(device.id as String)
         Integer curVol = Math.round((st.volume.level as BigDecimal).doubleValue() * 100) as Integer
-        if (curVol != (img.restoreVol as Integer)) { logInfo "showImage: restoring volume ${img.restoreVol}"; setDeviceVolume(img.restoreVol as Integer) }
+        if (curVol == (img.imageVol as Integer) && curVol != (img.restoreVol as Integer)) { logInfo "showImage: restoring volume ${img.restoreVol}"; setDeviceVolume(img.restoreVol as Integer) }
     }
     def apps = st.applications ?: []
     if (apps.isEmpty()) {
@@ -1094,7 +1116,7 @@ private void handleMediaStatus(Map p) {
     boolean wasTts = state.ttsActive     // capture before the TTS block below can flip it off (finishTts)
 
     String ps = s.playerState ?: "UNKNOWN"
-    noteImageShowing((s.media?.contentId as String), ps, s.mediaSessionId)
+    noteImageShowing(ps, s.mediaSessionId, p.requestId)
     sendEventIfChanged("playbackStatus", ps)
     sendEventIfChanged("status", mapPlayerState(ps))
     if (s.currentTime != null) sendEventIfChanged("mediaPosition", (s.currentTime as BigDecimal).intValue())
@@ -1150,7 +1172,7 @@ private void handleMediaStatus(Map p) {
 
 private void handleMediaError(Map p) {
     logWarn "media error: ${p.type} ${p}"
-    if (!state.ttsActive) { imageLoadFailed(); return }
+    if (!state.ttsActive) { imageLoadFailed(p); return }
     // a failed silent lead-in must not abort the announcement - play it directly instead
     if (state.ttsPhase == "preroll") loadTtsNow()
     else finishTts()

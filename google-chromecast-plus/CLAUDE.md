@@ -223,18 +223,20 @@ as audio and the DMR answered **LOAD_FAILED**. Image extensions (`.jpg/.jpeg/.pn
 `BUFFERED`. The DMR reports a displayed image as `PAUSED` (after a brief `IDLE`) and keeps it up indefinitely.
 
 `showImage(url, seconds, volume)` (child command). Bookkeeping is one `@Field imageSess` map per device
-(`url, secs, shown, armed, restoreVol, mediaSessionId, sessionId, loadSent, ignoreMsid, timedOut, pendingRestore`);
+(`url, secs, shown, armed, restoreVol, imageVol, mediaSessionId, sessionId, loadSent, loadReqId, timedOut, pendingRestore`);
 cross-thread, so not `state`. Reworked 2026-11-16 after the PR #108 review.
 
 - **Content type.** `showImage` passes an explicit type through `playMedia` → `startMedia` → `sendMediaLoad`:
   the extension's `image/*` type, else `image/jpeg`. Camera snapshot URLs (`/api/snapshot?id=3`) have no
   extension and were sent as `audio/mpeg` → LOAD_FAILED. Verified on the Nest Hub with an extensionless URL.
-- **"Shown" = PLAYING/PAUSED on our media session.** The receiver names the contentId in the IDLE/BUFFERING
-  statuses it sends while loading, *including right before a LOAD_FAILED*, so "status mentions our URL" is not
-  "on screen". `noteImageShowing()` (every MEDIA_STATUS) records the `mediaSessionId` from the first status naming
-  our URL, then needs PLAYING/PAUSED on that id; later statuses often omit `media`. Only statuses after our LOAD
-  went out count (`loadSent`), and the previous media session (`ignoreMsid`) is ignored, because the doorbell
-  re-sends the same URL and the outgoing picture would otherwise match.
+- **"Shown" = PLAYING/PAUSED on the media session our LOAD created.** `startMedia` allocates the LOAD's
+  `requestId` up front (`loadReqId`); the receiver answers a LOAD with a MEDIA_STATUS carrying that requestId
+  (confirmed on the Nest Hub), and that reply is the only place `noteImageShowing()` learns the image's
+  `mediaSessionId`. Then PLAYING/PAUSED on that id = on screen (later statuses are unsolicited, requestId 0, and
+  often omit `media`). Two earlier attempts failed on the hub: "a status naming our URL" (the receiver names the
+  URL in its loading IDLE/BUFFERING statuses, including just before LOAD_FAILED) and "ignore the previous media
+  session" (on a quick double press both LOADs go out before any status, so the outgoing picture's PAUSED — same
+  doorbell URL — was taken for the new one and the timeout then declined to stop the real one).
 - **Timer** armed on first shown, `runIn(secs, "imageTimeout", [data: …])`. The job's data carries url / session
   ids / restoreVol, so after a hub reboot (map wiped, job survives) `imageTimeout` rebuilds the entry. `initialize()`
   resets `armed` so the next MEDIA_STATUS re-arms after a preferences save (`updated()` → `unschedule()`).
@@ -244,9 +246,13 @@ cross-thread, so not `state`. Reworked 2026-11-16 after the PR #108 review.
   falls back to the URL / blank attribute.
 - **Volume.** A restore is only recorded when the call actually changes the volume (a no-op SET_VOLUME beeps).
   Restored at session end (`imageSessionEnded`: no apps / non-DMR app after shown, 1 s delay), 5 s after the
-  timeout's STOP as a fallback, immediately on LOAD_FAILED (`imageLoadFailed`), and — when the queue is dropped
-  before the image showed (offline / disconnect / initialize) — on the next RECEIVER_STATUS, only if the reported
-  volume differs (`pendingRestore`). Verified: failed load → immediate restore; 3 s image → STOP at 3 s, restore.
+  timeout's STOP as a fallback, immediately on a LOAD_FAILED whose requestId matches the image's LOAD (`imageLoadFailed` — not LOAD_CANCELLED /
+  INVALID_REQUEST, which a second showImage replacing a first still loading produces), 20 s after the LOAD if it
+  never showed and nothing answered (`imageLoadWatchdog`; the Nest Hub sometimes stays silent for an unreachable
+  host), and — when the queue is dropped before the image showed (offline / disconnect / initialize) — on the next
+  RECEIVER_STATUS, only if the device still reports the image's own level (`imageVol`, `pendingRestore`), so a
+  `setVolume` made in between isn't undone. Verified: failed load (matching requestId) → immediate restore;
+  3 s image → STOP at 3 s, restore; warm double press → the second picture closes on time, restore.
 - **Announcement / track over an image** (`handOverImageVolume`): the image entry is dropped and its timer and
   restore cancelled. A `restore`/`resume` announcement takes over the image's original volume as its own restore
   target; one with no restore and no volume of its own puts the image's volume back first; a track does the same.
