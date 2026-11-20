@@ -1,5 +1,10 @@
 # Life360+ Changelog
 
+## 5.2.7
+
+- **Simpler settings page:** setup collapses once it's done, and advanced options are on their own page.
+- **Fixed garbled symbols** in settings, error messages, notifications and logs.
+
 ## 5.2.6
 
 **Fewer requests while driving, a watchdog fix, and `inTransit` is the one motion value.**
