@@ -1,5 +1,9 @@
 # Life360+ Changelog
 
+## 5.3.0
+
+- **New Place Alerts:** a notification when someone arrives at or leaves a Life360 Place. Open it from the main page.
+
 ## 5.2.7
 
 - **Simpler settings page:** setup collapses once it's done, and advanced options are on their own page.

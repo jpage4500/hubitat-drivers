@@ -40,3 +40,4 @@
 11/20
 - Life360+: simpler settings page, with advanced options moved to their own page
 - Life360+: fixed garbled symbols in settings, error messages, notifications and logs
+- Life360+: new Place Alerts notify you when someone arrives at or leaves a place

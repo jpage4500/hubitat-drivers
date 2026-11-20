@@ -110,7 +110,8 @@ Base path `https://api-cloudfront.life360.com/v{version}`.
 | Force fresh GPS fix         | `POST /circles/{circle}/members/{member}/request` | 3   | Body exactly `{"type":"location"}`, `Content-Type: application/json`, cookies required.                                                                                              |
 | Validate token / get units  | `GET /users/me`                                   | 3   | Check Token button, `installed()`/`updated()` (async), and the 5-min probe while the token is flagged expired.                                                                       |
 | List circles                | `GET /circles`                                    | 4   | Setup only (Fetch Circles). v4 no longer returns `memberCount`; the count is `state.members.size()`.                                                                                 |
-| List places                 | `GET /circles/{circle}/places`                    | 3   | Setup only (Fetch Places, HOME picker).                                                                                                                                              |
+| List places                 | `GET /circles/{circle}/places`                    | 3   | Setup only (Fetch Places, HOME picker). Leaves out places added recently in the Life360 app.                                                                                         |
+| List places (Place Alerts)  | `GET /circles/{circle}/places`                    | 6   | Place Alerts only: its Refresh Places button and the background refresh (§15). Returns every place, same ids as v3, in `items` with `radiusMeters`; stored in the v3 shape.           |
 
 **Not used:** `POST /oauth2/token.json` (the app takes a pasted bearer token, never credentials), webhooks
 and push subscriptions (disabled by Life360), and any V5/activity endpoint (`userActivity` is parsed if a
@@ -434,8 +435,10 @@ Three pages:
 
 - **Main:** the steps inline until setup is complete (every step filled in, a successful fetch, no expired
   token). After that a status line (circle, home, member count, age of the last success, **Refresh Now**)
-  and a **Setup** link replace them. Then Polling, Map View (link only), and a link to Advanced Settings.
+  and a **Setup** link replace them. Then Polling, a Place Alerts link (once setup is complete), Map View
+  (link only), and a link to Advanced Settings.
 - **Setup:** STEP 1–5, for changes after setup is complete.
+- **Place Alerts:** see §15.
 - **Advanced Settings:** Units, Map Provider (Google Maps API key), Logging, and Troubleshooting (token-expiry
   alerts, Force Update, Log Raw API Diagnostics, Collect Timing Stats).
 
@@ -636,3 +639,49 @@ is a candidate stop; compare its length with the window.
 - **`since` can be absent**, and an epoch needs `new Date(sEpoch * 1000L)` (not a duration).
 - **`Retry-After` comes from the async headers Map**, not `getFirstHeader`.
 - **`ctx` is shared by every member in a tick**; copy it (`ctx + [...]`) before adding a per-member key.
+
+---
+
+## 15. Place Alerts
+
+A notification when a watched member arrives at or leaves a watched Life360 Place. Off by default
+(`placeAlertsEnabled`). Places come from `state.places`, the same list STEP 3 uses, so Home is offered too.
+
+**Detection is done in Hubitat, not by Life360.** `checkPlaceAlerts()` runs after each changed location
+reaches the device (`onLocationResponse`, after `notifyChildDevice`), so unchanged-etag polls cost nothing.
+It measures the distance from the fix to each place's lat/lng and compares it with the place's radius:
+
+- **Inside** = within the radius. **Leaving** needs the radius plus `max(50 m, 25% of the radius)`, so GPS
+  jitter at the edge doesn't flip in and out.
+- **A rough fix decides nothing:** with `accuracy` above `max(radius, 100 m)` the previous answer for that
+  place stands.
+- **Every place, every member:** `placesIn-<memberId>` tracks all places for every member, not only the
+  watched ones, so adding a place or member to the watch lists while someone is already there sends nothing.
+- **First fix is silent:** a member with no `placesIn-` key yet (Place Alerts just turned on, a new member)
+  is recorded without alerts. Done with Place Alerts off clears the keys, so turning it back on starts fresh
+  instead of comparing against old positions.
+- **A place missing from `state.places`** (deleted in Life360, or left out by Setup's v3 Fetch Places until
+  the next v6 refresh) keeps its last answer in `placesIn-`, so it sends no leave now and no false arrive
+  when it comes back.
+
+Life360's own place name (`location.name`, which the driver puts in `address1`) isn't used: it names one place
+at a time, the driver overwrites it with "Home", and it can't be given an exit buffer.
+
+**Ignore Short Trips** (`placeAlertShortTrip`, default 2 min): a leave goes into `placeLeavePending` and
+`flushPlaceLeaves` sends it once the wait is over, with the time the member actually left. Coming back first
+drops the entry and sends neither alert. A leave is held even when only arrive alerts are on, so a quick
+return also skips the arrive alert. `scheduleSlowTimer()`'s `unschedule()` cancels the flush job, so it
+re-arms it.
+
+**Places come from the v6 API here.** v3 `/circles/{id}/places` (Setup's Fetch Places) leaves out places
+added recently in the Life360 app; v6 returns them all with the same ids. Setup keeps v3 so nothing changes
+for installs without Place Alerts. Place Alerts' **Refresh Places** button (`refreshPlacesFromV6`) and, while
+Place Alerts is on, each roster refresh (§4.2, `refreshPlacesInBackground`, async) read v6 and store the
+places in the v3 shape (`parseV6Places`). An error or an empty list keeps the current one.
+
+**Messages:** `%name%` (first name), `%place%`, `%time%` (hub time zone) in `placeArriveMsg` /
+`placeLeaveMsg`, sent with `deviceNotification` to `placeAlertDevices`, which is separate from the token-expiry
+devices. Each alert is logged at info (the member and place IDs instead when names are hidden in logs) and
+kept in `placeAlertLog` (last 5) for the page's Status section. **Send Test Alert** sends the arrive message
+for the first watched member and place, with " (test)" added.
+

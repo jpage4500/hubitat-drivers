@@ -10,7 +10,7 @@ A pair of files — **app** ([life360_app.groovy](life360_app.groovy)) and **dri
 
 Per member: latitude/longitude/accuracy, current address (or `"Home"` inside the configured HOME radius), distance from HOME, battery %, charging, WiFi, in-transit, driving, speed, and a "since" timestamp. Each member's child device also reports Hubitat presence (`present` / `not present`) based on the HOME place.
 
-Optional extras: dynamic polling (faster when a member is moving), map view of all members via a built-in `/view` endpoint, per-member location history, HTML dashboard tiles, token-expiry push notifications with auto-recovery, and **Force Update** (push a GPS fix request to a member's phone on demand).
+Optional extras: dynamic polling (faster when a member is moving), map view of all members via a built-in `/view` endpoint, per-member location history, HTML dashboard tiles, token-expiry push notifications with auto-recovery, **Place Alerts** (a notification when someone arrives at or leaves a Life360 Place), and **Force Update** (push a GPS fix request to a member's phone on demand).
 
 **Works with the HD+ dashboard:** <https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360>
 
