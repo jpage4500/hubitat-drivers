@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "5.2.7",
+  "version": "5.3.0",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "Simpler settings page, with advanced options on their own page. Fixed garbled symbols.",
+  "releaseNotes": "New Place Alerts: get a notification when someone arrives at or leaves a Life360 place.",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",
