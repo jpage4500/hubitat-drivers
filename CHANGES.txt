@@ -39,3 +39,4 @@
 
 11/20
 - Life360+: simpler settings page, with advanced options moved to their own page
+- Life360+: fixed garbled symbols in settings, error messages, notifications and logs

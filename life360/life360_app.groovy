@@ -129,7 +129,7 @@ def mainPage() {
                 input("revokeViewLinkBtn", "button", title: "Revoke Map Link")
             } else {
                 input("generateViewLinkBtn", "button", title: "Generate Map Link")
-                paragraph "<small style='color:#888'>In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
+                paragraph "<small style='color:#888'>In Apps Code, open the \u22ee menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
             }
         }
 
@@ -163,7 +163,7 @@ def advancedPage() {
         section(header("Units") + scrollToTopOnOpen("advancedPage")) {
             input(name: "logUnits", type: "enum", defaultValue: "life360", title: "Units (all members)",
                 description: "Units for speed and distance in logs and device attributes. Overrides each member device's own setting when set to anything other than 'Follow Life360 app'.",
-                options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
+                options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (\u00b0F \u2192 miles, \u00b0C \u2192 km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
         }
 
         section(header("Map Provider")) {
@@ -178,12 +178,12 @@ def advancedPage() {
             paragraph "<small style='color:#666'>On: A heartbeat line is logged after each routine roster refresh, about every 15 minutes (member count and connection summary). Not logged on Done or Fetch Members.<br>Off: No heartbeat line.</small>"
             input(name: "logDrivingTransitions", type: "bool", defaultValue: true, submitOnChange: true, title: "Driving Logging")
             paragraph "<small style='color:#666'>On: Each poll of a member in motion is logged.<br>Off: Only when a member starts or stops moving is logged.</small>"
-            input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
+            input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) \u2014 useful when sharing logs for debugging.")
             input(name: "logShowMapsLink", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
         }
 
         section(header("Troubleshooting")) {
-            paragraph "<b>Token Expiry Alerts</b>"
+            paragraph subHeader("Token Expiry Alerts", true)
             input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
             if (settings.notifyTokenExpiry != false) {
                 input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
@@ -194,7 +194,7 @@ def advancedPage() {
             }
 
             if (!isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)) {
-                paragraph "<b>Force Update</b>"
+                paragraph subHeader("Force Update")
                 paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
                 def forceMembers = state.members
                     .findAll { settings.users.contains(it.id) }
@@ -205,8 +205,8 @@ def advancedPage() {
                 if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
             }
 
-            paragraph "<b>Diagnostics</b>"
-            input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only — don't share resulting logs.")
+            paragraph subHeader("Diagnostics")
+            input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only \u2014 don't share resulting logs.")
             input(name: "timingStats", type: "bool", defaultValue: false, submitOnChange: true, title: "Collect Timing Stats", description: "Count and time the app's main functions, in memory only. Resets on reboot or when turned off.")
             if (settings.timingStats) paragraph timingTable() else if (rtGet("timingSinceMs") != null) clearTiming()
         }
@@ -266,6 +266,15 @@ private void setupSections(String pageName) {
             }
         }
     }
+}
+
+/**
+ * Heading for a group of options inside one section (e.g. the parts of Troubleshooting). Every group after
+ * the first gets a divider line above it, so each group's options read as one block.
+ */
+private static String subHeader(String text, boolean first = false) {
+    String divider = first ? "" : "border-top:1px solid #d0d0d0;margin-top:14px;padding-top:18px;"
+    return "<div style='${divider}font-size:15px;font-weight:bold;color:#5b34d6'>${text}</div>"
 }
 
 /**
@@ -389,8 +398,8 @@ private void generateViewLink() {
             createAccessToken()
         }
     } catch (e) {
-        log.error("generateViewLink: failed to create access token — in Apps Code, open the ⋮ menu (top-right) and enable OAuth first: ${e}")
-        state.message = "In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then try again."
+        log.error("generateViewLink: failed to create access token \u2014 in Apps Code, open the \u22ee menu (top-right) and enable OAuth first: ${e}")
+        state.message = "In Apps Code, open the \u22ee menu (top-right of the editor) and enable OAuth, then try again."
     }
 }
 
@@ -420,12 +429,12 @@ private void checkToken() {
             if (status == 200) {
                 def user = response.data
                 String name = user?.firstName ?: "unknown"
-                log.info("checkToken: valid — id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
+                log.info("checkToken: valid \u2014 id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
                 captureUnitOfMeasure(user)
                 state.tokenStatus = "<span style='color:#080'>&#10003; Hi ${name}! Your token is valid.</span>"
             } else if (status == 401 || status == 403) {
-                log.error("checkToken: AUTH FAILURE (${status}) — token is likely expired or revoked")
-                state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — token appears expired or revoked.</span>"
+                log.error("checkToken: AUTH FAILURE (${status}) \u2014 token is likely expired or revoked")
+                state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) \u2014 token appears expired or revoked.</span>"
             } else {
                 log.error("checkToken: unexpected status:${status}")
                 state.tokenStatus = "<span style='color:#a00'>&#10007; Unexpected response (${status}) checking token.</span>"
@@ -433,7 +442,7 @@ private void checkToken() {
         }
     } catch (e) {
         log.error("checkToken: error: ${e.message}")
-        state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token — ${e.message}</span>"
+        state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token \u2014 ${e.message}</span>"
     }
 }
 
@@ -521,7 +530,7 @@ private void forceMemberUpdate(String memberId) {
     if (cookies) params["headers"]["Cookie"] = cookies
 
     state.forceUpdateStatusPending = true
-    state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
+    state.forceUpdateStatus = "<span style='color:#888'>Sending\u2026</span>"
     asynchttpPost("handleForceUpdateResponse", params, [memberId: memberId])
     log.info("forceMemberUpdate: sent for member:${memberName}")
 }
@@ -533,7 +542,7 @@ def handleForceUpdateResponse(response, Map data) {
 
     if (!status) {
         String errMsg = response.getErrorMessage() ?: "(no details)"
-        log.error("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: network failure for ${memberName} \u2014 ${errMsg}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
         return
     }
@@ -553,18 +562,18 @@ def handleForceUpdateResponse(response, Map data) {
         String isPollable = result?.isPollable
         if (getLogRawPayload()) log.trace("forceMemberUpdate: 200 ${result}")
         log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
-        state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
+        state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} \u2014 fresh location in ~5s</span>"
         runIn(FORCE_UPDATE_FETCH_DELAY_SECS, "fetchLocations")
     } else if (status == 401 || status == 403) {
-        log.error("forceMemberUpdate: AUTH (${status}) member:${memberName} — token may be expired or revoked")
-        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — re-paste access token</span>"
+        log.error("forceMemberUpdate: AUTH (${status}) member:${memberName} \u2014 token may be expired or revoked")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) \u2014 re-paste access token</span>"
     } else {
         String errMsg = response.getErrorMessage() ?: "(no details)"
         String errBody = null
         try { errBody = response.data?.toString() } catch (ignored) {}
-        log.error("forceMemberUpdate: FAILED status:${status} member:${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: FAILED status:${status} member:${memberName} \u2014 ${errMsg}")
         log.error("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
-        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) — check logs for details</span>"
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) \u2014 check logs for details</span>"
     }
 }
 
@@ -580,12 +589,12 @@ def fetchCircles() {
                 if (getLogRawPayload()) log.trace("fetchCircles: ${response.status} ${response.data}")
                 if (response.status == 200) {
                     state.circles = response.data.circles?.collect { [id: it.id, name: it.name] }
-                    if (!state.circles) log.warn("fetchCircles: 0 circles returned — check that your account belongs to a circle")
+                    if (!state.circles) log.warn("fetchCircles: 0 circles returned \u2014 check that your account belongs to a circle")
                     if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
                 } else if (response.status == 401 || response.status == 403) {
-                    log.error("fetchCircles: AUTH (${response.status}) — token may be expired or revoked")
-                    state.message = "fetchCircles: AUTH error (${response.status}) — re-paste access token"
+                    log.error("fetchCircles: AUTH (${response.status}) \u2014 token may be expired or revoked")
+                    state.message = "fetchCircles: AUTH error (${response.status}) \u2014 re-paste access token"
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
                     state.message = "fetchCircles: bad response:${response.status}, ${response.data}"
@@ -612,13 +621,13 @@ def fetchPlaces() {
                 if (response.status == 200) {
                     state.places = response.data.places?.collect { [id: it.id, name: it.name, latitude: it.latitude, longitude: it.longitude, radius: it.radius] }
                     forceNextDeviceUpdate()
-                    if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
+                    if (!state.places) log.warn("fetchPlaces: 0 places returned \u2014 check that your Life360 circle has at least one place")
                     if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
                     state.placesEmptyWarned = false  // reset rising-edge flag now that places are loaded
                 } else if (response.status == 401 || response.status == 403) {
-                    log.error("fetchPlaces: AUTH (${response.status}) — token may be expired or revoked")
-                    state.message = "fetchPlaces: AUTH error (${response.status}) — re-paste access token"
+                    log.error("fetchPlaces: AUTH (${response.status}) \u2014 token may be expired or revoked")
+                    state.message = "fetchPlaces: AUTH error (${response.status}) \u2014 re-paste access token"
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
                     state.message = "fetchPlaces: bad response:${response.status}, ${response.data}"
@@ -692,11 +701,11 @@ private onMembersResponse(response, data) {
         // (fetchMemberLocation), so the app and the driver never act on a second, possibly older, location.
         syncChildDevices()
     } else if (status == 401 || status == 403) {
-        log.error("fetchMembers: access denied (${status}) — the token may be expired/revoked, or the circle may no longer be accessible; open Life360+ and re-paste the token (STEP 1) or re-select the circle (STEP 2)")
-        if (!periodic) state.message = "fetchMembers: access denied (${status}) — open Life360+ and re-paste the access token (STEP 1), or re-select the circle (STEP 2) if it was deleted or you left it"
+        log.error("fetchMembers: access denied (${status}) \u2014 the token may be expired/revoked, or the circle may no longer be accessible; open Life360+ and re-paste the token (STEP 1) or re-select the circle (STEP 2)")
+        if (!periodic) state.message = "fetchMembers: access denied (${status}) \u2014 open Life360+ and re-paste the access token (STEP 1), or re-select the circle (STEP 2) if it was deleted or you left it"
     } else if (status == 404) {
-        log.error("fetchMembers: circle not found (404) — all location updates will fail until you open Life360+ and re-select the circle (STEP 2)")
-        if (!periodic) state.message = "fetchMembers: circle not found — open Life360+ and re-select the circle (STEP 2)"
+        log.error("fetchMembers: circle not found (404) \u2014 all location updates will fail until you open Life360+ and re-select the circle (STEP 2)")
+        if (!periodic) state.message = "fetchMembers: circle not found \u2014 open Life360+ and re-select the circle (STEP 2)"
     } else {
         if (periodic) log.warn("fetchMembers: bad response:${status}") else log.error("fetchMembers: bad response:${status}")
         if (!periodic) state.message = "fetchMembers: bad response:${status}"
@@ -832,7 +841,7 @@ private onLocationResponse(response, Map data) {
             if (moving && staleSecs >= STALE_ETAG_SECS) rtSet(changedKey, nowMs)   // one Early Parked Detection check per window
             if (!moving || staleSecs < STALE_ETAG_SECS || !parkedClampOn(memberId)) {
                 if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200, etag unchanged -> treated as 304), member:${memberName}")
-                if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (unchanged)")
+                if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again (unchanged)")
                 markFetchSuccess(memberId)
                 timed("Reply: unchanged", tReply)
                 return
@@ -856,12 +865,12 @@ private onLocationResponse(response, Map data) {
         notifyChildDevice(memberId, memberObj, ctx)
         if (forced) rtSet("forceUpdate-${memberId}", null)
         timed("Reply: changed", tReply)
-        if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
+        if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again")
         markFetchSuccess(memberId)
         if (eTag && !unchanged) state["etag-${memberId}"] = eTag
 
     } else if (status == 304) {
-        if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
+        if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again (304)")
         markFetchSuccess(memberId)
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
 
@@ -873,7 +882,7 @@ private onLocationResponse(response, Map data) {
         if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
-            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            state.message = "\u26a0 Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com \u2192 DevTools \u2192 Network \u2192 token packet."
             // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
             // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
             // the latter's unschedule() would otherwise cancel the reminder job notify arms.
@@ -888,13 +897,13 @@ private onLocationResponse(response, Map data) {
         Integer delaySecs = Math.min(retryAfter ?: RATE_LIMIT_FALLBACK_SECS, RATE_LIMIT_MAX_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = Math.max((state.rateLimitedUntilMs ?: 0L) as long, new Date().getTime() + (delaySecs * 1000L))
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
+        state.message = "Rate limited (429) \u2014 backing off ${delaySecs}s, will retry automatically"
 
     } else if (isTransientStatus(status)) {
         long delaySecs = applyTransientBackoff(memberId)
         int count = state["transientCount-${memberId}"] as int
         log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
-        state.message = "Transient error (${status}) x${count} for member:${memberName} — backing off ${delaySecs}s, will retry automatically"
+        state.message = "Transient error (${status}) x${count} for member:${memberName} \u2014 backing off ${delaySecs}s, will retry automatically"
 
     } else {
         log.error("fetchMemberLocation: unexpected response:${status} for member:${memberName}")
@@ -968,7 +977,7 @@ String handleException(String tag, Exception e) {
         if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
-            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            state.message = "\u26a0 Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com \u2192 DevTools \u2192 Network \u2192 token packet."
             // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
             // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
             // the latter's unschedule() would otherwise cancel the reminder job notify arms.
@@ -983,12 +992,12 @@ String handleException(String tag, Exception e) {
         Integer delaySecs = Math.min(retryAfter ?: RATE_LIMIT_FALLBACK_SECS, RATE_LIMIT_MAX_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = Math.max((state.rateLimitedUntilMs ?: 0L) as long, new Date().getTime() + (delaySecs * 1000L))
         log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
+        state.message = "Rate limited (429) \u2014 backing off ${delaySecs}s, will retry automatically"
         return "RATE_LIMIT"
     }
     if (isTransientStatus(status)) {
         log.warn("${tag}: TRANSIENT (${status}); will retry next tick")
-        state.message = "Transient error (${status}) — will retry automatically"
+        state.message = "Transient error (${status}) \u2014 will retry automatically"
         return "TRANSIENT"
     }
     def err = null
@@ -1001,7 +1010,7 @@ String handleException(String tag, Exception e) {
 private void notifyTokenExpired() {
     if (isEmpty(settings.notifyDevices)) return
     if (settings.notifyTokenExpiry == false) return
-    String msg = "Life360 token expired — re-paste a fresh access token"
+    String msg = "Life360 token expired \u2014 re-paste a fresh access token"
     settings.notifyDevices.each { dev ->
         try {
             dev.deviceNotification(msg)
@@ -1025,7 +1034,7 @@ def sendTokenExpiryReminder() {
     if (!state.tokenLikelyExpired) return          // token refreshed, stop chain
     if (settings.notifyTokenExpiry == false) return // master toggle off
     if (isEmpty(settings.notifyDevices)) return
-    String msg = "Life360 token still expired — re-paste a fresh access token"
+    String msg = "Life360 token still expired \u2014 re-paste a fresh access token"
     settings.notifyDevices.each { dev ->
         try {
             dev.deviceNotification(msg)
@@ -1379,7 +1388,7 @@ private slowTick() {
             if (!state.watchdogWarned) {
                 long ageMin = (long)(ageMs / 60000L)
                 log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
-                state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
+                state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min \u2014 token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
                 state.watchdogWarned = true
             }
         }
@@ -1425,7 +1434,7 @@ def handleTokenProbeResponse(response, data) {
     Integer status = response.status
     if (!status) {
         // network-level failure — stay quiet, try again next tick
-        if (logEnable) log.debug("tokenProbe: network error — ${response.getErrorMessage() ?: "(no details)"}")
+        if (logEnable) log.debug("tokenProbe: network error \u2014 ${response.getErrorMessage() ?: "(no details)"}")
         return
     }
     captureCookiesAsync(response)
@@ -1433,7 +1442,7 @@ def handleTokenProbeResponse(response, data) {
     if (status == 200) {
         // service is back — auto-recover; clear state before the JSON parse so a garbled
         // 200 body doesn't leave the app stuck in slow-poll (a valid 200 means auth is OK)
-        log.info("tokenProbe: 200 OK — token is valid; auto-recovering from expired state")
+        log.info("tokenProbe: 200 OK \u2014 token is valid; auto-recovering from expired state")
         resetWatchdog()   // re-arm the WATCHDOG warning and clear its banner
         state.tokenLikelyExpired = false
         state.failCount = 0
@@ -1447,9 +1456,9 @@ def handleTokenProbeResponse(response, data) {
             log.warn("tokenProbe: could not parse units from response body: ${e.message}")
         }
     } else if (status == 401 || status == 403) {
-        if (logEnable) log.debug("tokenProbe: ${status} — token still expired; waiting for user to re-paste")
+        if (logEnable) log.debug("tokenProbe: ${status} \u2014 token still expired; waiting for user to re-paste")
     } else {
-        log.warn("tokenProbe: unexpected status ${status} — will retry next tick")
+        log.warn("tokenProbe: unexpected status ${status} \u2014 will retry next tick")
     }
 }
 
@@ -1492,7 +1501,7 @@ def createChildDevices() {
         if (!childMap.containsKey(externalId)) {
             def member = state.members.find { it.id == memberId }
             if (member == null) {
-                log.warn("createChildDevices: member ${memberId} not found in state.members — skipping")
+                log.warn("createChildDevices: member ${memberId} not found in state.members \u2014 skipping")
                 return
             }
             def memberName = member.firstName ?: memberId
@@ -1573,7 +1582,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     if (isEmpty(settings.place)) return;
     if (isEmpty(state.places)) {
         if (!state.placesEmptyWarned) {
-            log.error("notifyChildDevice: state.places is empty — all location updates blocked; re-open app and press 'Fetch Places'")
+            log.error("notifyChildDevice: state.places is empty \u2014 all location updates blocked; re-open app and press 'Fetch Places'")
             state.placesEmptyWarned = true
         }
         return
@@ -1653,7 +1662,7 @@ private String cookieJarSummary() {
         String name = entry.substring(0, eq)
         if (!raw) return name
         String val = entry.substring(eq + 1)
-        return "${name}=${val.take(8)}…"
+        return "${name}=${val.take(8)}\u2026"
     }.join(", ")
 }
 
@@ -1677,7 +1686,7 @@ void captureCookiesAsync(response) {
                 if (logEnable) {
                     log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'")
                 }
-                if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}…")
+                if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}\u2026")
             } else if (logEnable) {
                 log.debug("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
             }
@@ -1826,7 +1835,7 @@ private String buildOsmMapHtml(String membersJson, int count) {
 <style>${commonMapStyles()}</style>
 </head>
 <body>
-${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading…</div>'}
+${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading\u2026</div>'}
 <script>
   var members = ${membersJson};
   ${popupBuilderJs()}
@@ -1868,7 +1877,7 @@ ${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wa
       map.fitBounds(bounds, { padding: [40, 40] });
     }
 
-    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' · OSM · auto-refresh 60s';
+    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' \u00b7 OSM \u00b7 auto-refresh 60s';
     setTimeout(function() { window.location.reload(); }, 60000);
   }
 </script>
@@ -1892,7 +1901,7 @@ private String buildGoogleMapHtml(String membersJson, int count, String apiKeyRa
 <style>${commonMapStyles()}</style>
 </head>
 <body>
-${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading…</div>'}
+${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading\u2026</div>'}
 <script>
   var members = ${membersJson};
   ${popupBuilderJs()}
@@ -1944,7 +1953,7 @@ ${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wa
       map.fitBounds(bounds, 60);
     }
 
-    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' · Google · auto-refresh 60s';
+    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' \u00b7 Google \u00b7 auto-refresh 60s';
     setTimeout(function() { window.location.reload(); }, 60000);
   }
 </script>
