@@ -18,3 +18,21 @@
 
 11/07
 - Chromecast+: lead-in delay now accepts fractional seconds (e.g. 0.5)
+- Life360+: fixed the watchdog staying silent when an outage continues past a reboot or Done
+- Life360+: fewer Life360 requests while a member is moving
+- Life360+: acceleration no longer stays active at home while Life360 still says driving
+- Life360+: removed the Minimum 'Transit' Speed setting
+
+11/08
+- Life360+: removed the isMoving attribute in favor of inTransit
+- Life360+: new Early Parked Detection setting
+- Life360+: removed the Minimum 'Driving' Speed setting
+
+11/09
+- Life360+: a Life360 rate-limit pause now lasts at most 15 minutes
+
+11/10
+- Life360+: new Timing Stats table shows where the app spends its time
+
+11/13
+- Life360+: lighter hub load while members are moving

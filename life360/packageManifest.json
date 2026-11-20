@@ -1,11 +1,11 @@
 {
   "packageName": "Life360+",
   "author": "Joe Page",
-  "version": "5.2.5",
+  "version": "5.2.6",
   "minimumHEVersion": "2.1.9",
   "dateReleased": "2023-05-08",
   "communityLink": "https://community.hubitat.com/t/release-life360/118544",
-  "releaseNotes": "Less hub I/O: fewer state writes, a 15-minute member refresh instead of the per-minute /circles poll, unchanged responses skipped, even while driving. New isMoving attribute, and a phone left sitting still no longer keeps fast polling on. Lightly tested.",
+  "releaseNotes": "Fewer requests while driving and a watchdog fix. isMoving is removed: everything follows inTransit, with a new optional Early Parked Detection setting. Both speed settings are removed; the tile shows Moving or Not Moving. Lightly tested.",
   "apps": [
     {
       "id": "5bae441c-e34c-4e7d-a4bc-fff19f53c2df",

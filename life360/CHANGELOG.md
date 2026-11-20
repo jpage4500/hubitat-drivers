@@ -1,5 +1,28 @@
 # Life360+ Changelog
 
+## 5.2.6
+
+**Fewer requests while driving, a watchdog fix, and `inTransit` is the one motion value.**
+
+- **Watchdog:** Done, a reboot or a token recovery no longer wipes the last-success time, so an outage that continues past them still warns once a full threshold has passed after them (no false warning right after a new token), and Step 5 keeps showing the last real success.
+- **Fewer requests while driving:** a slow tick skips a member the fast timer polled within the last two fast intervals.
+- **Lighter fast polling:** one shared timer polls everyone in transit, instead of a per-member chain that rescheduled itself every tick (about 16% of the app's hub time, per Timing Stats).
+- **`isMoving` is removed; everything follows `inTransit`** (tile, `acceleration`, start/stop and "moving @" log lines, map page). Rules using `isMoving` should switch to `inTransit`.
+- **New Early Parked Detection setting** (off by default; set it in the app, and override it per member device: Use app setting / On / Off). Life360 sometimes keeps saying a phone is moving after it has parked, or briefly says it is moving again while it sits still. With this on:
+  - A phone Life360 still calls moving, that has sent nothing new for 4 minutes and was last going under 3.5 mph, shows as **not moving**.
+  - A phone showing not moving **shows a start only at 1 mph or faster** (3.5 mph if Early Parked Detection parked it), so 0 mph "moving" blips are ignored and walks still show.
+  - A phone that goes quiet at speed (a highway gap) keeps showing moving.
+  - The cost: a slow start, like walking out to the car, can show moving a few minutes later than Life360 does.
+  - With it off, `inTransit` is exactly what Life360 sends.
+  - Why: logs from 11/02 to 11/08 showed Life360 leaving a parked phone "moving" for 15 to 29 minutes at some stops, and 0 mph "moving" blips while parked.
+- **`isDriving` is published exactly as Life360 sends it** and drives nothing. It lingered a median 6.5 minutes (up to 33) after `inTransit` cleared at a stop.
+- **Minimum 'Transit' Speed and Minimum 'Driving' Speed are removed.** They overrode Life360's values; rules that relied on them now see Life360's own. The tile shows only "Moving" / "Not Moving".
+- **`acceleration`** follows `inTransit`, so it no longer stays active at home while Life360 still says driving.
+- **Done, Refresh and reboots no longer wipe stored data:** the per-member unchanged-data tags are kept, so a parked phone stays parked. Done, Refresh, Fetch Locations and Fetch Places still send every device one fresh update, so changed settings show right away.
+- **Rate limits:** a Life360 rate-limit pause now lasts at most 15 minutes, survives a reboot, and Done still clears it.
+- **Debug output:** one line per update, with status and speed in mph/kph.
+- **New Collect Timing Stats setting** (Logging section, next to the debug options, off by default): a table of how often and how long the app's main functions run, kept in memory only.
+
 ## 5.2.5
 
 **Less hub I/O, a new `isMoving` attribute, and a fix for phones that keep fast polling after they stop.**
