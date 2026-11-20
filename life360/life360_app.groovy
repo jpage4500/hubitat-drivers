@@ -166,7 +166,7 @@ def mainPage() {
             if (settings.dynamicPolling) {
                 input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
             }
-            input(name: "parkedClamp", type: "bool", defaultValue: false, title: "Early Parked Detection", description: "Show a phone as not moving sooner: when Life360 still says moving but has sent nothing new for 4 minutes and the last speed was under 3.5 mph. It then stays not moving until Life360 reports 3.5 mph or faster. Each member device can override this.")
+            input(name: "parkedClamp", type: "bool", defaultValue: false, title: "Early Parked Detection", description: "Show a phone as not moving sooner: when Life360 still says moving but has sent nothing new for 4 minutes and the last speed was under 3.5 mph. A phone showing not moving only shows a start at 1 mph or faster, which ignores 0 mph moving blips, or 3.5 mph if this setting parked it. Each member device can override this.")
         }
 
         section(header("Notifications")) {
@@ -1230,6 +1230,7 @@ def fastPollMember(data) { if (isMemberInTransit(data?.memberId?.toString())) en
 
 private void resetWatchdog() {
     if (state.watchdogWarned) state.watchdogWarned = false   // re-arm the rising-edge warning
+    rtSet("watchdogResetMs", new Date().getTime())   // the watchdog measures from here or the last success, whichever is later
     if (state.message?.startsWith("WATCHDOG")) state.message = null   // the next tick re-checks and re-warns if still failing
 }
 
@@ -1245,6 +1246,8 @@ private slowTick() {
     // without needing to rely on the auto_reboot script.
     Long now = new Date().getTime()
     Long lastSuccess = state.lastSuccessMs as Long
+    Long resetMs = rtGet("watchdogResetMs")
+    if (resetMs != null && (lastSuccess == null || resetMs > lastSuccess)) lastSuccess = resetMs
     if (lastSuccess != null && !isEmpty(circle) && !isEmpty(settings.users)) {   // nothing to poll means nothing to watch
         long ageMs = now - lastSuccess
         int pollFreqSec = pollFreqSecs()

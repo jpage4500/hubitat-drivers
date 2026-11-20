@@ -21,7 +21,8 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final int    MAX_HISTORY_LOG_LINES   = 10      // max lines shown in the bpt-history tile
 @Field static final int    HISTORY_TILE_FOOTER_LEN = 18      // byte length of "</table></div>" closing tag
 @Field static final long   LAT_LNG_PRECISION       = 100000L // 1e5 — 5 decimal places (~1m GPS precision)
-@Field static final double PARKED_MAX_SPEED_MS     = 1.56    // 3.5 mph: Early Parked Detection speed gate
+@Field static final double PARKED_MAX_SPEED_MS     = 1.56    // 3.5 mph: Early Parked Detection parks only below this
+@Field static final double START_MIN_SPEED_MS      = 0.447   // 1 mph: Early Parked Detection shows a start only at or above this (PARKED_MAX_SPEED_MS after it parked the phone)
 @Field static final double GPS_JITTER_METERS       = 5.0      // minimum movement to record a new history entry
 @Field static final double MS_TO_MPH               = 2.23694  // m/s → miles per hour
 @Field static final double MS_TO_KPH               = 3.6      // m/s → kilometres per hour
@@ -122,7 +123,7 @@ preferences {
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
     input "saveHistory", "bool", title: "Save Location History", description: "Save recent locations (time/lat/lng) to 'history' attribute", required: true, defaultValue: false
 
-    input "parkedClamp", "enum", title: "Early Parked Detection", description: "Show not moving after 4 min with nothing new under 3.5 mph, until Life360 reports 3.5 mph or faster", options: ["app": "Use app setting", "on": "On", "off": "Off"], required: true, defaultValue: "app"
+    input "parkedClamp", "enum", title: "Early Parked Detection", description: "Show not moving after 4 min with nothing new under 3.5 mph; a start shows only at 1 mph or faster (3.5 mph after it parked the phone)", options: ["app": "Use app setting", "on": "On", "off": "Off"], required: true, defaultValue: "app"
 
     input "avatarFontSize", "number", title: "Avatar Font Size", required: true, defaultValue: 15
     input "avatarSize", "number", title: "Avatar Size by Percentage", required: true, defaultValue: 75
@@ -272,6 +273,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // ** location/accuracy/battery/battery changed **
     // -----------------------------------------------
     Date lastUpdated = new Date()
+    long tEv = new Date().getTime()
 
     // *** Member Name ***
     String memberFullName = memberFirstName + " " + memberLastName
@@ -315,6 +317,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     sendEvent(name: "longitude", value: longitude)
     sendEvent(name: "latitude", value: latitude)
     sendEvent(name: "accuracy", value: accuracy)
+    long evMs = new Date().getTime() - tEv
 
     // *** Location History (only when lat/lng actually changed) ***
     if (saveHistory && (prevLatitude == null || prevLatitude != latitude
@@ -329,8 +332,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     // as chosen by users in device preferences
     Double speedUnits       // in user's preference of MPH or KPH
     Double distanceUnits    // in user's preference of miles or km
-    // check for iPhone reporting speed of -1
-    if (speed < 0) speed = 0.0   // any negative speed means "no reading" (Apple reports -1), never a real speed
+    if (speed < 0) speed = 0.0   // Apple reports -1 for "no reading"; seen only while parked
     // Hard overrides (imperial/metric/hubitat) ignore the Life360 API entirely.
     // "life360" (default): API setting wins, fall back to Hubitat system if not yet known.
     Boolean useMiles
@@ -354,15 +356,17 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     distanceUnits = ((distanceAway / 1000) / (useMiles ? KM_PER_MI : 1)).round(2)
 
     // ── Motion state ─────────────────────────────────────────────────────────────
-    // Early Parked Detection: park on staleSecs below PARKED_MAX_SPEED_MS; stay parked until a fix reaches it
+    // Early Parked Detection: park on staleSecs below PARKED_MAX_SPEED_MS; show a start only from START_MIN_SPEED_MS, or PARKED_MAX_SPEED_MS while state.earlyParked
+    boolean l360InTransit = inTransit
     if (inTransit && ctx?.staleSecs != null) {
         boolean slow = speed < PARKED_MAX_SPEED_MS
         if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: no new Life360 data for ${ctx.staleSecs}s at ${speedUnits}${useMiles ? 'mph' : 'kph'}; Early Parked Detection: ${slow ? 'inTransit false' : 'still moving'}"
-        if (slow) inTransit = false
-    } else if (inTransit && !prevInTransit && speed < PARKED_MAX_SPEED_MS && earlyParkedOn(ctx)) {
+        if (slow) { inTransit = false; if (!state.earlyParked) state.earlyParked = true }
+    } else if (inTransit && !prevInTransit && earlyParkedOn(ctx) && speed < (state.earlyParked ? PARKED_MAX_SPEED_MS : START_MIN_SPEED_MS)) {
         if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: Life360 says in transit at ${speedUnits}${useMiles ? 'mph' : 'kph'}; Early Parked Detection: still parked"
         inTransit = false
     }
+    if (state.earlyParked && (inTransit || !l360InTransit)) state.remove("earlyParked")   // released, or Life360 caught up
 
     String suffix = showMapsLink ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : " km from Home")
@@ -381,6 +385,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
         }
     }
 
+    tEv = new Date().getTime()
     sendEvent(name: "status", value: sStatus)
 
     sendEvent(name: "inTransit", value: inTransit.toString())
@@ -429,6 +434,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
 
     // *** Timestamp ***
     sendEvent(name: "lastUpdated", value: lastUpdated)
+    timed(ctx, "Driver: attribute events", tEv - evMs)
 
     // ** HTML attributes (optional) **
     if (!generateHtml) {

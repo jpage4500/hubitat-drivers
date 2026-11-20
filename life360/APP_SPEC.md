@@ -70,7 +70,7 @@ the `Cookie` header from `state.cookies`.
    poll interval (max 30 s), so a hung request ends before its next tick; there is no in-flight guard.
 3. **Trust the payload; don't outsmart Life360.** `inTransit` / `isDriving` and the rest of `location` pass
    straight through. The one exception is opt-in Early Parked Detection (§13): `inTransit` is shown false
-   after 240 s without new data at under 3.5 mph, and stays false until a fix shows 3.5 mph or more. Off,
+   after 240 s without new data at under 3.5 mph, and a start shows only at 1 mph or more (3.5 mph after it parked the phone). Off,
    nothing changes.
 4. **Force-update for freshness, not inference.** When a fresh fix is needed, ask the phone (§6).
 5. **Fail loud, fail safe.** On auth failure: clear session, flag the token, slow polling, notify once.
@@ -157,8 +157,8 @@ token and the cookie jar are independent gates: both must be valid.
 
 1. **Watchdog.** If `state.lastSuccessMs` is older than `max(pollFreq×10, 10 min)`, the token isn't flagged, and a circle and members are selected, log `WATCHDOG`
    once on the rising edge (`state.watchdogWarned`) and set a banner. `lastSuccessMs` is written at most once a minute. `resetWatchdog()` (Done, token recovery,
-   reboot) clears the warning and banner but keeps `lastSuccessMs`, so an outage that continues past Done or a
-   reboot still warns (on the first tick if it is already past the threshold).
+   reboot) clears the warning and banner, keeps `lastSuccessMs`, and stamps memory `watchdogResetMs`; the age is measured from the
+   later of the two (or the reset alone before any success), so an outage that continues past Done or a reboot warns one threshold later, not on the first tick.
 2. **Roster refresh** (§4.2).
 3. **Locations.** If `tokenLikelyExpired`, run `probeTokenAfterExpiry()` (§5) and return; else `fetchLocations(true)`.
 
@@ -328,10 +328,12 @@ it). It returns the published `inTransit`, which the app uses for fast polling.
 - **Units**, in priority order: the driver's `unitOverride` when not `life360`; else `ctx.useMiles` from the
   app's `getUnitIsMiles()` (the app's `logUnits` override is applied there); else the hub's `temperatureScale`.
 - **Motion:** `inTransit` / `isDriving` are published as Life360 sends them, except that `inTransit` is
-  shown false when `ctx.staleSecs` arrives and the last speed is under `PARKED_MAX_SPEED_MS` (1.56 m/s, 3.5 mph);
+  shown false when `ctx.staleSecs` arrives and the last speed (-1 counts as 0) is under `PARKED_MAX_SPEED_MS` (1.56 m/s, 3.5 mph);
   the app sends `ctx.staleSecs` only with Early Parked Detection on (§13). With it on, a device showing
-  `inTransit` false also keeps it false when a new fix says in transit under that speed (stops 0 mph blips
-  while parked); `earlyParkedOn(ctx)` reads the device override, else `ctx.parkedClamp`. The
+  `inTransit` false also keeps it false when a fix says in transit under `START_MIN_SPEED_MS` (0.447 m/s,
+  1 mph; stops 0 mph blips, lets walks through), or under `PARKED_MAX_SPEED_MS` while `state.earlyParked` (set
+  when it parks, removed on release or when Life360 says not in transit), so a re-delivered parked fix (Done,
+  Refresh) can't restart it; `earlyParkedOn(ctx)` reads the device override, else `ctx.parkedClamp`. The
   app's `parkedClamp` bool is the default; a device's `parkedClamp` enum (`app`/`on`/`off`) overrides it and
   is decided by the device's `earlyParkedOn(ctx)`, which the app also calls (`parkedClampOn`) when the rule could apply.
 - `isDriving` only feeds its own attribute: Life360 holds it set a median of 6.5 min after `inTransit`
@@ -408,7 +410,7 @@ skipped. Lat/lng are rounded to 5 decimals. The separate `bpt-history` / `numOfC
   wrappers around a private body; the driver call is timed the same way inside the location response.
   Counts are approximate: two runs finishing at the same instant can drop one. Extra rows: `Reply: unchanged`
   / `Reply: changed` (the two outcomes of a location response),
-  `Life360 wait (not hub time)` (request sent to reply received), and driver rows `Driver: HTML tile` /
+  `Life360 wait (not hub time)` (request sent to reply received), and driver rows `Driver: attribute events` (every `sendEvent` except history and the tile) / `Driver: HTML tile` /
   `Driver: location history` from each device's own `TIMING` map (`timingSnapshot()`, `clearTimingStats()`),
   summed across devices; the app turns the driver's collection on through `ctx.timingStats`. Totals live in the memory-only
   `TIMING` map and render as a table on the app page.
@@ -494,9 +496,11 @@ Hubitat has no local test harness: install on a real hub against a real circle a
 `l360-etag` for that member has not changed for `STALE_ETAG_SECS` (240 s, whatever the refresh rate).
 Life360 can keep `inTransit` (and even a stale speed) set after a phone stops. Since 5.2.6 this is opt-in
 (Early Parked Detection): on, `inTransit` is shown false and fast polling ends, but only if the last speed
-was under 3.5 mph (added 2026-11-09, see "Highway gaps" below), and a parked phone stays parked until a fix
-shows 3.5 mph or more (14 of 65 `inTransit` turn-ons in the logs were parked blips, nearly all at 0 mph; 16
-of 51 real departures also began under 5 mph and register one update later); off, Life360's value stands.
+was under 3.5 mph (added 2026-11-09, see "Highway gaps" below), and a phone showing not moving
+shows a start only at 1 mph or more (2026-11-18: of 35 starts under 3.5 mph across 11/07 to 11/10, 19 were
+0 to 0.55 mph blips lasting 1 to 24 min and 3 were walks at 1.9 to 3.4 mph; a 3.5 mph start gate hid the
+walks; after Early Parked Detection parks a phone the start gate stays 3.5 mph, so the same fix re-delivered
+by Done or Refresh can't un-park it); off, Life360's value stands. A -1 speed (Apple's "no reading") counts as 0: all 20 in the logs were parked, and a wrong park ends on the next fix at 1 mph or more.
 
 **What the etag is.** Life360 returns a full `200` with an identical etag when nothing changed, never a `304`
 (curl, 7 requests with a cookie jar: always 200, identical etag; Home Assistant's life360 library logged a
