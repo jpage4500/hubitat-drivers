@@ -6,7 +6,7 @@ Lookup map of every setting, state variable, scheduled job, subscription and chi
 
 ## App: Settings (user inputs)
 
-Configured via the app's preferences page. Read at runtime as `settings.<name>` or just `<name>`.
+Configured on the app's pages (main, Setup, Advanced Settings); Hubitat stores settings by name, so the page a setting is on doesn't change its key. Read at runtime as `settings.<name>` or just `<name>`.
 
 | Setting             | Type                    | Purpose                                                                                                                                                                                                                                                         |
 | ------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -18,7 +18,7 @@ Configured via the app's preferences page. Read at runtime as `settings.<name>` 
 | `dynamicPolling`    | bool                    | If true, poll faster while any member is in transit. Only engages when `pollFreq > dynamicPollFreq`                                                                                                                                                             |
 | `dynamicPollFreq`   | enum                    | Poll interval while a member is in transit: `5`/`10`/`20`/`30`                                                                                                                                                                                                  |
 | `parkedClamp`       | bool                    | Early Parked Detection (default off): show `inTransit` false after 240 s without new data at under 3.5 mph, and show a start only on a fix at 1 mph or more (3.5 mph after it parked the phone). Each device can override it |
-| `timingStats`       | bool                    | Collect Timing Stats (default off): runs, total, average and max ms per main function, shown in the Logging section. Memory only (the app's and each driver's `TIMING` map); includes reply outcomes, fast-tick reschedule, Life360 wait and driver tile/history rows; cleared on reboot, uninstall, or when turned off |
+| `timingStats`       | bool                    | Collect Timing Stats (default off): runs, total, average and max ms per main function, shown under Advanced Settings → Troubleshooting. Memory only (the app's and each driver's `TIMING` map); includes reply outcomes, fast-tick reschedule, Life360 wait and driver tile/history rows; cleared on reboot, uninstall, or when turned off |
 | `notifyTokenExpiry` | bool                    | Master switch for token-expiry alerts (default on). When off, the device picker + repeat-reminder inputs are hidden and no alerts fire                                                                                                                          |
 | `notifyDevices`     | capability.notification | Devices notified on access-token failure (shown only when `notifyTokenExpiry` is on)                                                                                                                                                                            |
 | `notifyRepeatHours` | enum                    | Repeat the token-expiry reminder every `never`/`2`/`6`/`12`/`24`/`48` h (shown only when at least one notify device is set)                                                                                                                                     |
@@ -88,12 +88,12 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 
 ### UI one-shot status (button results)
 
-Each `*Status` holds an HTML result string; the paired `*StatusPending` flag survives the single page re-render after the button press, then `mainPage()` clears the status on the next open.
+Each `*Status` holds an HTML result string; the paired `*StatusPending` flag survives the single page re-render after the button press, then `consumeButtonResults()` (called first by every page) clears the status on the next open.
 
 | Variable                                         | Type             | Set by                                                                    | Notes                                                 |
 | ------------------------------------------------ | ---------------- | ------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `tokenStatus` / `tokenStatusPending`             | String / Boolean | `checkToken()` (Check Token button)                                       | Token-validity result shown under STEP 1              |
-| `forceUpdateStatus` / `forceUpdateStatusPending` | String / Boolean | `forceMemberUpdate()` / `handleForceUpdateResponse` (Force Update button) | Force-update result shown in the Force Update section |
+| `forceUpdateStatus` / `forceUpdateStatusPending` | String / Boolean | `forceMemberUpdate()` / `handleForceUpdateResponse` (Force Update button) | Force-update result shown under Advanced Settings → Troubleshooting |
 
 ### Error / health
 
@@ -103,7 +103,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | `tokenLikelyExpired` | Boolean | `handleException` / `handleMemberLocationResponse` on 401/403 ×3 | `handleTokenProbeResponse` on 200 (auto-recovery), `updated()` | When true, polling slows to 5 min and each tick probes `/users/me`; a 200 auto-recovers (APP_SPEC §5). |
 | `rateLimitedUntilMs` | Long    | `handleException` / `handleMemberLocationResponse` on 429        | 200-OK response, Done (`updated()`), or expiry                 | Honors `Retry-After`; polling skipped until this time                                                                                                                                                                                                                                       |
 | `watchdogWarned`     | Boolean | `handleSlowTimer` watchdog (rising edge)                         | 200/304 success, `resetWatchdog()`                                                | Prevents the "no successful update" warning from spamming every tick                                                                                                                                                                                                                        |
-| `message`            | String  | various error paths                                              | `markFetchSuccess`, `fetchCircles`/`fetchPlaces` 200, non-periodic `fetchMembers` 200, token probe 200, `updated()`; `resetWatchdog()` clears only a `WATCHDOG` banner. The periodic roster refresh never touches it | Red banner shown on the app's main page                                                                                                                                                                                                                                                     |
+| `message`            | String  | various error paths                                              | `markFetchSuccess`, `fetchCircles`/`fetchPlaces` 200, non-periodic `fetchMembers` 200, token probe 200, `updated()`; `resetWatchdog()` clears only a `WATCHDOG` banner. The periodic roster refresh never touches it | Red banner shown on the app's main and Setup pages                                                                                                                                                                                                                                                     |
 | `placesEmptyWarned`  | Boolean | `notifyChildDevice` (rising edge)                                | `fetchPlaces()` success                                        | Prevents the "state.places is empty" error from spamming every tick while places are missing                                                                                                                                                                                                |
 
 ---

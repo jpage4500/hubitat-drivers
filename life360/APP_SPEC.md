@@ -426,11 +426,22 @@ skipped. Lat/lng are rounded to 5 decimals. The separate `bpt-history` / `numOfC
 
 ## 9. Settings
 
-The settings list (names, types, defaults) is in [STATE_REFERENCE.md](STATE_REFERENCE.md). The page flows
+The settings list (names, types, defaults) is in [STATE_REFERENCE.md](STATE_REFERENCE.md). Setup flows
 STEP 1 token (**Check Token**) → STEP 2 circle (**Fetch Circles**) → STEP 3 HOME (**Fetch Places**) →
-STEP 4 members (**Fetch Members**) → STEP 5 **Fetch Locations** (shows the age of the last success), then
-Polling, Notifications, Logging, Map View and Force Update. A button result that must survive the single
-page re-render uses a `*StatusPending` flag that `mainPage()` clears on the next open.
+STEP 4 members (**Fetch Members**) → STEP 5 **Fetch Locations** (shows the age of the last success).
+
+Three pages:
+
+- **Main:** the steps inline until setup is complete (every step filled in, a successful fetch, no expired
+  token). After that a status line (circle, home, member count, age of the last success, **Refresh Now**)
+  and a **Setup** link replace them. Then Polling, Map View (link only), and a link to Advanced Settings.
+- **Setup:** STEP 1–5, for changes after setup is complete.
+- **Advanced Settings:** Units, Map Provider (Google Maps API key), Logging, and Troubleshooting (token-expiry
+  alerts, Force Update, Log Raw API Diagnostics, Collect Timing Stats).
+
+Settings keep the same names whichever page shows them, so moving one between pages needs no migration. A
+button result that must survive the single page re-render uses a `*StatusPending` flag that
+`consumeButtonResults()`, called first by every page, clears on the next open.
 
 ---
 
