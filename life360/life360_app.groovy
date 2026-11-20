@@ -74,6 +74,8 @@ definition(
 
 preferences {
     page(name: "mainPage")
+    page(name: "setupPage")
+    page(name: "advancedPage")
 }
 
 mappings {
@@ -86,13 +88,216 @@ mappings {
 }
 
 /**
- * starting page
- * - if we have an auth token, jump to circlesPage to select circle -> members
- * - otherwise, show phone number login page
+ * Main page: a status line, Setup (STEP 1–5 inline until setup is complete, then a link to setupPage),
+ * Polling, Map View, and a link to advancedPage.
+ * Setting names are the same on every page; Hubitat stores settings by name, not by page.
  */
 def mainPage() {
-    // One-shot flags: button handlers set these so the result survives the one re-render
-    // after the button press. On every other page open we clear stale state.
+    consumeButtonResults()
+    boolean setupDone = isSetupComplete()
+    dynamicPage(name: "mainPage", install: true, uninstall: true) {
+        section() {
+            instructionsLink()
+            showMessage(state.message)
+            if (setupDone) {
+                paragraph statusLine()
+                input("fetchLocationsBtn", "button", title: "Refresh Now")
+            }
+        }
+
+        if (setupDone) {
+            section(header("Setup")) {
+                href name: "setupHref", page: "setupPage", title: "Setup \u2713", description: "Access token, circle, home and members", width: 6
+            }
+        } else {
+            setupSections("mainPage")
+        }
+
+        section(header("Polling") + scrollToTopOnOpen("mainPage")) {
+            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", width: 6, options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
+            input(name: "dynamicPolling", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Dynamic Polling", description: "Increase polling frequency to 'Dynamic Refresh Rate' when a member is in motion. Polling returns to 'Default Refresh Rate' once they've stopped. Only engages when the Dynamic Refresh Rate is faster than the Default Refresh Rate.")
+            if (settings.dynamicPolling) {
+                input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
+            }
+            input(name: "parkedClamp", type: "bool", defaultValue: false, title: "Early Parked Detection", description: "Show a phone as not moving sooner: when Life360 still says moving but has sent nothing new for 4 minutes and the last speed was under 3.5 mph. A phone showing not moving only shows a start at 1 mph or faster, which ignores 0 mph moving blips, or 3.5 mph if this setting parked it. Each member device can override this.")
+        }
+
+        section(header("Map View")) {
+            String viewUrl = getViewUrl()
+            if (viewUrl) {
+                paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small>"
+                input("revokeViewLinkBtn", "button", title: "Revoke Map Link")
+            } else {
+                input("generateViewLinkBtn", "button", title: "Generate Map Link")
+                paragraph "<small style='color:#888'>In Apps Code, open the \u22ee menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
+            }
+        }
+
+        section(header("More")) {
+            href name: "advancedHref", page: "advancedPage", title: "Advanced Settings", description: "Units, map provider, logging and troubleshooting", width: 6
+        }
+    }
+}
+
+/**
+ * STEP 1–5 on their own page, reached from the main page once setup is complete.
+ */
+def setupPage() {
+    consumeButtonResults()
+    dynamicPage(name: "setupPage", title: "Setup") {
+        section() {
+            instructionsLink()
+            showMessage(state.message)
+        }
+        setupSections("setupPage")
+    }
+}
+
+/**
+ * Settings that are set once or only used for troubleshooting: units, map provider, logging,
+ * token-expiry alerts, Force Update and diagnostics.
+ */
+def advancedPage() {
+    consumeButtonResults()
+    dynamicPage(name: "advancedPage", title: "Advanced Settings") {
+        section(header("Units") + scrollToTopOnOpen("advancedPage")) {
+            input(name: "logUnits", type: "enum", defaultValue: "life360", title: "Units (all members)",
+                description: "Units for speed and distance in logs and device attributes. Overrides each member device's own setting when set to anything other than 'Follow Life360 app'.",
+                options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (\u00b0F \u2192 miles, \u00b0C \u2192 km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
+        }
+
+        section(header("Map Provider")) {
+            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, width: 6)
+            paragraph "<small style='color:#666'>If a Google Maps API Key is set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).<br><b style='color:#a00'>Security:</b> the key is embedded in the page HTML and visible to anyone who can load the map. Restrict it in Google Cloud Console (APIs &amp; Services --> Credentials) with HTTP-referrer + API restrictions so a leaked key can't be abused.</small>"
+        }
+
+        section(header("Logging")) {
+            paragraph "<small style='color:#666'>Controls what appears in Hubitat's app/device logs. Turn the privacy switches OFF when sharing logs publicly.</small>"
+            input(name: "logEnable", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
+            input(name: "logHeartbeat", type: "bool", defaultValue: true, submitOnChange: true, title: "Heartbeat Logging")
+            paragraph "<small style='color:#666'>On: A heartbeat line is logged after each routine roster refresh, about every 15 minutes (member count and connection summary). Not logged on Done or Fetch Members.<br>Off: No heartbeat line.</small>"
+            input(name: "logDrivingTransitions", type: "bool", defaultValue: true, submitOnChange: true, title: "Driving Logging")
+            paragraph "<small style='color:#666'>On: Each poll of a member in motion is logged.<br>Off: Only when a member starts or stops moving is logged.</small>"
+            input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) \u2014 useful when sharing logs for debugging.")
+            input(name: "logShowMapsLink", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
+        }
+
+        section(header("Troubleshooting")) {
+            paragraph subHeader("Token Expiry Alerts", true)
+            input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
+            if (settings.notifyTokenExpiry != false) {
+                input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
+                if (!isEmpty(settings.notifyDevices)) {
+                    paragraph ""   // full-width spacer forces the dropdown onto its own row, below the device selector
+                    input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
+                }
+            }
+
+            if (!isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)) {
+                paragraph subHeader("Force Update")
+                paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
+                def forceMembers = state.members
+                    .findAll { settings.users.contains(it.id) }
+                    .collectEntries { [it.id, "${it.firstName ?: ''} ${it.lastName ?: ''}".trim() ?: it.id] }
+                    .sort { a, b -> a.value <=> b.value }
+                input "forceUpdateMember", "enum", multiple: false, required: false, title: "Member", options: forceMembers, submitOnChange: true, width: 6
+                input("forceUpdateBtn", "button", title: "Force Update")
+                if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
+            }
+
+            paragraph subHeader("Diagnostics")
+            input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only \u2014 don't share resulting logs.")
+            input(name: "timingStats", type: "bool", defaultValue: false, submitOnChange: true, title: "Collect Timing Stats", description: "Count and time the app's main functions, in memory only. Resets on reboot or when turned off.")
+            if (settings.timingStats) paragraph timingTable() else if (rtGet("timingSinceMs") != null) clearTiming()
+        }
+    }
+}
+
+/**
+ * STEP 1–5 sections, shown inline on the main page until setup is complete and on setupPage after that.
+ * Called from inside a dynamicPage closure.
+ * @param pageName - the page showing the steps, for scrollToTopOnOpen()
+ */
+private void setupSections(String pageName) {
+    section(header("STEP 1: Access Token") + scrollToTopOnOpen(pageName)) {
+        input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true, width: 6
+        if (!isEmpty(access_token)) {
+            input("checkTokenBtn", "button", title: "Check Token")
+            if (state.tokenStatus) paragraph state.tokenStatus
+        }
+    }
+
+    if (!isEmpty(access_token)) {
+        section(header("STEP 2: Life360 Circles")) {
+            input("fetchCirclesBtn", "button", title: "Fetch Circles")
+
+            if (!isEmpty(state.circles)) {
+                input "circle", "enum", multiple: false, required: true, title: "Life360 Circle", options: state.circles.collectEntries { [it.id, it.name] }, submitOnChange: true, width: 6
+            }
+        }
+
+        section(header("STEP 3: Select HOME")) {
+            input("fetchPlacesBtn", "button", title: "Fetch Places")
+
+            if (!isEmpty(state.places)) {
+                paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
+                def thePlaces = state.places.collectEntries { [it.id, it.name] }
+                def sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
+                input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true, width: 6
+            }
+        }
+
+        section(header("STEP 4: Select Members to track")) {
+            input("fetchMembersBtn", "button", title: "Fetch Members")
+
+            if (!isEmpty(state.members)) {
+                def theMembers = state.members.collectEntries { [it.id, "${it.firstName ?: ''} ${it.lastName ?: ''}".trim() ?: it.id] }
+                def sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
+                input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true, width: 6
+            }
+        }
+
+        section(header("STEP 5: Verify Connectivity")) {
+            paragraph "<small style='color:#666'>Pulls current data for every selected member. Use this to confirm setup before saving.  If it fails, check the access token (STEP 1) and try again.</small>"
+            input("fetchLocationsBtn", "button", title: "Fetch Locations")
+            Long lastSuccessMs = state.lastSuccessMs as Long
+            if (lastSuccessMs) {
+                paragraph "<small style='color:#080'>&#10003; Last successful fetch: ${ageText(lastSuccessMs)}</small>"
+            }
+        }
+    }
+}
+
+/**
+ * Heading for a group of options inside one section (e.g. the parts of Troubleshooting). Every group after
+ * the first gets a divider line above it, so each group's options read as one block.
+ */
+private static String subHeader(String text, boolean first = false) {
+    String divider = first ? "" : "border-top:1px solid #d0d0d0;margin-top:14px;padding-top:18px;"
+    return "<div style='${divider}font-size:15px;font-weight:bold;color:#5b34d6'>${text}</div>"
+}
+
+/**
+ * Hubitat swaps pages in place and keeps the content area's scroll position, so a page opened from a link
+ * near the bottom of another page starts part-way down. This script scrolls to the top when a different
+ * page is shown, but not when the same page re-renders after a submitOnChange input, so changing a
+ * setting doesn't jump the page. Put it in one section title per page; a second copy on the same page
+ * does nothing.
+ */
+private static String scrollToTopOnOpen(String pageName) {
+    return "<script>(function(){var p='${pageName}';if(window.l360Page!==p){var c=document.getElementById('divMainUIContentContainer');" +
+        "if(c)c.scrollTop=0;window.scrollTo(0,0);}window.l360Page=p;})();</script>"
+}
+
+private void instructionsLink() {
+    href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external", width: 6
+}
+
+/**
+ * One-shot button results: a handler sets a *StatusPending flag so its result survives the single re-render
+ * after the press. Every page calls this first, so opening any page afterwards clears the stale result.
+ */
+private void consumeButtonResults() {
     if (state.tokenStatusPending) {
         state.tokenStatusPending = false
     } else {
@@ -103,127 +308,46 @@ def mainPage() {
     } else {
         state.forceUpdateStatus = null
     }
-    dynamicPage(name: "mainPage", install: true, uninstall: true) {
-        section() {
-            href name: "myHref", url: "https://joe-page-software.gitbook.io/hubitat-dashboard/tiles/location-life360/life360+#configuration", title: "Step-by-step instructions", style: "external", width: 6
-            showMessage(state.message)
-        }
-        section(header("STEP 1: Access Token")) {
-            input 'access_token', 'text', title: 'Access Token', required: true, defaultValue: '', submitOnChange: true, width: 6
-            if (!isEmpty(access_token)) {
-                input("checkTokenBtn", "button", title: "Check Token")
-                if (state.tokenStatus) paragraph state.tokenStatus
-            }
-        }
+}
 
-        if (!isEmpty(access_token)) {
-            section(header("STEP 2: Life360 Circles")) {
-                input("fetchCirclesBtn", "button", title: "Fetch Circles")
+/**
+ * Setup is complete once every STEP has a value and a location fetch has succeeded, and the token isn't
+ * flagged as expired. Until then the main page shows STEP 1–5 inline, as on a first install.
+ */
+private boolean isSetupComplete() {
+    return !isEmpty(settings.access_token) && !isEmpty(settings.circle) && !isEmpty(settings.place) &&
+        !isEmpty(settings.users) && state.lastSuccessMs != null && !state.tokenLikelyExpired
+}
 
-                if (!isEmpty(state.circles)) {
-                    input "circle", "enum", multiple: false, required: true, title: "Life360 Circle", options: state.circles.collectEntries { [it.id, it.name] }, submitOnChange: true, width: 6
-                }
-            }
+/**
+ * Main page status line once setup is complete: circle, home place, member count and the age of the last
+ * successful location fetch.
+ */
+private String statusLine() {
+    String circleName = state.circles?.find { it.id == settings.circle }?.name ?: "Circle"
+    String homeName = state.places?.find { it.id == settings.place }?.name ?: "Home"
+    int count = settings.users?.size() ?: 0
+    String members = (count == 1) ? "1 member" : "${count} members"
+    // state.message holds the current error banner (watchdog, rate limit, transient errors), shown just above
+    String label = isEmpty(state.message) ? "<b style='color:#2e7d32'>&#10003; Connected</b>" : "<b style='color:#b26a00'>&#9888; See message above</b>"
+    return "<div style='border:1px solid #c8e6c9;background:#f1f8f1;border-radius:4px;padding:8px 12px'>" +
+        "${label} &middot; ${htmlText(circleName)} &middot; Home: ${htmlText(homeName)} &middot; ${members}<br>" +
+        "<small style='color:#555'>Last successful update: ${ageText(state.lastSuccessMs as Long)}</small></div>"
+}
 
-            section(header("STEP 3: Select HOME")) {
-                input("fetchPlacesBtn", "button", title: "Fetch Places")
+/** "36s ago", "4 min ago" or "2 hr ago" for an epoch-ms timestamp. */
+private String ageText(Long ms) {
+    if (!ms) return "never"
+    long ageSec = (long)((new Date().getTime() - ms) / 1000L)
+    if (ageSec < SECS_PER_MIN) return "${ageSec}s ago"
+    if (ageSec < SECS_PER_HOUR) return "${(long)(ageSec / SECS_PER_MIN)} min ago"
+    return "${(long)(ageSec / SECS_PER_HOUR)} hr ago"
+}
 
-                if (!isEmpty(state.places)) {
-                    paragraph "Please select the ONE Life360 Place that matches your Hubitat location: ${location.name}"
-                    def thePlaces = state.places.collectEntries { [it.id, it.name] }
-                    def sortedPlaces = thePlaces.sort { a, b -> a.value <=> b.value }
-                    input "place", "enum", multiple: false, required: true, title: "Life360 Places: ", options: sortedPlaces, submitOnChange: true, width: 6
-                }
-            }
-
-            section(header("STEP 4: Select Members to track")) {
-                input("fetchMembersBtn", "button", title: "Fetch Members")
-
-                if (!isEmpty(state.members)) {
-                    def theMembers = state.members.collectEntries { [it.id, "${it.firstName ?: ''} ${it.lastName ?: ''}".trim() ?: it.id] }
-                    def sortedMembers = theMembers.sort { a, b -> a.value <=> b.value }
-                    input "users", "enum", multiple: true, required: false, title: "Life360 Members: ", options: sortedMembers, submitOnChange: true, width: 6
-                }
-            }
-
-            section(header("STEP 5: Verify Connectivity")) {
-                paragraph "<small style='color:#666'>Pulls current data for every selected member. Use this to confirm setup before saving.  If it fails, check the access token (STEP 1) and try again.</small>"
-                input("fetchLocationsBtn", "button", title: "Fetch Locations")
-                Long lastSuccessMs = state.lastSuccessMs as Long
-                if (lastSuccessMs) {
-                    long ageSec = (long)((new Date().getTime() - lastSuccessMs) / 1000L)
-                    String ageStr = (ageSec < SECS_PER_MIN) ? "${ageSec}s ago"
-                        : (ageSec < SECS_PER_HOUR) ? "${(long)(ageSec / SECS_PER_MIN)} min ago"
-                        : "${(long)(ageSec / SECS_PER_HOUR)} hr ago"
-                    paragraph "<small style='color:#080'>\u2713 Last successful fetch: ${ageStr}</small>"
-                }
-            }
-        }
-
-        section(header("Polling")) {
-            input(name: "pollFreq", type: "enum", title: "Default Refresh Rate", required: true, defaultValue: "60", width: 6, options: ['10': '10 seconds', '15': '15 seconds', '30': '30 seconds', '60': '1 minute', '180': '3 minutes', '300': '5 minutes', '0': 'Disabled'])
-            input(name: "dynamicPolling", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Dynamic Polling", description: "Increase polling frequency to 'Dynamic Refresh Rate' when a member is in motion. Polling returns to 'Default Refresh Rate' once they've stopped. Only engages when the Dynamic Refresh Rate is faster than the Default Refresh Rate.")
-            if (settings.dynamicPolling) {
-                input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
-            }
-            input(name: "parkedClamp", type: "bool", defaultValue: false, title: "Early Parked Detection", description: "Show a phone as not moving sooner: when Life360 still says moving but has sent nothing new for 4 minutes and the last speed was under 3.5 mph. A phone showing not moving only shows a start at 1 mph or faster, which ignores 0 mph moving blips, or 3.5 mph if this setting parked it. Each member device can override this.")
-        }
-
-        section(header("Notifications")) {
-            input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
-            if (settings.notifyTokenExpiry != false) {
-                input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
-                if (!isEmpty(settings.notifyDevices)) {
-                    paragraph ""   // full-width spacer forces the dropdown onto its own row, below the device selector
-                    input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
-                }
-            }
-        }
-
-        section(header("Logging")) {
-            paragraph "<small style='color:#666'>Controls what appears in Hubitat's app/device logs. Turn the privacy switches OFF when sharing logs publicly.</small>"
-            input(name: "logEnable", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Debug Logging", description: "Enable extra logging for debugging.")
-            input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only — don't share resulting logs.")
-            input(name: "timingStats", type: "bool", defaultValue: false, submitOnChange: true, title: "Collect Timing Stats", description: "Count and time the app's main functions, in memory only. Resets on reboot or when turned off.")
-            if (settings.timingStats) paragraph timingTable() else if (rtGet("timingSinceMs") != null) clearTiming()
-            input(name: "logShowNames", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Names and Places in Logs", description: "When on, logs show member/place/circle names. Turn off for privacy (UUIDs only) — useful when sharing logs for debugging.")
-            input(name: "logShowMapsLink", type: "bool", defaultValue: true, submitOnChange: true, title: "Include Google Maps Link in Logs", description: "When a member moves, include a clickable Google Maps link to their coordinates in the info log. Turn off to keep coordinates out of logs.")
-            input(name: "logHeartbeat", type: "bool", defaultValue: true, submitOnChange: true, title: "Heartbeat Logging")
-            paragraph "<small style='color:#666'>On: A heartbeat line is logged after each routine roster refresh, about every 15 minutes (member count and connection summary). Not logged on Done or Fetch Members.<br>Off: No heartbeat line.</small>"
-            input(name: "logDrivingTransitions", type: "bool", defaultValue: true, submitOnChange: true, title: "Driving Logging")
-            paragraph "<small style='color:#666'>On: Each poll of a member in motion is logged.<br>Off: Only when a member starts or stops moving is logged.</small>"
-            input(name: "logUnits", type: "enum", defaultValue: "life360", title: "Units (all members)",
-                description: "Units for speed and distance in logs and device attributes. Overrides each member device's own setting when set to anything other than 'Follow Life360 app'.",
-                options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"])
-        }
-
-        section(header("Map View")) {
-            input(name: "googleMapsApiKey", type: "text", title: "Google Maps API Key (optional)", required: false, defaultValue: "", submitOnChange: true, width: 6)
-            paragraph "<small style='color:#666'>If a Google Maps API Key is set, the map view uses Google Maps. Otherwise OpenStreetMap is used (no key required).<br><b style='color:#a00'>Security:</b> the key is embedded in the page HTML and visible to anyone who can load the map. Restrict it in Google Cloud Console (APIs &amp; Services --> Credentials) with HTTP-referrer + API restrictions so a leaked key can't be abused.</small>"
-            String viewUrl = getViewUrl()
-            if (viewUrl) {
-                paragraph "<a href='${viewUrl}' target='_blank'>Open Map View</a><br><small style='color:#888'>${viewUrl}</small>"
-                input("revokeViewLinkBtn", "button", title: "Revoke Map Link")
-            } else {
-                input("generateViewLinkBtn", "button", title: "Generate Map Link")
-                paragraph "<small style='color:#888'>In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then click 'Generate Map Link'.</small>"
-            }
-        }
-
-        if (!isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)) {
-            section(header("Force Update")) {
-                paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
-                def forceMembers = state.members
-                    .findAll { settings.users.contains(it.id) }
-                    .collectEntries { [it.id, "${it.firstName ?: ''} ${it.lastName ?: ''}".trim() ?: it.id] }
-                    .sort { a, b -> a.value <=> b.value }
-                input "forceUpdateMember", "enum", multiple: false, required: false, title: "Member", options: forceMembers, submitOnChange: true, width: 6
-                input("forceUpdateBtn", "button", title: "Force Update")
-                if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
-            }
-        }
-
-    }
+/** Escapes text from Life360 (circle and place names) for use inside a paragraph's HTML. */
+private static String htmlText(String s) {
+    if (s == null) return ""
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
 }
 
 private String getViewUrl() {
@@ -274,8 +398,8 @@ private void generateViewLink() {
             createAccessToken()
         }
     } catch (e) {
-        log.error("generateViewLink: failed to create access token — in Apps Code, open the ⋮ menu (top-right) and enable OAuth first: ${e}")
-        state.message = "In Apps Code, open the ⋮ menu (top-right of the editor) and enable OAuth, then try again."
+        log.error("generateViewLink: failed to create access token \u2014 in Apps Code, open the \u22ee menu (top-right) and enable OAuth first: ${e}")
+        state.message = "In Apps Code, open the \u22ee menu (top-right of the editor) and enable OAuth, then try again."
     }
 }
 
@@ -292,7 +416,7 @@ def showMessage(text) {
 // ---- Token check ------------------------------------------------------------
 
 private void checkToken() {
-    state.tokenStatusPending = true   // tell mainPage() to display the result on re-render
+    state.tokenStatusPending = true   // tell the page to display the result on re-render
     def params = life360Params("/users/me")
     def cookies = state["cookies"]
     if (cookies) params["headers"]["Cookie"] = cookies
@@ -305,12 +429,12 @@ private void checkToken() {
             if (status == 200) {
                 def user = response.data
                 String name = user?.firstName ?: "unknown"
-                log.info("checkToken: valid — id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
+                log.info("checkToken: valid \u2014 id:${user?.id} name:${user?.firstName} ${user?.lastName} email:${user?.loginEmail}")
                 captureUnitOfMeasure(user)
                 state.tokenStatus = "<span style='color:#080'>&#10003; Hi ${name}! Your token is valid.</span>"
             } else if (status == 401 || status == 403) {
-                log.error("checkToken: AUTH FAILURE (${status}) — token is likely expired or revoked")
-                state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — token appears expired or revoked.</span>"
+                log.error("checkToken: AUTH FAILURE (${status}) \u2014 token is likely expired or revoked")
+                state.tokenStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) \u2014 token appears expired or revoked.</span>"
             } else {
                 log.error("checkToken: unexpected status:${status}")
                 state.tokenStatus = "<span style='color:#a00'>&#10007; Unexpected response (${status}) checking token.</span>"
@@ -318,7 +442,7 @@ private void checkToken() {
         }
     } catch (e) {
         log.error("checkToken: error: ${e.message}")
-        state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token — ${e.message}</span>"
+        state.tokenStatus = "<span style='color:#a00'>&#10007; Network error checking token \u2014 ${e.message}</span>"
     }
 }
 
@@ -406,7 +530,7 @@ private void forceMemberUpdate(String memberId) {
     if (cookies) params["headers"]["Cookie"] = cookies
 
     state.forceUpdateStatusPending = true
-    state.forceUpdateStatus = "<span style='color:#888'>Sending…</span>"
+    state.forceUpdateStatus = "<span style='color:#888'>Sending\u2026</span>"
     asynchttpPost("handleForceUpdateResponse", params, [memberId: memberId])
     log.info("forceMemberUpdate: sent for member:${memberName}")
 }
@@ -418,7 +542,7 @@ def handleForceUpdateResponse(response, Map data) {
 
     if (!status) {
         String errMsg = response.getErrorMessage() ?: "(no details)"
-        log.error("forceMemberUpdate: network failure for ${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: network failure for ${memberName} \u2014 ${errMsg}")
         state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Network error: ${errMsg}</span>"
         return
     }
@@ -438,18 +562,18 @@ def handleForceUpdateResponse(response, Map data) {
         String isPollable = result?.isPollable
         if (getLogRawPayload()) log.trace("forceMemberUpdate: 200 ${result}")
         log.info("forceMemberUpdate: SUCCESS member:${memberName} requestId:${requestId} isPollable:${isPollable}")
-        state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} — fresh location in ~5s</span>"
+        state.forceUpdateStatus = "<span style='color:#080'>&#10003; Sent to ${memberName} \u2014 fresh location in ~5s</span>"
         runIn(FORCE_UPDATE_FETCH_DELAY_SECS, "fetchLocations")
     } else if (status == 401 || status == 403) {
-        log.error("forceMemberUpdate: AUTH (${status}) member:${memberName} — token may be expired or revoked")
-        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) — re-paste access token</span>"
+        log.error("forceMemberUpdate: AUTH (${status}) member:${memberName} \u2014 token may be expired or revoked")
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Auth failed (${status}) \u2014 re-paste access token</span>"
     } else {
         String errMsg = response.getErrorMessage() ?: "(no details)"
         String errBody = null
         try { errBody = response.data?.toString() } catch (ignored) {}
-        log.error("forceMemberUpdate: FAILED status:${status} member:${memberName} — ${errMsg}")
+        log.error("forceMemberUpdate: FAILED status:${status} member:${memberName} \u2014 ${errMsg}")
         log.error("forceMemberUpdate: response body: ${errBody ?: '(empty)'}")
-        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) — check logs for details</span>"
+        state.forceUpdateStatus = "<span style='color:#a00'>&#10007; Failed (${status}) \u2014 check logs for details</span>"
     }
 }
 
@@ -465,12 +589,12 @@ def fetchCircles() {
                 if (getLogRawPayload()) log.trace("fetchCircles: ${response.status} ${response.data}")
                 if (response.status == 200) {
                     state.circles = response.data.circles?.collect { [id: it.id, name: it.name] }
-                    if (!state.circles) log.warn("fetchCircles: 0 circles returned — check that your account belongs to a circle")
+                    if (!state.circles) log.warn("fetchCircles: 0 circles returned \u2014 check that your account belongs to a circle")
                     if (logEnable) log.debug("fetchCircles: ${state.circles?.size() ?: 0} circles: ${state.circles?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
                 } else if (response.status == 401 || response.status == 403) {
-                    log.error("fetchCircles: AUTH (${response.status}) — token may be expired or revoked")
-                    state.message = "fetchCircles: AUTH error (${response.status}) — re-paste access token"
+                    log.error("fetchCircles: AUTH (${response.status}) \u2014 token may be expired or revoked")
+                    state.message = "fetchCircles: AUTH error (${response.status}) \u2014 re-paste access token"
                 } else {
                     log.error("fetchCircles: bad response:${response.status}, ${response.data}")
                     state.message = "fetchCircles: bad response:${response.status}, ${response.data}"
@@ -497,13 +621,13 @@ def fetchPlaces() {
                 if (response.status == 200) {
                     state.places = response.data.places?.collect { [id: it.id, name: it.name, latitude: it.latitude, longitude: it.longitude, radius: it.radius] }
                     forceNextDeviceUpdate()
-                    if (!state.places) log.warn("fetchPlaces: 0 places returned — check that your Life360 circle has at least one place")
+                    if (!state.places) log.warn("fetchPlaces: 0 places returned \u2014 check that your Life360 circle has at least one place")
                     if (logEnable) log.debug("fetchPlaces: ${state.places?.size() ?: 0} places: ${state.places?.collect { showNamesInLogs() ? it.name : it.id }}")
                     state.message = null
                     state.placesEmptyWarned = false  // reset rising-edge flag now that places are loaded
                 } else if (response.status == 401 || response.status == 403) {
-                    log.error("fetchPlaces: AUTH (${response.status}) — token may be expired or revoked")
-                    state.message = "fetchPlaces: AUTH error (${response.status}) — re-paste access token"
+                    log.error("fetchPlaces: AUTH (${response.status}) \u2014 token may be expired or revoked")
+                    state.message = "fetchPlaces: AUTH error (${response.status}) \u2014 re-paste access token"
                 } else {
                     log.error("fetchPlaces: bad response:${response.status}, ${response.data}")
                     state.message = "fetchPlaces: bad response:${response.status}, ${response.data}"
@@ -577,11 +701,11 @@ private onMembersResponse(response, data) {
         // (fetchMemberLocation), so the app and the driver never act on a second, possibly older, location.
         syncChildDevices()
     } else if (status == 401 || status == 403) {
-        log.error("fetchMembers: access denied (${status}) — the token may be expired/revoked, or the circle may no longer be accessible; open Life360+ and re-paste the token (STEP 1) or re-select the circle (STEP 2)")
-        if (!periodic) state.message = "fetchMembers: access denied (${status}) — open Life360+ and re-paste the access token (STEP 1), or re-select the circle (STEP 2) if it was deleted or you left it"
+        log.error("fetchMembers: access denied (${status}) \u2014 the token may be expired/revoked, or the circle may no longer be accessible; open Life360+ and re-paste the token (STEP 1) or re-select the circle (STEP 2)")
+        if (!periodic) state.message = "fetchMembers: access denied (${status}) \u2014 open Life360+ and re-paste the access token (STEP 1), or re-select the circle (STEP 2) if it was deleted or you left it"
     } else if (status == 404) {
-        log.error("fetchMembers: circle not found (404) — all location updates will fail until you open Life360+ and re-select the circle (STEP 2)")
-        if (!periodic) state.message = "fetchMembers: circle not found — open Life360+ and re-select the circle (STEP 2)"
+        log.error("fetchMembers: circle not found (404) \u2014 all location updates will fail until you open Life360+ and re-select the circle (STEP 2)")
+        if (!periodic) state.message = "fetchMembers: circle not found \u2014 open Life360+ and re-select the circle (STEP 2)"
     } else {
         if (periodic) log.warn("fetchMembers: bad response:${status}") else log.error("fetchMembers: bad response:${status}")
         if (!periodic) state.message = "fetchMembers: bad response:${status}"
@@ -717,7 +841,7 @@ private onLocationResponse(response, Map data) {
             if (moving && staleSecs >= STALE_ETAG_SECS) rtSet(changedKey, nowMs)   // one Early Parked Detection check per window
             if (!moving || staleSecs < STALE_ETAG_SECS || !parkedClampOn(memberId)) {
                 if (logEnable) log.debug("fetchMemberLocation: SUCCESS (200, etag unchanged -> treated as 304), member:${memberName}")
-                if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (unchanged)")
+                if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again (unchanged)")
                 markFetchSuccess(memberId)
                 timed("Reply: unchanged", tReply)
                 return
@@ -741,12 +865,12 @@ private onLocationResponse(response, Map data) {
         notifyChildDevice(memberId, memberObj, ctx)
         if (forced) rtSet("forceUpdate-${memberId}", null)
         timed("Reply: changed", tReply)
-        if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again")
+        if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again")
         markFetchSuccess(memberId)
         if (eTag && !unchanged) state["etag-${memberId}"] = eTag
 
     } else if (status == 304) {
-        if (state.watchdogWarned) log.info("WATCHDOG: cleared — Life360 fetch succeeded again (304)")
+        if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again (304)")
         markFetchSuccess(memberId)
         if (logEnable) log.debug("fetchMemberLocation: SUCCESS (304), prevInTransit:${isMemberInTransit(memberId)}, member:${memberName}")
 
@@ -758,7 +882,7 @@ private onLocationResponse(response, Map data) {
         if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
-            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            state.message = "\u26a0 Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com \u2192 DevTools \u2192 Network \u2192 token packet."
             // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
             // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
             // the latter's unschedule() would otherwise cancel the reminder job notify arms.
@@ -773,13 +897,13 @@ private onLocationResponse(response, Map data) {
         Integer delaySecs = Math.min(retryAfter ?: RATE_LIMIT_FALLBACK_SECS, RATE_LIMIT_MAX_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = Math.max((state.rateLimitedUntilMs ?: 0L) as long, new Date().getTime() + (delaySecs * 1000L))
         log.warn("fetchMemberLocation: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
+        state.message = "Rate limited (429) \u2014 backing off ${delaySecs}s, will retry automatically"
 
     } else if (isTransientStatus(status)) {
         long delaySecs = applyTransientBackoff(memberId)
         int count = state["transientCount-${memberId}"] as int
         log.warn("fetchMemberLocation: TRANSIENT (${status}) x${count} for member:${memberName}; backing off ${delaySecs}s")
-        state.message = "Transient error (${status}) x${count} for member:${memberName} — backing off ${delaySecs}s, will retry automatically"
+        state.message = "Transient error (${status}) x${count} for member:${memberName} \u2014 backing off ${delaySecs}s, will retry automatically"
 
     } else {
         log.error("fetchMemberLocation: unexpected response:${status} for member:${memberName}")
@@ -853,7 +977,7 @@ String handleException(String tag, Exception e) {
         if (state.failCount >= AUTH_FAIL_THRESHOLD) {
             boolean wasExpired = state.tokenLikelyExpired ?: false
             state.tokenLikelyExpired = true
-            state.message = "⚠ Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com → DevTools → Network → token packet."
+            state.message = "\u26a0 Access token appears expired/revoked (HTTP ${status} x${state.failCount}). Re-paste a fresh token from life360.com \u2192 DevTools \u2192 Network \u2192 token packet."
             // Rising edge only: re-arm the slow timer at the 5-min expired rate, THEN send the
             // one-shot device alert. notifyTokenExpired() must come after scheduleSlowTimer() —
             // the latter's unschedule() would otherwise cancel the reminder job notify arms.
@@ -868,12 +992,12 @@ String handleException(String tag, Exception e) {
         Integer delaySecs = Math.min(retryAfter ?: RATE_LIMIT_FALLBACK_SECS, RATE_LIMIT_MAX_SECS) + RATE_LIMIT_BUFFER_SECS
         state.rateLimitedUntilMs = Math.max((state.rateLimitedUntilMs ?: 0L) as long, new Date().getTime() + (delaySecs * 1000L))
         log.warn("${tag}: RATE_LIMIT (429); backing off ${delaySecs}s")
-        state.message = "Rate limited (429) — backing off ${delaySecs}s, will retry automatically"
+        state.message = "Rate limited (429) \u2014 backing off ${delaySecs}s, will retry automatically"
         return "RATE_LIMIT"
     }
     if (isTransientStatus(status)) {
         log.warn("${tag}: TRANSIENT (${status}); will retry next tick")
-        state.message = "Transient error (${status}) — will retry automatically"
+        state.message = "Transient error (${status}) \u2014 will retry automatically"
         return "TRANSIENT"
     }
     def err = null
@@ -886,7 +1010,7 @@ String handleException(String tag, Exception e) {
 private void notifyTokenExpired() {
     if (isEmpty(settings.notifyDevices)) return
     if (settings.notifyTokenExpiry == false) return
-    String msg = "Life360 token expired — re-paste a fresh access token"
+    String msg = "Life360 token expired \u2014 re-paste a fresh access token"
     settings.notifyDevices.each { dev ->
         try {
             dev.deviceNotification(msg)
@@ -910,7 +1034,7 @@ def sendTokenExpiryReminder() {
     if (!state.tokenLikelyExpired) return          // token refreshed, stop chain
     if (settings.notifyTokenExpiry == false) return // master toggle off
     if (isEmpty(settings.notifyDevices)) return
-    String msg = "Life360 token still expired — re-paste a fresh access token"
+    String msg = "Life360 token still expired \u2014 re-paste a fresh access token"
     settings.notifyDevices.each { dev ->
         try {
             dev.deviceNotification(msg)
@@ -968,8 +1092,15 @@ Map getHttpHeaders() {
 // ----------------------------------------------------------------------------
 // Utility functions
 // ----------------------------------------------------------------------------
+/**
+ * Section header bar. Hubitat puts the header in a full-width cell with an 8px side margin, while
+ * half-width inputs (width: 6) get none, so they start 8px further left than the header.
+ * The negative margin pulls the header out to the card's edge, and the style rule gives half-width
+ * cells the same 8px margin, so every input sits indented under its header.
+ */
 static String header(text) {
-    return "<div style='color:#ffffff;font-weight: bold;background-color:#8652ff;padding-top: 10px;padding-bottom: 10px;border: 1px solid #000000;box-shadow: 2px 3px #8B8F8F;border-radius: 10px'><image style='padding: 0px 10px 0px 10px;' src=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/images/logo-white.png width='50'> ${text}</div>"
+    return "<style>.form .mdl-grid > .mdl-cell--6-col{margin-left:8px !important}</style>" +
+        "<div style='margin:0 -16px;color:#ffffff;font-weight: bold;background-color:#8652ff;padding-top: 10px;padding-bottom: 10px;border: 1px solid #000000;box-shadow: 2px 3px #8B8F8F;border-radius: 10px'><image style='padding: 0px 10px 0px 10px;' src=https://raw.githubusercontent.com/jpage4500/hubitat-drivers/master/life360/images/logo-white.png width='50'> ${text}</div>"
 }
 
 static boolean isEmpty(text) {
@@ -1241,7 +1372,7 @@ def handleSlowTimer() { withTiming("Slow tick") { slowTick() } }
 
 private slowTick() {
     // watchdog: if we haven't had a successful fetch in a long time, surface it loudly.
-    // Threshold = max(pollFreq * 10, 10 minutes). state.message is rendered on mainPage,
+    // Threshold = max(pollFreq * 10, 10 minutes). state.message is rendered on mainPage and setupPage,
     // and a log.warn shows up in Hubitat's main log so the user can see something is wrong
     // without needing to rely on the auto_reboot script.
     Long now = new Date().getTime()
@@ -1257,7 +1388,7 @@ private slowTick() {
             if (!state.watchdogWarned) {
                 long ageMin = (long)(ageMs / 60000L)
                 log.warn("WATCHDOG: no successful Life360 update in ${ageMin} min")
-                state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min — token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
+                state.message = "WATCHDOG: no successful Life360 update in ${ageMin} min \u2014 token may be expired or Life360/Cloudflare is blocking; re-paste access token if needed."
                 state.watchdogWarned = true
             }
         }
@@ -1303,7 +1434,7 @@ def handleTokenProbeResponse(response, data) {
     Integer status = response.status
     if (!status) {
         // network-level failure — stay quiet, try again next tick
-        if (logEnable) log.debug("tokenProbe: network error — ${response.getErrorMessage() ?: "(no details)"}")
+        if (logEnable) log.debug("tokenProbe: network error \u2014 ${response.getErrorMessage() ?: "(no details)"}")
         return
     }
     captureCookiesAsync(response)
@@ -1311,7 +1442,7 @@ def handleTokenProbeResponse(response, data) {
     if (status == 200) {
         // service is back — auto-recover; clear state before the JSON parse so a garbled
         // 200 body doesn't leave the app stuck in slow-poll (a valid 200 means auth is OK)
-        log.info("tokenProbe: 200 OK — token is valid; auto-recovering from expired state")
+        log.info("tokenProbe: 200 OK \u2014 token is valid; auto-recovering from expired state")
         resetWatchdog()   // re-arm the WATCHDOG warning and clear its banner
         state.tokenLikelyExpired = false
         state.failCount = 0
@@ -1325,9 +1456,9 @@ def handleTokenProbeResponse(response, data) {
             log.warn("tokenProbe: could not parse units from response body: ${e.message}")
         }
     } else if (status == 401 || status == 403) {
-        if (logEnable) log.debug("tokenProbe: ${status} — token still expired; waiting for user to re-paste")
+        if (logEnable) log.debug("tokenProbe: ${status} \u2014 token still expired; waiting for user to re-paste")
     } else {
-        log.warn("tokenProbe: unexpected status ${status} — will retry next tick")
+        log.warn("tokenProbe: unexpected status ${status} \u2014 will retry next tick")
     }
 }
 
@@ -1370,7 +1501,7 @@ def createChildDevices() {
         if (!childMap.containsKey(externalId)) {
             def member = state.members.find { it.id == memberId }
             if (member == null) {
-                log.warn("createChildDevices: member ${memberId} not found in state.members — skipping")
+                log.warn("createChildDevices: member ${memberId} not found in state.members \u2014 skipping")
                 return
             }
             def memberName = member.firstName ?: memberId
@@ -1451,7 +1582,7 @@ def notifyChildDevice(memberId, memberObj, Map ctx = null) {
     if (isEmpty(settings.place)) return;
     if (isEmpty(state.places)) {
         if (!state.placesEmptyWarned) {
-            log.error("notifyChildDevice: state.places is empty — all location updates blocked; re-open app and press 'Fetch Places'")
+            log.error("notifyChildDevice: state.places is empty \u2014 all location updates blocked; re-open app and press 'Fetch Places'")
             state.placesEmptyWarned = true
         }
         return
@@ -1531,7 +1662,7 @@ private String cookieJarSummary() {
         String name = entry.substring(0, eq)
         if (!raw) return name
         String val = entry.substring(eq + 1)
-        return "${name}=${val.take(8)}…"
+        return "${name}=${val.take(8)}\u2026"
     }.join(", ")
 }
 
@@ -1555,7 +1686,7 @@ void captureCookiesAsync(response) {
                 if (logEnable) {
                     log.debug("captureCookiesAsync: ${isNew ? 'added' : 'updated'} '${name}'")
                 }
-                if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}…")
+                if (getLogRawPayload()) log.trace("captureCookiesAsync: Set-Cookie: ${cookieVal.take(60)}\u2026")
             } else if (logEnable) {
                 log.debug("captureCookiesAsync: ignored malformed Set-Cookie (no name=value)")
             }
@@ -1704,7 +1835,7 @@ private String buildOsmMapHtml(String membersJson, int count) {
 <style>${commonMapStyles()}</style>
 </head>
 <body>
-${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading…</div>'}
+${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading\u2026</div>'}
 <script>
   var members = ${membersJson};
   ${popupBuilderJs()}
@@ -1746,7 +1877,7 @@ ${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wa
       map.fitBounds(bounds, { padding: [40, 40] });
     }
 
-    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' · OSM · auto-refresh 60s';
+    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' \u00b7 OSM \u00b7 auto-refresh 60s';
     setTimeout(function() { window.location.reload(); }, 60000);
   }
 </script>
@@ -1770,7 +1901,7 @@ private String buildGoogleMapHtml(String membersJson, int count, String apiKeyRa
 <style>${commonMapStyles()}</style>
 </head>
 <body>
-${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading…</div>'}
+${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wait for the next poll, then refresh.</div>' : '<div id="map"></div><div class="l360-status" id="status">Loading\u2026</div>'}
 <script>
   var members = ${membersJson};
   ${popupBuilderJs()}
@@ -1822,7 +1953,7 @@ ${count == 0 ? '<div class="l360-empty">No members with location data yet.<br>Wa
       map.fitBounds(bounds, 60);
     }
 
-    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' · Google · auto-refresh 60s';
+    document.getElementById('status').textContent = members.length + ' member' + (members.length === 1 ? '' : 's') + ' \u00b7 Google \u00b7 auto-refresh 60s';
     setTimeout(function() { window.location.reload(); }, 60000);
   }
 </script>

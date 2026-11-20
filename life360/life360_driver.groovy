@@ -118,7 +118,7 @@ metadata {
 preferences {
     input "unitOverride", "enum", title: "Units (this device only)",
         description: "Per-device fallback. The app-level 'Units' setting overrides this when set to anything other than 'Follow Life360 app'.",
-        options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (°F → miles, °C → km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"],
+        options: ["life360": "Follow Life360 app (recommended)", "hubitat": "Follow Hubitat system (\u00b0F \u2192 miles, \u00b0C \u2192 km)", "imperial": "Miles / mph", "metric": "Kilometers / kph"],
         required: true, defaultValue: "life360"
     input "generateHtml", "bool", title: "HTML Fields (tile, avatar)", required: true, defaultValue: false
     input "saveHistory", "bool", title: "Save Location History", description: "Save recent locations (time/lat/lng) to 'history' attribute", required: true, defaultValue: false
@@ -166,7 +166,7 @@ def updated() {
         def oldIsMiles = settings.isMiles
         if (oldIsMiles == false) {
             device.updateSetting("unitOverride", [value: "metric", type: "enum"])
-            log.info "updated: migrated isMiles=false → unitOverride=metric"
+            log.info "updated: migrated isMiles=false \u2192 unitOverride=metric"
         }
     }
     refresh()
@@ -253,7 +253,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     String memberLastName = (member.lastName) ? member.lastName : ""
     // -- home -- (null if the selected place was removed from Life360; treat as absent)
     if (home == null) {
-        log.error("generatePresenceEvent: home place not found — presence update skipped; re-open Life360+ and verify the selected HOME place still exists in Life360")
+        log.error("generatePresenceEvent: home place not found \u2014 presence update skipped; re-open Life360+ and verify the selected HOME place still exists in Life360")
         return false
     }
     Double homeLatitude = toDouble(home.latitude)
@@ -368,7 +368,7 @@ boolean generatePresenceEvent(member, thePlaces, home, Map ctx = null) {
     }
     if (state.earlyParked && (inTransit || !l360InTransit)) state.remove("earlyParked")   // released, or Life360 caught up
 
-    String suffix = showMapsLink ? " — <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
+    String suffix = showMapsLink ? " \u2014 <a href='https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}' target='_blank'>Google Maps link</a>" : ""
     String sStatus = (memberPresence == "present") ? "At Home" : sprintf("%.1f", distanceUnits) + ((useMiles) ? " miles from Home" : " km from Home")
     if (logEnable) log.debug "generatePresenceEvent: ${displayMember(memberFirstName, showNames)}: ${showNames ? "lat:$latitude lng:$longitude" : "location hidden (names off)"} acc:${accuracy}m b:${battery}% wifi:$wifiState status:$sStatus speed:${speedUnits}${useMiles ? 'mph' : 'kph'} inTransit:$inTransit isDriving:$isDriving"
     if (logEachPoll) {
