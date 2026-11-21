@@ -42,7 +42,7 @@ The token is equivalent to your Life360 password — treat it as a secret. Token
 
 - **Map view URL contains a live access token.** Anyone with LAN access to your hub and that URL can pull every tracked member's live coordinates. Don't share it or screenshot it. If the token leaks, disable and re-enable OAuth (Apps Code → Life360+ → OAuth) to rotate it.
 - **Google Maps API key is visible in page HTML.** If you set one, lock it down in Google Cloud Console: HTTP-referrer restriction to your hub's hostname, API restriction to _Maps JavaScript API_ only.
-- **Logs may include names, places, and coordinates.** Turn off _Include Names and Places in Logs_ and _Include Google Maps Link in Logs_ (app settings → Logging) before sharing hub logs publicly.
+- **Logs may include names, places, and coordinates.** Turn off _Include Names and Places in Logs_ and _Include Google Maps Link in Logs_ (app settings → Advanced Settings → Logging) before sharing hub logs publicly.
 - Cloudflare cookies are load-bearing — missing them causes 403s and polling goes dark. See [APP_SPEC.md](APP_SPEC.md) §0 if you're debugging auth failures.
 
 ## Related files
