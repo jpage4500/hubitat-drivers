@@ -89,7 +89,7 @@ mappings {
 
 /**
  * Main page: a status line, Setup (STEP 1–5 inline until setup is complete, then a link to setupPage),
- * Polling, Map View, and a link to advancedPage.
+ * Polling, Notifications (token-expiry alerts), Map View, and a link to advancedPage.
  * Setting names are the same on every page; Hubitat stores settings by name, not by page.
  */
 def mainPage() {
@@ -120,6 +120,18 @@ def mainPage() {
                 input(name: "dynamicPollFreq", type: "enum", title: "Dynamic Refresh Rate", required: false, defaultValue: "20", width: 6, options: ['5': '5 seconds', '10': '10 seconds', '20': '20 seconds', '30': '30 seconds'])
             }
             input(name: "parkedClamp", type: "bool", defaultValue: false, title: "Early Parked Detection", description: "Show a phone as not moving sooner: when Life360 still says moving but has sent nothing new for 4 minutes and the last speed was under 3.5 mph. A phone showing not moving only shows a start at 1 mph or faster, which ignores 0 mph moving blips, or 3.5 mph if this setting parked it. Each member device can override this.")
+        }
+
+        // On the main page, not Advanced: these alerts only help if they were set up before the token expires
+        section(header("Notifications")) {
+            input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
+            if (settings.notifyTokenExpiry != false) {
+                input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
+                if (!isEmpty(settings.notifyDevices)) {
+                    paragraph ""   // full-width spacer forces the dropdown onto its own row, below the device selector
+                    input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
+                }
+            }
         }
 
         section(header("Map View")) {
@@ -155,7 +167,7 @@ def setupPage() {
 
 /**
  * Settings that are set once or only used for troubleshooting: units, map provider, logging,
- * token-expiry alerts, Force Update and diagnostics.
+ * Force Update and diagnostics.
  */
 def advancedPage() {
     consumeButtonResults()
@@ -183,18 +195,9 @@ def advancedPage() {
         }
 
         section(header("Troubleshooting")) {
-            paragraph subHeader("Token Expiry Alerts", true)
-            input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
-            if (settings.notifyTokenExpiry != false) {
-                input(name: "notifyDevices", type: "capability.notification", title: "Notify Device on Token Failure", multiple: true, required: false, width: 6, description: "Devices to notify when the Life360 access token appears expired/revoked. Useful so you know to re-paste a fresh token without watching the logs.", submitOnChange: true)
-                if (!isEmpty(settings.notifyDevices)) {
-                    paragraph ""   // full-width spacer forces the dropdown onto its own row, below the device selector
-                    input(name: "notifyRepeatHours", type: "enum", title: "Repeat Reminder Every", defaultValue: "never", width: 6, options: ['never': 'Never (notify once)', '2': '2 hours', '6': '6 hours', '12': '12 hours', '24': '24 hours', '48': '48 hours'])
-                }
-            }
-
-            if (!isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)) {
-                paragraph subHeader("Force Update")
+            boolean showForceUpdate = !isEmpty(access_token) && !isEmpty(settings.users) && !isEmpty(state.members)
+            if (showForceUpdate) {
+                paragraph subHeader("Force Update", true)
                 paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
                 def forceMembers = state.members
                     .findAll { settings.users.contains(it.id) }
@@ -205,7 +208,7 @@ def advancedPage() {
                 if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
             }
 
-            paragraph subHeader("Diagnostics")
+            paragraph subHeader("Diagnostics", !showForceUpdate)
             input(name: "logRawPayload", type: "bool", defaultValue: false, submitOnChange: true, title: "Log Raw API Diagnostics", description: "Verbose. Logs sensitive data (GPS, partial token, cookies, payloads). Debug only \u2014 don't share resulting logs.")
             input(name: "timingStats", type: "bool", defaultValue: false, submitOnChange: true, title: "Collect Timing Stats", description: "Count and time the app's main functions, in memory only. Resets on reboot or when turned off.")
             if (settings.timingStats) paragraph timingTable() else if (rtGet("timingSinceMs") != null) clearTiming()
@@ -283,10 +286,17 @@ private static String subHeader(String text, boolean first = false) {
  * page is shown, but not when the same page re-renders after a submitOnChange input, so changing a
  * setting doesn't jump the page. Put it in one section title per page; a second copy on the same page
  * does nothing.
+ * It resets every scrolled ancestor of a hidden marker rather than one container by id, so it keeps working if
+ * a firmware update renames or nests the hub's content container. If the hub UI doesn't run the script at all,
+ * nothing breaks: the page just opens where it was scrolled.
  */
 private static String scrollToTopOnOpen(String pageName) {
-    return "<script>(function(){var p='${pageName}';if(window.l360Page!==p){var c=document.getElementById('divMainUIContentContainer');" +
-        "if(c)c.scrollTop=0;window.scrollTo(0,0);}window.l360Page=p;})();</script>"
+    return "<span id='l360top-${pageName}' style='display:none'></span>" +
+        "<script>(function(){var p='${pageName}';if(window.l360Page===p)return;window.l360Page=p;" +
+        "function go(retry){var m=document.getElementById('l360top-'+p);" +
+        "if(!m){if(retry)setTimeout(function(){go(false)},0);return;}" +
+        "for(var e=m.parentElement;e;e=e.parentElement){if(e.scrollTop>0)e.scrollTop=0;}window.scrollTo(0,0);}" +
+        "go(true);})();</script>"
 }
 
 private void instructionsLink() {

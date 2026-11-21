@@ -434,10 +434,12 @@ Three pages:
 
 - **Main:** the steps inline until setup is complete (every step filled in, a successful fetch, no expired
   token). After that a status line (circle, home, member count, age of the last success, **Refresh Now**)
-  and a **Setup** link replace them. Then Polling, Map View (link only), and a link to Advanced Settings.
+  and a **Setup** link replace them. Then Polling, Notifications (token-expiry alerts — kept on the main page
+  because they only help if set up before the token expires), Map View (link only), and a link to Advanced
+  Settings.
 - **Setup:** STEP 1–5, for changes after setup is complete.
-- **Advanced Settings:** Units, Map Provider (Google Maps API key), Logging, and Troubleshooting (token-expiry
-  alerts, Force Update, Log Raw API Diagnostics, Collect Timing Stats).
+- **Advanced Settings:** Units, Map Provider (Google Maps API key), Logging, and Troubleshooting (Force Update,
+  Log Raw API Diagnostics, Collect Timing Stats).
 
 Settings keep the same names whichever page shows them, so moving one between pages needs no migration. A
 button result that must survive the single page re-render uses a `*StatusPending` flag that
