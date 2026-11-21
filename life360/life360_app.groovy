@@ -25,12 +25,19 @@ import java.util.concurrent.ConcurrentHashMap
 @Field static final int    STALE_ETAG_SECS                 = 240   // unchanged etag this long (a moving phone's fixes are at most ~60 s apart) and Life360 still says in transit -> Early Parked Detection (if on) shows inTransit false
 @Field static final String LIFE360_BASE_URL_V3             = "https://api-cloudfront.life360.com/v3"
 @Field static final String LIFE360_BASE_URL_V4             = "https://api-cloudfront.life360.com/v4"
+@Field static final String LIFE360_BASE_URL_V6             = "https://api-cloudfront.life360.com/v6"
+@Field static final double PLACE_MIN_ACCURACY_M            = 100d  // Place Alerts: a fix less accurate than max(place radius, this) can't decide in or out
+@Field static final double PLACE_EXIT_BUFFER_M             = 50d   // Place Alerts: leaving needs radius + max(this, 25% of radius), so edge jitter doesn't flip in and out
+@Field static final int    PLACE_ALERT_LOG_SIZE            = 5     // Place Alerts: recent alerts kept for the status section
+@Field static final double EARTH_RADIUS_M                  = 6372800d  // mean Earth radius, same value as the driver's haversine
+@Field static final String PLACE_ARRIVE_MSG                = "%name% arrived at %place%"
+@Field static final String PLACE_LEAVE_MSG                 = "%name% left %place%"
 
 // Per-member state key prefixes, by scope. SESSION keys (backoff) are dropped on auth failure
 // and reboot (clearSessionCache); IDENTITY keys, including etags, outlive both. Removing a member drops
 // both (cleanupMemberState). Single source of truth so the two cleanup paths can't drift.
 @Field static final List<String> MEMBER_STATE_PREFIXES_SESSION  = ["transientCount-", "transientUntilMs-"]
-@Field static final List<String> MEMBER_STATE_PREFIXES_IDENTITY = ["etag-", "inTransit-"]
+@Field static final List<String> MEMBER_STATE_PREFIXES_IDENTITY = ["etag-", "inTransit-", "placesIn-"]
 
 // 5xx statuses that are a permanent server-side "no" rather than a blip worth retrying. Every
 // other 5xx — Life360 origin 500/502/503/504 and the Cloudflare edge codes 520-530 — heals on
@@ -76,6 +83,7 @@ preferences {
     page(name: "mainPage")
     page(name: "setupPage")
     page(name: "advancedPage")
+    page(name: "placeAlertsPage")
 }
 
 mappings {
@@ -89,7 +97,8 @@ mappings {
 
 /**
  * Main page: a status line, Setup (STEP 1–5 inline until setup is complete, then a link to setupPage),
- * Polling, Notifications (token-expiry alerts), Map View, and a link to advancedPage.
+ * Polling, a Place Alerts link (once setup is complete), Notifications (token-expiry alerts), Map View, and a
+ * link to advancedPage.
  * Setting names are the same on every page; Hubitat stores settings by name, not by page.
  */
 def mainPage() {
@@ -122,6 +131,12 @@ def mainPage() {
             input(name: "parkedClamp", type: "bool", defaultValue: false, title: "Early Parked Detection", description: "Show a phone as not moving sooner: when Life360 still says moving but has sent nothing new for 4 minutes and the last speed was under 3.5 mph. A phone showing not moving only shows a start at 1 mph or faster, which ignores 0 mph moving blips, or 3.5 mph if this setting parked it. Each member device can override this.")
         }
 
+        if (setupDone) {
+            section(header("Place Alerts")) {
+                href name: "placeAlertsHref", page: "placeAlertsPage", title: "Place Alerts", description: placeAlertsSummary(), width: 6
+            }
+        }
+
         // On the main page, not Advanced: these alerts only help if they were set up before the token expires
         section(header("Notifications")) {
             input(name: "notifyTokenExpiry", type: "bool", defaultValue: true, submitOnChange: true, title: "Enable Token Expiry Notifications", description: "Master switch for token-expiry alerts. Turn off to silence all alerts without removing your notification devices.")
@@ -147,6 +162,51 @@ def mainPage() {
 
         section(header("More")) {
             href name: "advancedHref", page: "advancedPage", title: "Advanced Settings", description: "Units, map provider, logging and troubleshooting", width: 6
+        }
+    }
+}
+
+/**
+ * Place Alerts: a notification when a watched member arrives at or leaves a watched Life360 Place.
+ * Detection runs in checkPlaceAlerts() on every new location fix.
+ */
+def placeAlertsPage() {
+    consumeButtonResults()
+    dynamicPage(name: "placeAlertsPage", title: "Place Alerts") {
+        section(header("Place Alerts") + scrollToTopOnOpen("placeAlertsPage")) {
+            paragraph "<small style='color:#666'>Get a notification when a member arrives at or leaves a Life360 Place. Create places and set their size in the Life360 app.</small>"
+            input(name: "placeAlertsEnabled", type: "bool", defaultValue: false, submitOnChange: true, title: "Enable Place Alerts")
+        }
+
+        if (settings.placeAlertsEnabled) {
+            section(header("What to Watch")) {
+                Map placeOptions = (state.places ?: []).collectEntries { [it.id, it.name] }.sort { a, b -> a.value <=> b.value }
+                input(name: "placeAlertPlaces", type: "enum", title: "Places", multiple: true, required: false, options: placeOptions, submitOnChange: true, width: 6)
+                input("refreshPlacesBtn", "button", title: "Refresh Places")
+                if (state.placesRefreshStatus) paragraph state.placesRefreshStatus
+                paragraph "<small style='color:#666'>${placeOptions.size()} places in Life360. New places show up here within about 15 minutes, or tap Refresh Places.</small>"
+                input(name: "placeAlertMembers", type: "enum", title: "Members", multiple: true, required: false, options: trackedMemberOptions(), submitOnChange: true, width: 6)
+                input(name: "placeAlertWhen", type: "enum", title: "Alert When", defaultValue: "both", width: 6, options: ["both": "Arrives and leaves", "arrive": "Arrives", "leave": "Leaves"])
+            }
+
+            section(header("Send To")) {
+                input(name: "placeAlertDevices", type: "capability.notification", title: "Notify Devices", multiple: true, required: false, submitOnChange: true, width: 6)
+                paragraph ""   // full-width spacer: the messages start on their own row, below the device selector
+                input(name: "placeArriveMsg", type: "text", title: "Arrive Message", defaultValue: PLACE_ARRIVE_MSG, required: false, submitOnChange: true, width: 6)
+                input(name: "placeLeaveMsg", type: "text", title: "Leave Message", defaultValue: PLACE_LEAVE_MSG, required: false, submitOnChange: true, width: 6)
+                paragraph "<small style='color:#666'>Fill-ins: %name% (the member's first name), %place%, %time%</small>"
+            }
+
+            section(header("False Alerts")) {
+                input(name: "placeAlertShortTrip", type: "enum", title: "Ignore Short Trips", defaultValue: "2", width: 6, options: ["0": "Off", "1": "1 minute", "2": "2 minutes", "5": "5 minutes", "10": "10 minutes"])
+                paragraph "<small style='color:#666'>If a member leaves a place and comes back within this time, no alerts are sent. This stops GPS drift at the edge of a place from sending false alerts. Leave alerts wait this long before they're sent.</small>"
+            }
+
+            section(header("Status")) {
+                paragraph placeStatusHtml()
+                input("placeAlertTestBtn", "button", title: "Send Test Alert")
+                if (state.placeAlertTestStatus) paragraph state.placeAlertTestStatus
+            }
         }
     }
 }
@@ -199,11 +259,7 @@ def advancedPage() {
             if (showForceUpdate) {
                 paragraph subHeader("Force Update", true)
                 paragraph "<small style='color:#666'>Push a location-update request to a member's phone. Life360 will ask the device for a fresh GPS fix (~5 seconds).</small>"
-                def forceMembers = state.members
-                    .findAll { settings.users.contains(it.id) }
-                    .collectEntries { [it.id, "${it.firstName ?: ''} ${it.lastName ?: ''}".trim() ?: it.id] }
-                    .sort { a, b -> a.value <=> b.value }
-                input "forceUpdateMember", "enum", multiple: false, required: false, title: "Member", options: forceMembers, submitOnChange: true, width: 6
+                input "forceUpdateMember", "enum", multiple: false, required: false, title: "Member", options: trackedMemberOptions(), submitOnChange: true, width: 6
                 input("forceUpdateBtn", "button", title: "Force Update")
                 if (state.forceUpdateStatus) paragraph state.forceUpdateStatus
             }
@@ -318,6 +374,16 @@ private void consumeButtonResults() {
     } else {
         state.forceUpdateStatus = null
     }
+    if (state.placeAlertTestStatusPending) {
+        state.placeAlertTestStatusPending = false
+    } else {
+        state.placeAlertTestStatus = null
+    }
+    if (state.placesRefreshStatusPending) {
+        state.placesRefreshStatusPending = false
+    } else {
+        state.placesRefreshStatus = null
+    }
 }
 
 /**
@@ -360,6 +426,17 @@ private static String htmlText(String s) {
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
 }
 
+/**
+ * Members tracked in Setup, as dropdown options (memberId -> full name), sorted by name.
+ */
+private Map trackedMemberOptions() {
+    if (isEmpty(settings.users) || isEmpty(state.members)) return [:]
+    return state.members
+        .findAll { settings.users.contains(it.id) }
+        .collectEntries { [it.id, "${it.firstName ?: ''} ${it.lastName ?: ''}".trim() ?: it.id] }
+        .sort { a, b -> a.value <=> b.value }
+}
+
 private String getViewUrl() {
     if (isEmpty(state.accessToken)) return null
     return "${getFullLocalApiServerUrl()}/view?access_token=${state.accessToken}"
@@ -392,6 +469,12 @@ def appButtonHandler(String button) {
             break
         case "checkTokenBtn":
             checkToken()
+            break
+        case "refreshPlacesBtn":
+            refreshPlacesFromV6()
+            break
+        case "placeAlertTestBtn":
+            sendTestPlaceAlert()
             break
         case "forceUpdateBtn":
             forceMemberUpdate(settings.forceUpdateMember)
@@ -873,6 +956,11 @@ private onLocationResponse(response, Map data) {
         if (locTs != null) rtSet(locTsKey, locTs)
         if (ctx?.logRawPayload ?: getLogRawPayload()) log.trace("fetchMemberLocation: 200 member:${memberName} ${memberObj}")
         notifyChildDevice(memberId, memberObj, ctx)
+        try {
+            withTiming("Place alerts") { checkPlaceAlerts(memberId, memberObj) }
+        } catch (e) {
+            log.error("checkPlaceAlerts: member:${memberName}: ${e}")
+        }
         if (forced) rtSet("forceUpdate-${memberId}", null)
         timed("Reply: changed", tReply)
         if (state.watchdogWarned) log.info("WATCHDOG: cleared \u2014 Life360 fetch succeeded again")
@@ -1067,7 +1155,7 @@ private Integer readRetryAfterSecs(Exception e) {
 }
 
 private Map life360Params(String path, int version = 3) {
-    String base = (version == 4) ? LIFE360_BASE_URL_V4 : LIFE360_BASE_URL_V3
+    String base = (version == 6) ? LIFE360_BASE_URL_V6 : (version == 4) ? LIFE360_BASE_URL_V4 : LIFE360_BASE_URL_V3
     return [
         uri    : "${base}${path}",
         headers: getHttpHeaders(),
@@ -1186,6 +1274,7 @@ def updated() {
         fetchMembers()
     }
     removeObsoleteStateKeys()
+    if (!settings.placeAlertsEnabled) clearPlaceAlertState()
     syncChildDevices()
     refreshUserSettings()           // refresh the account's units preference (settings.unitOfMeasure)
     scheduleSlowTimer()
@@ -1243,6 +1332,7 @@ def scheduleSlowTimer() {
     // it. Only re-arms the timer; it does NOT re-send device alerts, so a reboot/refresh while
     // expired stays silent. The one-shot alert is fired by the auth-failure rising edge instead.
     if (state.tokenLikelyExpired) scheduleTokenExpiryReminder()
+    schedulePlaceLeaveFlush()   // re-arm a pending Place Alerts leave, also killed by unschedule()
 
     int baseSecs = state.tokenLikelyExpired ? TOKEN_EXPIRED_POLL_SECS : pollFreqSecs()
 
@@ -1413,6 +1503,7 @@ private slowTick() {
             && now - lastMembersPollMs >= membersIntervalMs - 5000L) {   // slack: cron jitter must not cost a whole extra tick
         rtSet("lastMembersPollMs", now)
         fetchMembers(true)
+        if (settings.placeAlertsEnabled) refreshPlacesInBackground()   // places added in Life360 show up for Place Alerts
     }
 
     // when the token is flagged expired, probe /users/me instead of fetching locations —
@@ -1568,6 +1659,10 @@ private void cleanupMemberState(String memberId) {
     rtSet("lastFetch-${memberId}", null)
     rtSet("forceUpdate-${memberId}", null)
     rtSet("inTransit-${memberId}", null)
+    Map pending = state.placeLeavePending as Map   // Place Alerts leaves waiting out the short-trip time
+    if (pending?.keySet()?.any { it.toString().startsWith("${memberId}|") }) {
+        state.placeLeavePending = pending.findAll { k, v -> !k.toString().startsWith("${memberId}|") }
+    }
 }
 
 /**
@@ -1639,6 +1734,342 @@ private Map buildPollContext() {
     ctx.parkedClamp  = (settings.parkedClamp == true)   // the app's Early Parked Detection default
     ctx.timingStats  = (settings.timingStats == true)
     return ctx
+}
+
+// ----------------------------------------------------------------------------
+// Place Alerts
+// ----------------------------------------------------------------------------
+
+/**
+ * Works out which Life360 Places a member is in from a new location fix and sends arrive/leave
+ * notifications for the watched members and places. Called after each changed location reaches the device.
+ *
+ * - Every place is tracked for every member, not only the watched ones, in state "placesIn-<memberId>"
+ *   (placeId -> ms the member entered). Adding a place or member to the watch lists while someone is
+ *   already there therefore sends nothing.
+ * - A member's first fix (no stored state yet) is recorded without alerts.
+ * - Inside = within the place's radius. Leaving needs the radius plus a buffer (25% of the radius, at
+ *   least PLACE_EXIT_BUFFER_M), so GPS jitter at the edge doesn't flip in and out. A fix less accurate
+ *   than the place's radius (or PLACE_MIN_ACCURACY_M) can't decide, so the previous answer stands.
+ * - A place missing from state.places keeps its last answer (see below), so it never alerts.
+ * - A leave waits placeAlertShortTrip minutes in state.placeLeavePending; coming back in that time
+ *   cancels both the leave and the arrive alert.
+ */
+private void checkPlaceAlerts(String memberId, memberObj) {
+    if (!settings.placeAlertsEnabled || isEmpty(state.places)) return
+    def loc = memberObj?.location
+    Double lat = parseDouble(loc?.latitude)
+    Double lng = parseDouble(loc?.longitude)
+    if (lat == null || lng == null) return
+    double accuracy = parseDouble(loc?.accuracy) ?: 0d
+    long nowMs = now()
+
+    String key = "placesIn-${memberId}"
+    Map prev = state[key] as Map
+    Map current = [:]
+    state.places.each { p ->
+        Double radius = parseDouble(p.radius)
+        Double pLat = parseDouble(p.latitude)
+        Double pLng = parseDouble(p.longitude)
+        if (radius == null || pLat == null || pLng == null) return
+        String placeId = p.id.toString()
+        boolean wasIn = prev?.containsKey(placeId)
+        if (accuracy > Math.max(radius, PLACE_MIN_ACCURACY_M)) {   // too rough to decide: keep the previous answer
+            if (wasIn) current[placeId] = prev[placeId]
+            return
+        }
+        double limit = wasIn ? radius + Math.max(PLACE_EXIT_BUFFER_M, radius * 0.25d) : radius
+        if (distanceMeters(lat, lng, pLat, pLng) <= limit) current[placeId] = wasIn ? prev[placeId] : nowMs
+    }
+    // A place missing from the list right now (Setup's v3 Fetch Places leaves out newer places until the next
+    // v6 refresh, or it was deleted in Life360) keeps its last answer, so it can't send a leave now or a
+    // false arrive when it comes back.
+    Set known = state.places.collect { it.id.toString() } as Set
+    prev?.each { k, v -> if (!known.contains(k.toString())) current[k.toString()] = v }
+    if (prev == current) return
+    state[key] = current
+    if (prev == null) return   // first fix for this member: learn where they are without alerting
+
+    if (!(settings.placeAlertMembers ?: []).contains(memberId)) return
+    List watched = settings.placeAlertPlaces ?: []
+    (current.keySet() - prev.keySet()).findAll { watched.contains(it) }.each { placeArrived(memberId, it.toString(), nowMs) }
+    (prev.keySet() - current.keySet()).findAll { watched.contains(it) }.each { placeLeft(memberId, it.toString(), nowMs) }
+}
+
+private void placeArrived(String memberId, String placeId, long atMs) {
+    Map pending = (state.placeLeavePending ?: [:]) as Map
+    String pendingKey = "${memberId}|${placeId}".toString()
+    if (pending.containsKey(pendingKey)) {
+        pending.remove(pendingKey)
+        savePlaceLeavePending(pending)
+        if (logEnable) log.debug("Place Alerts: ${memberDisplayName(memberId)} came back to ${placeLogName(placeId)} within the short-trip time; no alerts")
+        return
+    }
+    if (placeAlertWhen() != "leave") sendPlaceAlert(memberId, placeId, true, atMs)
+}
+
+private void placeLeft(String memberId, String placeId, long atMs) {
+    int waitMin = (settings.placeAlertShortTrip ?: "2").toInteger()
+    if (waitMin <= 0) {
+        if (placeAlertWhen() != "arrive") sendPlaceAlert(memberId, placeId, false, atMs)
+        return
+    }
+    // held even when leave alerts are off, so a quick return also skips the arrive alert
+    Map pending = (state.placeLeavePending ?: [:]) as Map
+    pending["${memberId}|${placeId}".toString()] = [due: atMs + waitMin * 60000L, at: atMs]
+    savePlaceLeavePending(pending)
+}
+
+/**
+ * Scheduled by schedulePlaceLeaveFlush(): sends the leave alerts whose short-trip wait is over.
+ */
+def flushPlaceLeaves() {
+    Map pending = (state.placeLeavePending ?: [:]) as Map
+    long nowMs = now()
+    Map due = pending.findAll { k, v -> (v.due as long) <= nowMs + 1000L }
+    if (due) {
+        due.each { k, v ->
+            pending.remove(k)
+            List parts = k.toString().tokenize("|")
+            if (settings.placeAlertsEnabled && parts.size() == 2 && placeAlertWhen() != "arrive") {
+                sendPlaceAlert(parts[0], parts[1], false, v.at as long)
+            }
+        }
+    }
+    savePlaceLeavePending(pending)
+}
+
+private void savePlaceLeavePending(Map pending) {
+    if (pending) state.placeLeavePending = pending else state.remove("placeLeavePending")
+    schedulePlaceLeaveFlush()
+}
+
+/**
+ * Arms flushPlaceLeaves for the earliest pending leave. Also called by scheduleSlowTimer(), whose
+ * unschedule() cancels every job.
+ */
+private void schedulePlaceLeaveFlush() {
+    Map pending = state.placeLeavePending as Map
+    if (!pending) {
+        unschedule("flushPlaceLeaves")
+        return
+    }
+    long next = pending.values().collect { it.due as long }.min()
+    long secs = Math.max(1L, (long) Math.ceil((next - now()) / 1000d))
+    runIn(secs, "flushPlaceLeaves")
+}
+
+private void sendPlaceAlert(String memberId, String placeId, boolean arrived, long atMs) {
+    String template = arrived ? (settings.placeArriveMsg ?: PLACE_ARRIVE_MSG) : (settings.placeLeaveMsg ?: PLACE_LEAVE_MSG)
+    String msg = fillPlaceMessage(template, memberFirstName(memberId), placeName(placeId), atMs)
+    sendPlaceNotification(msg)
+    log.info("Place Alerts: ${showNamesInLogs() ? msg : "member:${memberId} ${arrived ? 'arrived at' : 'left'} place:${placeId}"}")
+    List entries = (state.placeAlertLog ?: []) as List
+    state.placeAlertLog = ([[ms: atMs, text: msg]] + entries).take(PLACE_ALERT_LOG_SIZE)
+}
+
+private void sendPlaceNotification(String msg) {
+    settings.placeAlertDevices?.each { dev ->
+        try {
+            dev.deviceNotification(msg)
+        } catch (e) {
+            log.error("Place Alerts: ${dev?.displayName}: ${e}")
+        }
+    }
+}
+
+private void sendTestPlaceAlert() {
+    state.placeAlertTestStatusPending = true   // tell the page to display the result on re-render
+    if (isEmpty(settings.placeAlertDevices)) {
+        state.placeAlertTestStatus = "<span style='color:#a00'>&#10007; Choose a notify device first.</span>"
+        return
+    }
+    String memberId = (settings.placeAlertMembers ?: [])[0]
+    String placeId = (settings.placeAlertPlaces ?: [])[0]
+    String name = memberId ? memberFirstName(memberId) : "Alex"
+    String place = placeId ? placeName(placeId) : "School"
+    String msg = fillPlaceMessage(settings.placeArriveMsg ?: PLACE_ARRIVE_MSG, name, place, now()) + " (test)"
+    sendPlaceNotification(msg)
+    state.placeAlertTestStatus = "<span style='color:#080'>&#10003; Sent: ${htmlText(msg)}</span>"
+}
+
+private String fillPlaceMessage(String template, String name, String place, long atMs) {
+    return template.replace("%name%", name ?: "").replace("%place%", place ?: "").replace("%time%", formatTime(atMs))
+}
+
+/**
+ * Place Alerts page status: where each watched member is, then the most recent alerts.
+ */
+private String placeStatusHtml() {
+    Map names = trackedMemberOptions()
+    List members = (settings.placeAlertMembers ?: []).findAll { names.containsKey(it) }
+    List watched = settings.placeAlertPlaces ?: []
+    if (!members || !watched) return "<small style='color:#666'>Choose places and members above to see where everyone is.</small>"
+
+    Map placeNames = (state.places ?: []).collectEntries { [it.id, it.name] }
+    String rows = members.collect { id ->
+        Map inside = state["placesIn-${id}"] as Map
+        String at
+        if (inside == null) {
+            at = "<span style='color:#666'>Waiting for a location update</span>"
+        } else {
+            Map here = inside.findAll { k, v -> watched.contains(k) && placeNames.containsKey(k) }
+            at = here ? here.collect { k, v -> "${htmlText(placeNames[k])} <span style='color:#666'>since ${formatTime(v as Long, true)}</span>" }.join(", ")
+                      : "<span style='color:#666'>Not at a watched place</span>"
+        }
+        "<tr><td style='padding:4px 24px 4px 0'>${htmlText(names[id])}</td><td style='padding:4px 0'>${at}</td></tr>"
+    }.join("")
+
+    String recent = (state.placeAlertLog ?: []).collect { e ->
+        "<div><span style='color:#666;display:inline-block;min-width:120px'>${formatTime(e.ms as Long, true)}</span>${htmlText(e.text)}</div>"
+    }.join("")
+    return "<table style='border-collapse:collapse'>${rows}</table>" +
+        "<div style='margin-top:14px;font-weight:bold'>Recent Alerts</div>" +
+        (recent ?: "<small style='color:#666'>None yet</small>")
+}
+
+private String placeAlertsSummary() {
+    if (!settings.placeAlertsEnabled) return "Off. Get a notification when someone arrives at or leaves a place"
+    int places = (settings.placeAlertPlaces ?: []).size()
+    int members = (settings.placeAlertMembers ?: []).size()
+    return "On: ${places} ${places == 1 ? 'place' : 'places'}, ${members} ${members == 1 ? 'member' : 'members'}"
+}
+
+private String placeAlertWhen() { return settings.placeAlertWhen ?: "both" }
+
+private String placeName(String placeId) {
+    return state.places?.find { it.id == placeId }?.name ?: "a place"
+}
+
+private String placeLogName(String placeId) {
+    return showNamesInLogs() ? placeName(placeId) : placeId
+}
+
+private String memberFirstName(String memberId) {
+    return state.members?.find { it.id == memberId }?.firstName ?: memberId
+}
+
+/**
+ * Turning Place Alerts off forgets where everyone was, so turning it back on later starts fresh instead
+ * of comparing against old positions.
+ */
+private void clearPlaceAlertState() {
+    removeStateKeysWithPrefix(["placesIn-"])
+    state.remove("placeLeavePending")
+    unschedule("flushPlaceLeaves")
+}
+
+/**
+ * Places from the v6 API, used only by Place Alerts (its Refresh Places button and the background refresh).
+ * v3 /circles/{id}/places, which Setup's Fetch Places still uses so nothing changes for existing installs,
+ * leaves out places added recently in the Life360 app; v6 returns them all, with the same ids.
+ * v6 items: [id, name, latitude, longitude, radiusMeters, kind, circleId, ownerId, alerts]. They're stored
+ * in the v3 shape (numbers as strings, radiusMeters as radius) so everything that reads state.places,
+ * including the HOME place sent to the driver, sees the same thing whichever call wrote it.
+ * @return the places, or null when the reply has none
+ */
+private static List parseV6Places(json) {
+    List items = (json instanceof Map && json.items instanceof List) ? json.items : null
+    List places = items?.findAll { it?.id && it.latitude != null && it.longitude != null && it.radiusMeters != null }
+        ?.collect { [id: it.id, name: it.name, latitude: it.latitude.toString(), longitude: it.longitude.toString(), radius: it.radiusMeters.toString()] }
+    return places ?: null
+}
+
+/**
+ * Refresh Places button on the Place Alerts page. Keeps the current list when the reply has no places.
+ */
+private void refreshPlacesFromV6() {
+    state.placesRefreshStatusPending = true   // tell the page to display the result on re-render
+    if (isEmpty(circle)) return
+    def params = life360Params("/circles/${circle}/places", 6)
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    if (getLogRawPayload()) log.trace("refreshPlacesFromV6: GET ${params.uri}")
+    try {
+        httpGet(params) { response ->
+            captureCookies(response)
+            if (getLogRawPayload()) log.trace("refreshPlacesFromV6: ${response.status} ${response.data}")
+            List places = (response.status == 200) ? parseV6Places(response.data) : null
+            if (places) {
+                if (places != state.places) {
+                    state.places = places
+                    forceNextDeviceUpdate()   // the HOME place may have changed size
+                }
+                if (logEnable) log.debug("refreshPlacesFromV6: ${places.size()} places: ${places.collect { showNamesInLogs() ? it.name : it.id }}")
+                state.placesRefreshStatus = "<span style='color:#080'>&#10003; Places refreshed</span>"
+            } else {
+                log.warn("refreshPlacesFromV6: status:${response.status}, no places in the reply; keeping the current list")
+                state.placesRefreshStatus = "<span style='color:#a00'>&#10007; Life360 sent no places (${response.status}); keeping the current list</span>"
+            }
+        }
+    } catch (e) {
+        handleException("refresh places", e)
+        state.placesRefreshStatus = "<span style='color:#a00'>&#10007; Couldn't refresh places; keeping the current list</span>"
+    }
+}
+
+/**
+ * Re-reads the circle's places from the v6 API in the background (on the roster refresh, while Place
+ * Alerts is on), so places added in Life360 show up without pressing Refresh Places. Keeps the current
+ * list on any error or an empty reply.
+ */
+private void refreshPlacesInBackground() {
+    if (isEmpty(circle)) return
+    def params = life360Params("/circles/${circle}/places", 6)
+    def cookies = state["cookies"]
+    if (cookies) params["headers"]["Cookie"] = cookies
+    asynchttpGet("handlePlacesResponse", params)
+}
+
+def handlePlacesResponse(response, data) {
+    Integer status = response.status
+    if (!status) {
+        if (logEnable) log.debug("handlePlacesResponse: network error: ${response.getErrorMessage() ?: "(no details)"}")
+        return
+    }
+    captureCookiesAsync(response)
+    if (status != 200) {
+        if (logEnable) log.debug("handlePlacesResponse: status:${status}; keeping the current places list")
+        return
+    }
+    List places
+    try {
+        places = parseV6Places(response.json)
+    } catch (e) {
+        log.warn("handlePlacesResponse: could not read places: ${e.message}")
+        return
+    }
+    if (!places || places == state.places) return
+    state.places = places
+    if (logEnable) log.debug("handlePlacesResponse: places list updated (${places.size()} places)")
+}
+
+private static Double parseDouble(value) {
+    if (value == null) return null
+    try {
+        return value.toString().toDouble()
+    } catch (ignored) {
+        return null
+    }
+}
+
+// great-circle distance in meters
+private static double distanceMeters(double lat1, double lng1, double lat2, double lng2) {
+    double dLat = Math.toRadians(lat2 - lat1)
+    double dLng = Math.toRadians(lng2 - lng1)
+    double sinLat = Math.sin(dLat / 2d)
+    double sinLng = Math.sin(dLng / 2d)
+    double a = sinLat * sinLat + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) * sinLng * sinLng
+    return 2d * EARTH_RADIUS_M * Math.asin(Math.sqrt(a))
+}
+
+/** "8:02 AM", or with dayIfNotToday "Nov 19, 8:02 AM" for a time before today, in the hub's time zone. */
+private String formatTime(Long ms, boolean dayIfNotToday = false) {
+    if (!ms) return ""
+    TimeZone tz = location.timeZone ?: TimeZone.getDefault()
+    Date d = new Date(ms)
+    boolean today = d.format("yyyyMMdd", tz) == new Date().format("yyyyMMdd", tz)
+    return d.format((dayIfNotToday && !today) ? "MMM d, h:mm a" : "h:mm a", tz)
 }
 
 void captureCookies(response) {

@@ -31,6 +31,13 @@ Configured on the app's pages (main, Setup, Advanced Settings); Hubitat stores s
 | `logShowMapsLink`   | bool                    | Include a Google Maps link in the "member moved" info log (default on)                                                                                                                                                                                          |
 | `logUnits`          | enum                    | Units for speed/distance in logs and device attributes: `"life360"` (follow account pref), `"hubitat"` (hub °F/°C), `"imperial"`, `"metric"`. Applies to every device whose own `unitOverride` is `"life360"`; a device set to anything else keeps its own choice (the app's help text overstates this) |
 | `forceUpdateMember` | enum (transient)        | Member targeted by the Force Update button. Fire-once — cleared (`app.removeSetting`) immediately after the request is sent, so the dropdown resets to blank                                                                                                    |
+| `placeAlertsEnabled` | bool                  | Place Alerts on/off (default off). Turning it off and pressing Done clears `placesIn-*` and `placeLeavePending` |
+| `placeAlertPlaces`  | enum (multi)            | Place IDs to alert on (from `state.places`, Home included)                                                                                            |
+| `placeAlertMembers` | enum (multi)            | Member IDs to alert on (from the members tracked in `users`)                                                                                         |
+| `placeAlertWhen`    | enum                    | `both` (default), `arrive` or `leave`                                                                                                                 |
+| `placeAlertDevices` | capability.notification | Devices that get Place Alerts (separate from `notifyDevices`)                                                                                         |
+| `placeArriveMsg` / `placeLeaveMsg` | text     | Message templates; `%name%` (first name), `%place%`, `%time%`. Defaults `%name% arrived at %place%` / `%name% left %place%`                          |
+| `placeAlertShortTrip` | enum                  | Ignore Short Trips, minutes (`0` off, default `2`): a leave waits this long and a return within it cancels both alerts                               |
 
 ---
 
@@ -43,7 +50,7 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | Variable      | Type   | Set by                        | Notes                                                                                                                                                                                                                                                                                          |
 | ------------- | ------ | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `circles`     | List   | `fetchCircles()`              | Response from `/v4/circles` for the circle picker                                                                                                                                                                                                                                              |
-| `places`      | List   | `fetchPlaces()`               | Response from `/v3/circles/<id>/places` for the HOME picker                                                                                                                                                                                                                                    |
+| `places`      | List   | `fetchPlaces()` (v3); Place Alerts' `refreshPlacesFromV6()` / `handlePlacesResponse` (v6) | `/circles/<id>/places` for the HOME picker and Place Alerts; v6 includes places v3 leaves out, stored in the v3 shape                                                                                                                                                                                                                                    |
 | `members`     | List   | `fetchMembers()`              | **Trimmed** to `[id, firstName, lastName, issues.disconnected]` per member, sorted by id. See APP_SPEC §4.2 |
 | `accessToken` | String | `createAccessToken()` (OAuth) | Token used for the `/view` map endpoint URL                                                                                                                                                                                                                                                    |
 
@@ -86,6 +93,14 @@ Persisted via `state.<name>`. Reset on Hubitat reboot only if explicitly cleared
 | `locTs-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleMemberLocationResponse` | Last location timestamp Life360 sent; used only by the debug `FALSE POSITIVE` line. Removed by `cleanupMemberState()` and `uninstalled()` |
 | `lastFetch-<memberId>` | Long | MEMORY-ONLY (`RUNTIME` map), not in `state` — `handleFastTimer` | When the fast timer last polled this member; a slow tick skips a member the fast timer polled within two fast intervals. Removed by `cleanupMemberState()` and `uninstalled()` |
 
+### Place Alerts
+
+| Variable                 | Type | Set by | Notes |
+| ------------------------ | ---- | ------ | ----- |
+| `placesIn-<memberId>`    | Map  | `checkPlaceAlerts()` on each changed location | placeId -> ms the member entered, for every place (not only watched ones), so adding a place or member to the watch lists sends nothing. Absent until the member's first fix with Place Alerts on, which is recorded without alerts. Removed by `cleanupMemberState` and by `clearPlaceAlertState()` (Done with Place Alerts off) |
+| `placeLeavePending`      | Map  | `placeLeft()` | `"<memberId>\|<placeId>"` -> `[due, at]` ms, leaves waiting out Ignore Short Trips. `placeArrived()` drops an entry (no alerts); `flushPlaceLeaves` sends due ones |
+| `placeAlertLog`          | List | `sendPlaceAlert()` | Last 5 alerts `[ms, text]` for the Status section |
+
 ### UI one-shot status (button results)
 
 Each `*Status` holds an HTML result string; the paired `*StatusPending` flag survives the single page re-render after the button press, then `consumeButtonResults()` (called first by every page) clears the status on the next open.
@@ -94,6 +109,8 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | ------------------------------------------------ | ---------------- | ------------------------------------------------------------------------- | ----------------------------------------------------- |
 | `tokenStatus` / `tokenStatusPending`             | String / Boolean | `checkToken()` (Check Token button)                                       | Token-validity result shown under STEP 1              |
 | `forceUpdateStatus` / `forceUpdateStatusPending` | String / Boolean | `forceMemberUpdate()` / `handleForceUpdateResponse` (Force Update button) | Force-update result shown under Advanced Settings → Troubleshooting |
+| `placeAlertTestStatus` / `placeAlertTestStatusPending` | String / Boolean | `sendTestPlaceAlert()` (Send Test Alert button) | Test result shown in Place Alerts > Status |
+| `placesRefreshStatus` / `placesRefreshStatusPending` | String / Boolean | `refreshPlacesFromV6()` (Refresh Places button on Place Alerts) | Refresh result shown under Place Alerts > What to Watch |
 
 ### Error / health
 
@@ -115,6 +132,7 @@ Each `*Status` holds an HTML result string; the paired `*StatusPending` flag sur
 | `handleSlowTimer`         | `0/<baseSecs> * * * * ? *` (sub-minute) or `0 */<min> * * * ? *`   | `scheduleSlowTimer()`                    | Each tick: watchdog, roster refresh (APP_SPEC §4.2), then `fetchLocations(true)` (or the `/users/me` probe when `tokenLikelyExpired`) |
 | `handleFastTimer`         | `0/<dynamicPollFreq> * * * * ? *` while anyone is in transit       | `ensureFastTimer()`                      | One shared fast poll of every member in transit (APP_SPEC §4.3); unschedules itself when nobody is moving, or on `scheduleSlowTimer()` |
 | `sendTokenExpiryReminder` | one-shot `runIn(<notifyRepeatHours>h)`, self-rescheduling          | `scheduleTokenExpiryReminder()`          | Repeats the token-expiry notification while `tokenLikelyExpired` stays true; chain stops once the token is refreshed or `notifyRepeatHours = never`                                                                                                                        |
+| `flushPlaceLeaves`        | one-shot `runIn` at the earliest `placeLeavePending` due time       | `schedulePlaceLeaveFlush()` (also re-armed by `scheduleSlowTimer()`) | Sends Place Alerts leave alerts whose Ignore Short Trips wait is over |
 
 `baseSecs` = `pollFreq`, forced to 300 when `tokenLikelyExpired`.
 
