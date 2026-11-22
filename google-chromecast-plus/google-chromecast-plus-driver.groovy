@@ -66,6 +66,8 @@ import java.util.concurrent.atomic.AtomicInteger
 @Field static final Map reqId   = new ConcurrentHashMap() // device.id -> AtomicInteger request-id counter; atomic because parse() and the scheduled poll allocate ids concurrently (a plain state.requestId++ raced -> duplicate ids)
 @Field static final Map priorApp = new ConcurrentHashMap() // device.id -> what was playing right before we launched the DMR over it (see capturePriorApp); written by the command thread, read by parse() -> can't live in state
 @Field static final Map imageSess = new ConcurrentHashMap() // device.id -> showImage bookkeeping [url, secs, shown, armed, restoreVol, imageVol, mediaSessionId, sessionId, loadSent, loadReqId, timedOut, pendingRestore]; written from parse() as well as the command thread, so it can't live in state (a scheduled-job write-back could reset "armed" and the periodic status polls would keep pushing the timeout out). See showImage.
+@Field static final Integer IMAGE_SEND_CHECK_SEC = 6   // how long after showImage its LOAD should have gone out (a cold launch takes ~2 s)
+@Field static final Integer IMAGE_SEND_CHECKS = 5      // checks before giving up on an image whose LOAD never went out
 @Field static final Integer MAX_MISSED_STATUS = 3   // unanswered receiver polls before we treat the socket as a zombie
 @Field static final Long RECV_RECONNECT_MS = 120000L // re-assert the receiver-0 virtual connection this often
 
@@ -311,6 +313,7 @@ def showImage(url, seconds = null, volume = null) {
     logInfo "showImage: ${u}${secs > 0 ? " for ${secs}s" : ""}${vol != null ? ", volume ${vol}" : ""}"
     unschedule("imageTimeout")
     unschedule("restoreImageVolume")
+    unschedule("imageSendCheck")
     String key = device.id as String
     def cur = device.currentValue("volume")
     boolean volChange = (vol != null && (cur == null || (cur as Integer) != vol))
@@ -326,6 +329,7 @@ def showImage(url, seconds = null, volume = null) {
     if (volChange) setDeviceVolume(vol)
     String ctype = inferContentType(u)
     playMedia(u, null, null, null, "none", (ctype.startsWith("image/") ? ctype : "image/jpeg"), true)
+    if (imageSess[key]) runIn(IMAGE_SEND_CHECK_SEC, "imageSendCheck", [data: [url: u, check: 1]])
 }
 
 // put back the volume showImage replaced. Idempotent: only the first caller (session-end status or the post-STOP
@@ -413,6 +417,45 @@ def imageLoadWatchdog(Map data = null) {
     logWarn "showImage: ${s.url} still not showing 20s after loading - giving up"
     unschedule("imageTimeout")
     restoreImageVolume()
+}
+
+// the image's LOAD never went out. pendingActions and conn live in state, so a parse() that overlaps showImage (the
+// SET_VOLUME reply arrives while the command is still running) can write back its older copy and lose the queued LOAD:
+// the DMR launches, nothing is loaded, and it sits on its idle screen until it exits ~5 min later. Once loadSent is set
+// this does nothing, so a normal image never gets past the first line. Re-queues a lost LOAD once.
+def imageSendCheck(Map data = null) {
+    Map s = imageSess[device.id as String]
+    if (!s || s.shown || s.loadSent || s.pendingRestore || s.url != data?.url) return
+    Integer check = (data?.check ?: 1) as Integer
+    boolean queued = (state.pendingActions ?: []).any { it.type == "media" && it.image && it.url == s.url }
+    String conn = state.conn ?: "IDLE"
+    if (queued) {
+        // still connecting: the existing queue handling owns it (a drop goes through imageQueueDropped)
+        if (conn in ["IDLE", "CONNECTING", "TP_CONNECTING"]) {
+            if (check < IMAGE_SEND_CHECKS) runIn(IMAGE_SEND_CHECK_SEC, "imageSendCheck", [data: [url: s.url, check: check + 1]])
+            return
+        }
+        if (check >= IMAGE_SEND_CHECKS) {
+            logWarn "showImage: ${s.url} was never sent to the display - giving up"
+            state.pendingActions = (state.pendingActions ?: []).findAll { !(it.type == "media" && it.image && it.url == s.url) }
+            unschedule("imageTimeout")
+            restoreImageVolume()
+            return
+        }
+        if (conn in ["READY", "APP_CONNECTED"]) pump()
+    } else {
+        if (s.loadRetried) {
+            logWarn "showImage: ${s.url} was never sent to the display - giving up"
+            unschedule("imageTimeout")
+            restoreImageVolume()
+            return
+        }
+        s.loadRetried = true
+        logWarn "showImage: ${s.url} was not sent to the display - retrying"
+        String ctype = inferContentType(s.url as String)
+        playMedia(s.url as String, null, null, null, "none", (ctype.startsWith("image/") ? ctype : "image/jpeg"), true)
+    }
+    runIn(IMAGE_SEND_CHECK_SEC, "imageSendCheck", [data: [url: s.url, check: check + 1]])
 }
 
 // queued actions were dropped (offline / disconnect / initialize). If the image hadn't shown yet we can't tell whether

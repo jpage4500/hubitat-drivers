@@ -253,6 +253,7 @@ cross-thread, so not `state`. Reworked 2026-11-16 after the PR #108 review.
   RECEIVER_STATUS, only if the device still reports the image's own level (`imageVol`, `pendingRestore`), so a
   `setVolume` made in between isn't undone. Verified: failed load (matching requestId) → immediate restore;
   3 s image → STOP at 3 s, restore; warm double press → the second picture closes on time, restore.
+- **Lost LOAD (`imageSendCheck`, 2026-11-22).** Seen once on the Nest Hub: `showImage` at 14:47:10, DMR launched, no LOAD, no warning, DMR idle until it exited 5 min later and the volume stayed at the image level. Likely cause (debug logs were off): a `parse()` overlapping the command wrote back an older `state`, losing `pendingActions`/`conn`. 6 s after `showImage`, if `loadSent` is unset, the check re-queues the LOAD once, then gives up and restores the volume. A normal image returns on its first line.
 - **Announcement / track over an image** (`handOverImageVolume`): the image entry is dropped and its timer and
   restore cancelled. A `restore`/`resume` announcement takes over the image's original volume as its own restore
   target; one with no restore and no volume of its own puts the image's volume back first; a track does the same.
